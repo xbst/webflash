@@ -106,6 +106,8 @@ export class VersionPicker {
     if (firmware && this.project.value !== firmware.project) this.project.value = firmware.project;
 
     this.version.replaceChildren();
+    // Only a version has something to say on hover; the other states say it in the option.
+    this.version.title = "";
     if (!firmware) {
       this.version.append(new Option("No firmware (prebuilt file)", ""));
       this.version.disabled = true;
