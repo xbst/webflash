@@ -40,5 +40,6 @@ webflash = [
     "site/css/*.css",
     "site/js/*.js",
     "site/js/*/*.js",
+    "site/js/*/*/*.js",
     "site/py/*.py",
 ]

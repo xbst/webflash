@@ -93,5 +93,6 @@ export async function installMocks(params) {
   if (kind === "uf2" && browser !== "firefox" && browser !== "safari") win.showDirectoryPicker = win.showDirectoryPicker || (async () => drive);
   if (browser === "firefox" || browser === "safari") win.showDirectoryPicker = undefined;
   console.info(`WebFlash mock mode: ${kind}${fail ? ` (fail=${fail})` : ""}`);
-  return { nav, win, firmware, usb, serial, drive };
+  const method = { katapult: "katapult", dfu: "dfu", picoboot: "picoboot", can: "katapult-can", uf2: "uf2" }[kind] || null;
+  return { nav, win, firmware, usb, serial, drive, method };
 }

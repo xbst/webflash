@@ -135,7 +135,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
       family: cfg ? familyOf(cfg) : null, artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
-      label: u.name, bitrate: canBitrate(cfg), onClear: () => { state.uploaded = null; refresh(); },
+      label: u.name, bitrate: canBitrate(cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };
   }
 
@@ -169,7 +169,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     }
   });
 
-  async function useUploadedFile(name, bytes) {
+  async function useUploadedFile(name, bytes, { address: givenAddress = null, preferredMethod = null } = {}) {
     const cfg = configText();
     const pre = prebuiltTable();
     const project = session.project || "klipper";
@@ -178,9 +178,12 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const isBin = !/\.(hex|ihx|ihex|uf2|elf)$/.test(lower) && !(bytes.length >= 4 && bytes[0] === 0x7f && bytes[1] === 0x45) &&
       !(bytes.length >= 512 && bytes[0] === 0x55 && bytes[1] === 0x46 && bytes[2] === 0x32 && bytes[3] === 0x0a);
     if (isBin) {
-      let address = pre && typeof pre.address === "number" ? pre.address : (cfg ? imageAddressFor(cfg, project, name) : null);
-      address = await panel.askAddress(address, { name });
-      if (address === null) return;
+      let address = givenAddress;
+      if (address === null) {
+        address = pre && typeof pre.address === "number" ? pre.address : (cfg ? imageAddressFor(cfg, project, name) : null);
+        address = await panel.askAddress(address, { name });
+        if (address === null) return;
+      }
       image = fromBin(bytes, address, { name, source: "upload" });
     } else {
       image = parseFirmware(name, bytes, { source: "upload" });
@@ -190,7 +193,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     } catch (e) {
       image.dict = null;
     }
-    state.uploaded = { image, name, bytes };
+    state.uploaded = { image, name, bytes, preferredMethod };
     refresh();
     const d = describeImage(image);
     panel.log(`Uploaded ${name}: ${d.rangeText}${image.mcu ? `, built for the ${image.mcu}` : ""}${image.version ? ` (${image.version})` : ""}`);
@@ -210,7 +213,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   if (mocks && mocks.firmware) {
     // The mock mode also brings a firmware, so the whole flow runs from one URL.
-    await useUploadedFile(mocks.firmware.name, mocks.firmware.bytes);
+    await useUploadedFile(mocks.firmware.name, mocks.firmware.bytes, { address: mocks.firmware.address ?? null, preferredMethod: mocks.method || null });
   }
 
   return { ...panel, refresh, useUploadedFile };
