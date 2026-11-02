@@ -10,6 +10,7 @@ import { Session, PROJECTS } from "./state.js";
 import * as runtime from "./runtime.js";
 import { tomlFromHash } from "./toml-io.js";
 import { openGenerate, openAbout, maybeShowAboutOnFirstVisit, showError } from "./dialogs.js";
+import { mountFlashPanel } from "./flash/flash-panel.js";
 
 const session = new Session();
 
@@ -444,6 +445,8 @@ async function init() {
   setupKeys(editor);
   markSaved(session.tomlText);
   $("toml-name").textContent = session.tomlName;
+  mountFlashPanel(session, $("flash-card"), { uploadButton: $("upload-firmware"), showError })
+    .catch((e) => console.error("The flash panel could not start:", e));
 
   const opened = await openFromUrl(tabs);
   addEventListener("hashchange", () => openFromUrl(tabs, { hashOnly: true }));
