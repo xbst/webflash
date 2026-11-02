@@ -60,7 +60,8 @@ class Build:
     def __init__(self, tree: Path, config_text: str, *, toolchain: Any, version: str, jobs: int = 1,
                  out: Optional[Path] = None, log: Optional[Callable[[str], None]] = None,
                  progress: Optional[ProgressFn] = None, lto: str = "on", goals: Optional[list[str]] = None,
-                 env: Optional[dict[str, str]] = None, trace: Optional[Callable[[list[str]], None]] = None) -> None:
+                 env: Optional[dict[str, str]] = None, trace: Optional[Callable[[list[str]], None]] = None,
+                 cancelled: Optional[Callable[[], bool]] = None) -> None:
         self.tree = Path(tree).resolve()
         self.config_text = config_text
         self.toolchain = toolchain
@@ -69,7 +70,10 @@ class Build:
         self.out = Path(out) if out else self.tree / "out"
         self._log_fn = log
         self._trace_fn = trace
-        self._progress_fn = progress or (lambda phase, detail: None)
+        self._cancelled_fn = cancelled
+        self._progress_fn = progress or (lambda phase, detail, done=None, total=None: None)
+        self._done_count = 0
+        self._total = 0
         self.lto = lto
         self.goals = list(goals) if goals else ["all"]
         self.env = dict(env or {})
@@ -88,7 +92,19 @@ class Build:
                 self._log_fn(part)
 
     def progress(self, phase: str, detail: str = "") -> None:
+        """``(phase, detail, done, total)``: ``done`` and ``total`` count the
+        build's targets once they are known, None before that."""
+        if self._total:
+            try:
+                self._progress_fn(phase, detail, self._done_count, self._total)
+                return
+            except TypeError:
+                pass
         self._progress_fn(phase, detail)
+
+    def _check_cancelled(self) -> None:
+        if self._cancelled_fn is not None and self._cancelled_fn():
+            raise BuildError("the build was cancelled")
 
     # ── Steps ─────────────────────────────────────────────────────────
 
@@ -122,6 +138,7 @@ class Build:
     async def _run_target(self, ev: Evaluator, target: Target, shell: Shell) -> None:
         auto = ev._auto(target)
         env = ev._recipe_env()
+        self._check_cancelled()
         for line in target.recipe:
             where = f"{line.file}:{line.lineno}"
             text = ev.expand(line.text, auto, where).lstrip(" \t")
@@ -158,6 +175,7 @@ class Build:
                         path.unlink()
                 detail = (result.stderr or result.stdout).strip()
                 raise BuildError(f"{text}\nfailed with exit code {result.code}" + (f":\n{detail}" if detail else ""))
+        self._done_count += 1
         self.progress("done", target.name)
 
     async def _run_waves(self, ev: Evaluator, shell: Shell, waves: list[list[Target]]) -> list[str]:
@@ -206,7 +224,9 @@ class Build:
             await ev.load()
             self.log("\n".join(ev.transcript)) if ev.transcript else None
             waves = plan_needed(ev, self.goals)
-            self.progress("build", f"{sum(len(w) for w in waves)} targets in {len(waves)} steps")
+            self._total = sum(len(w) for w in waves)
+            self._done_count = 0
+            self.progress("build", f"{self._total} targets in {len(waves)} steps")
             targets = await self._run_waves(ev, shell, waves)
         except (MakeError, ShellError) as e:
             raise BuildError(str(e)) from None

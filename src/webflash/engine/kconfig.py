@@ -101,6 +101,12 @@ class Session:
         finally:
             os.chdir(old_cwd)
 
+    @property
+    def missing(self) -> list[list[str]]:
+        """The assignments of the last load to symbols this Kconfig does not
+        define: ``[[name, value], ...]``."""
+        return [[str(n), str(v)] for n, v in getattr(self.kconf, "missing_syms", [])]
+
     def load(self, text: Optional[str]) -> list[str]:
         """Load a ``.config`` or a defconfig (new symbols take their defaults,
         as ``olddefconfig`` does); None resets every symbol to its default.
@@ -108,6 +114,7 @@ class Session:
         self.kconf.warnings = []
         if text is None:
             self.kconf.unset_values()
+            self.kconf.missing_syms = []
             return []
         path = self.tree / ".config"
         path.write_bytes(text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"))
@@ -240,6 +247,22 @@ class Session:
                     stack.append(node)
         return shown
 
+    def _changeable(self, node) -> bool:
+        """menuconfig's ``_changeable``: whether the node's value can be
+        changed (a bool a ``select`` pins, an invisible symbol cannot)."""
+        lib = self.kconfiglib
+        sc = node.item
+        if not isinstance(sc, (lib.Symbol, lib.Choice)):
+            return False
+        if not (node.prompt and lib.expr_value(node.prompt[1])):
+            return False
+        if isinstance(sc, lib.Choice):
+            # menuconfig enters a choice rather than changing it in place; the
+            # site renders it as a dropdown, which is editable when visible.
+            return sc.visibility > 0
+        y_mode_choice_sym = sc.choice is not None and sc.visibility == 2
+        return sc.orig_type in (lib.STRING, lib.INT, lib.HEX) or len(sc.assignable) > 1 or y_mode_choice_sym
+
     def _range(self, sym) -> Optional[list[str]]:
         lib = self.kconfiglib
         for low, high, cond in sym.ranges:
@@ -255,6 +278,7 @@ class Session:
             "kind": "menu", "name": "", "prompt": node.prompt[0] if node.prompt else "",
             "type": None, "value": None, "user_value": None,
             "visible": id(node) in shown, "menuconfig": bool(node.is_menuconfig),
+            "editable": self._changeable(node),
             "range": None, "help": getattr(node, "help", None) or "", "children": [], "members": [],
             "depends": lib.expr_str(node.dep),
         }

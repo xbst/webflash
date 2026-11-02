@@ -174,8 +174,11 @@ def olddefconfig_check(tree: Path, config_text: str, session: Session) -> list[s
                           cwd=str(tree), env=env, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"olddefconfig.py failed:\n{proc.stderr.strip()}")
-    theirs = check.read_text(encoding="utf-8").splitlines()
-    mine = session.config_text().splitlines()
+    # KATAPULT_VERSION comes from $(shell, ./scripts/make-version.sh), which
+    # the session answers with the snapshot's version while the raw script
+    # gives whatever this machine's shell and git say: not compared.
+    theirs = [l for l in check.read_text(encoding="utf-8").splitlines() if "KATAPULT_VERSION" not in l]
+    mine = [l for l in session.config_text().splitlines() if "KATAPULT_VERSION" not in l]
     return list(difflib.unified_diff(theirs, mine, "olddefconfig.py", "kconfig.Session", lineterm="", n=1))
 
 

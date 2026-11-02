@@ -184,16 +184,37 @@ _toolchain_manifest: dict | None = None
 _last_build = None
 
 
-def _progress(phase: str, detail: str = "") -> None:
-    """``webflash_js.progress`` when the worker registered it (Pyodide);
-    nothing under CPython unless a test installs a module of that name."""
+def _progress(phase: str, detail: str = "", done=None, total=None) -> None:
+    """``webflash_js.progress(phase, detail, done, total)`` when the worker
+    registered it (Pyodide); nothing under CPython unless a test installs a
+    module of that name. A worker whose ``progress`` takes two arguments
+    (chunk 01's) gets the two."""
     try:
         import webflash_js  # type: ignore[import-not-found]
     except ImportError:
         return
     fn = getattr(webflash_js, "progress", None)
-    if fn is not None:
-        fn(str(phase), "" if detail is None else str(detail))
+    if fn is None:
+        return
+    detail = "" if detail is None else str(detail)
+    if done is None and total is None:
+        fn(str(phase), detail)
+        return
+    try:
+        fn(str(phase), detail, done, total)
+    except TypeError:
+        fn(str(phase), detail)
+
+
+def _cancelled() -> bool:
+    """Whether the page cancelled the running call (``webflash_js.cancelled``,
+    which chunk 05's worker provides for calls sent with ``long: true``)."""
+    try:
+        import webflash_js  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    fn = getattr(webflash_js, "cancelled", None)
+    return bool(fn()) if fn is not None else False
 
 
 def _run_tool_js():
@@ -212,10 +233,11 @@ def _tree() -> Path:
 
 
 def _extract(data: bytes, into: Path) -> int:
-    """Extract a tar.gz bundle under ``into`` (paths that would leave it are
-    refused), returning the number of files written."""
+    """Extract a bundle (a tar, gzipped or already inflated by the page) under
+    ``into``; paths that would leave it are refused. Returns the number of
+    files written."""
     count = 0
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar:
             rel = PurePosixPath(member.name.replace("\\", "/"))
             if rel.is_absolute() or ".." in rel.parts or not rel.parts:
@@ -269,7 +291,7 @@ def kconfig_load(config_text: str) -> str:
     the defaults. Returns ``{"warnings": [...], "tree": <tree JSON>}``."""
     session = _get_session()
     warnings = session.load(config_text if config_text else None)
-    return json.dumps({"warnings": warnings, "tree": session.tree_json()})
+    return json.dumps({"warnings": warnings, "missing": session.missing, "tree": session.tree_json()})
 
 
 def kconfig_tree() -> str:
@@ -398,7 +420,7 @@ async def build(config_text: str, version: str = "", jobs: int = 1) -> str:
     toolchain = JsToolchain(run_tool, _toolchain_manifest, jobs=max(1, int(jobs)))
     version = version or _sources.get("describe") or "?"
     b = Build(tree, config_text, toolchain=toolchain, version=version, jobs=max(1, int(jobs)),
-              log=lambda line: _progress("log", line), progress=_progress)
+              log=lambda line: _progress("log", line), progress=_progress, cancelled=_cancelled)
     try:
         result = await b.run_async()
     except BuildError as e:
