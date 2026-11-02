@@ -600,7 +600,8 @@ async function openFromUrl({ hashOnly = false } = {}) {
     const project = params.get("project");
     const version = params.get("version");
     if (PROJECTS.includes(project)) session.setProject(project, { version: version || "latest", undoable: false });
-    else if (version) session.setVersion(version, { undoable: false });
+    // The project may be the one already picked, which setProject leaves alone.
+    if (version) session.setVersion(version, { undoable: false });
   }
 
   let text = null;
