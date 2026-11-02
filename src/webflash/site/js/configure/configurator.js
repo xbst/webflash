@@ -421,10 +421,15 @@ export class Configurator {
           const blob = (ref.libs || {})[dir] || null;
           return { dir, blob, size: blob ? blobSize(s.index, blob) : null };
         });
-        const missing = libs.filter((l) => !l.blob).map((l) => l.dir);
-        s.setPlan({ dirs: out.dirs || [], libs: libs.filter((l) => l.blob), missing, configText, ref: ref.id });
+        const unavailable = libs.filter((l) => !l.blob).map((l) => l.dir);
+        s.setPlan({
+          dirs: out.dirs || [], libs: libs.filter((l) => l.blob), unavailable, targets: out.targets || [],
+          configText, ref: ref.id,
+        });
       } catch (e) {
-        if (mine === this._planCount) s.setPlan({ dirs: [], libs: [], missing: [], error: e.message, configText, ref: ref.id });
+        if (mine === this._planCount) {
+          s.setPlan({ dirs: [], libs: [], unavailable: [], targets: [], error: e.message, configText, ref: ref.id });
+        }
       }
     });
   }

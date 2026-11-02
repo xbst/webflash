@@ -87,7 +87,10 @@ export class Session {
     this.ref = null;            // the index entry being configured, once its sources loaded
     this.configText = "";       // the full .config of the configuration (make olddefconfig's)
     this.tree = null;           // the Kconfig tree ({root, nodes}), as the engine reports it
-    this.plan = null;           // {dirs, libs: [{dir, blob, size}]}: what a build needs
+    // What a build of the configuration needs: {dirs, libs: [{dir, blob, size}]
+    // (the lib bundles to fetch, sizes from the index), unavailable: [lib/<dir>
+    // the snapshot lacks], targets, configText, ref, error?}.
+    this.plan = null;
     this.sources = { state: "idle", detail: "" };   // idle, loading, ready, error
     this.locked = "";           // why configuring is locked (a build running), "" when not
 

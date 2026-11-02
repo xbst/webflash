@@ -376,13 +376,13 @@ function setupPlan() {
       return;
     }
     el.hidden = false;
-    el.classList.toggle("warn", Boolean(p.error || (p.missing && p.missing.length)));
+    el.classList.toggle("warn", Boolean(p.error || (p.unavailable && p.unavailable.length)));
     if (p.error) {
       el.textContent = `Could not work out what the build needs: ${p.error}`;
       return;
     }
-    const missing = p.missing && p.missing.length
-      ? ` This snapshot does not include ${p.missing.join(", ")}, which the build needs, so it would fail.` : "";
+    const missing = p.unavailable && p.unavailable.length
+      ? ` This snapshot does not include ${p.unavailable.join(", ")}, which the build needs, so it would fail.` : "";
     if (!p.libs.length) {
       el.textContent = `The build needs no library bundles beyond the sources already loaded.${missing}`;
       return;
