@@ -19,7 +19,7 @@ import { KconfigTree } from "./configure/kconfig-tree.js";
 import { VersionPicker } from "./configure/version-picker.js";
 import { ConfigTab, copyText } from "./configure/config-tab.js";
 import { OptionsPanel } from "./configure/options-panel.js";
-import { blobUrl, formatBytes, headSize, isChecked, projectTitle, refDetail, uncheckedText } from "./configure/sources.js";
+import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
 
 const session = new Session();
@@ -290,7 +290,8 @@ async function renderStart() {
   downloads.push(`${title} ${ref.id}'s sources (${size ? formatBytes(size) : "size unknown"}${cached ? ", already in this browser's cache" : ""})`);
   el.innerHTML =
     `<h3>Configure ${esc(title)} ${esc(ref.id)}</h3>` +
-    `<p>Every option of <code>make menuconfig</code>, from ${esc(refDetail(ref) || ref.id)}'s own Kconfig files.</p>` +
+    `<p>Every option of <code>make menuconfig</code>, from the Kconfig files of ${esc(ref.describe || ref.id)}` +
+    `${ref.date ? ` (${esc(ref.date)})` : ""}.</p>` +
     (note ? `<p class="kc-warn-text">${esc(note)}</p>` : "") +
     `<p>This downloads ${downloads.map(esc).join(" and ")}. Nothing you configure leaves the browser.</p>` +
     `<button class="primary" id="kconfig-start-btn">Load the configuration</button>`;
