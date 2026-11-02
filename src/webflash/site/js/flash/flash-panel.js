@@ -132,6 +132,10 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       ({ methods, warnings } = methodsForPrebuilt({ mcu: (pre && pre.mcu) || u.image.mcu || null, image: u.image, tomlMethods: tomlFlash().methods }));
     }
     const mcu = u.image.mcu || (pre && pre.mcu) || (cfg ? mcuOf(cfg) : null);
+    if (u.preferredMethod && !methods.some((m) => m.id === u.preferredMethod)) {
+      // The mock mode asks for a method the configuration would not offer.
+      methods = [{ id: u.preferredMethod, reason: "the mock mode asked for it" }, ...methods];
+    }
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
       family: cfg ? familyOf(cfg) : null, artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,

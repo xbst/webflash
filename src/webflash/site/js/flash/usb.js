@@ -174,13 +174,17 @@ export class UsbDevice {
         details: { spec: typeof spec === "number" ? { number: spec } : { ...spec, test: undefined } },
       });
     }
-    try {
-      await this.raw.claimInterface(found.interfaceNumber);
-    } catch (e) {
-      throw mapClaimError(e);
+    if (!this.claimed.includes(found.interfaceNumber)) {
+      // The connect step may have claimed it already, to surface driver and
+      // permission problems before the confirmation.
+      try {
+        await this.raw.claimInterface(found.interfaceNumber);
+      } catch (e) {
+        throw mapClaimError(e);
+      }
+      this.claimed.push(found.interfaceNumber);
     }
     this.interfaceNumber = found.interfaceNumber;
-    this.claimed.push(found.interfaceNumber);
     return found;
   }
 

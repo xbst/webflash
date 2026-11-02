@@ -151,11 +151,31 @@ export function familyOf(cfg) {
   return typeof mcu === "string" ? familyFromMcu(mcu) : null;
 }
 
-/** CONFIG_MCU ("stm32g0b1xx", "rp2040", ...) or null. */
+/**
+ * CONFIG_MCU ("stm32g0b1xx", "rp2040", ...), or for a bare defconfig the
+ * name Klipper's Kconfig gives the chosen MACH_ symbol, or null.
+ */
 export function mcuOf(cfg) {
-  const v = configValue(cfg, "MCU");
-  return typeof v === "string" && v ? v : null;
+  const map = parseConfig(cfg);
+  const v = map.get("CONFIG_MCU");
+  if (typeof v === "string" && v) return v;
+  for (const [key, on] of map) {
+    if (on !== true) continue;
+    const m = /^CONFIG_MACH_(\w+)$/.exec(key);
+    if (m && MCU_NAMES[m[1]]) return MCU_NAMES[m[1]];
+  }
+  return null;
 }
+
+// Klipper's `config MCU` defaults, by the chip's MACH_ symbol (src/*/Kconfig).
+const MCU_NAMES = {
+  STM32F031: "stm32f031x6", STM32F042: "stm32f042x6", STM32F070: "stm32f070xb", STM32F072: "stm32f072xb", STM32F103: "stm32f103xe",
+  STM32F207: "stm32f207xx", STM32F401: "stm32f401xc", STM32F405: "stm32f405xx", STM32F407: "stm32f407xx", STM32F429: "stm32f429xx",
+  STM32F446: "stm32f446xx", STM32F765: "stm32f765xx", STM32G070: "stm32g070xx", STM32G071: "stm32g071xx", STM32G0B0: "stm32g0b0xx",
+  STM32G0B1: "stm32g0b1xx", STM32G431: "stm32g431xx", STM32G474: "stm32g474xx", STM32H723: "stm32h723xx", STM32H743: "stm32h743xx",
+  STM32H750: "stm32h750xx", STM32L412: "stm32l412xx", N32G452: "stm32f103xe", N32G455: "stm32f103xe",
+  RP2040: "rp2040", RP2350: "rp2350", LPC1768: "lpc1768", LPC1769: "lpc1769",
+};
 
 /** The family a Katapult-reported or TOML mcu string belongs to. */
 export function familyFromMcu(mcu) {

@@ -83,6 +83,34 @@ export function connectionFor(method, raw) {
   return { kind: "filesystem", method, device: raw, describe: () => `drive "${raw.name || "?"}"` };
 }
 
+/**
+ * Open and claim a USB connection's interface right after the picker, so a
+ * missing driver or a busy device shows before the confirmation rather
+ * than after Flash. The interface stays claimed for the flash; the protocol
+ * modules' own claim() is then a no-op. Serial ports and drives are left
+ * alone (opening a port needs the baud rate of the method).
+ */
+export async function probeConnection(connection) {
+  if (!connection || connection.kind !== "usb") return connection;
+  const usb = connection.device;
+  await usb.open();
+  await usb.selectConfiguration();
+  const method = connection.method;
+  let spec;
+  if (method === "dfu") spec = { classCode: 0xfe, subclassCode: 0x01 };
+  else if (method === "picoboot") spec = { classCode: 0xff, test: (alt) => (alt.endpoints || []).filter((e) => e.type === "bulk").length === 2 };
+  else spec = { classCode: 0xff, test: (alt) => (alt.endpoints || []).some((e) => e.direction === "in") && (alt.endpoints || []).some((e) => e.direction === "out") };
+  const found = usb.findInterface(spec) || (method === "katapult-can" ? usb.findInterface({ number: 0 }) : null);
+  if (!found) {
+    const what = method === "dfu" ? "DFU interface: it is not in its ROM bootloader (hold BOOT0 and tap RESET)"
+      : method === "picoboot" ? "PICOBOOT interface: it is not in BOOTSEL mode (hold BOOTSEL while plugging it in)"
+      : "vendor interface with bulk endpoints: it is not a gs_usb CAN adapter";
+    fail("not-bootloader", `The device has no ${what}, or it is a different device.`);
+  }
+  await usb.claim({ number: found.interfaceNumber });
+  return connection;
+}
+
 /** Katapult's priming quirk applies to STM32 USB stacks other than F2, F4 and H7. Unknown MCU: prime, it is harmless. */
 export function shouldPrime(mcu) {
   const m = String(mcu || "").toLowerCase();

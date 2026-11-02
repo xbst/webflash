@@ -9,7 +9,7 @@
 import { FlashError, explainError, isCancel, capabilities } from "./errors.js";
 import { describe as describeImage, hex8, formatSize, extractKlipperDict, fromBin } from "./firmware-file.js";
 import { METHODS, familyFromMcu } from "./devices.js";
-import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable } from "./flash.js";
+import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable, probeConnection } from "./flash.js";
 import { enterFromKlipperUsb, manualInstructions, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
 import { uf2Download } from "./uf2.js";
 
@@ -313,12 +313,14 @@ export function createFlashPanel(root, options = {}) {
     state.connection = connection;
     log(`Connected: ${connection.describe()}`);
     if (connection.kind === "usb") {
-      // Opening now surfaces driver and permission problems before the confirmation.
+      // Opening and claiming now surfaces driver and permission problems
+      // (and a device that is not in its bootloader) before the confirmation.
       try {
-        await connection.device.open();
+        await probeConnection(connection);
       } catch (e) {
         state.connection = null;
         state.phase = "ready";
+        try { await connection.device.close(); } catch (e2) { /* fine */ }
         renderStep();
         throw e;
       }
