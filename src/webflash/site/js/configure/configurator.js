@@ -5,9 +5,10 @@
 // The engine holds one tree and one Kconfig state, so every operation here
 // runs alone, in order (a queue). Picking a version supersedes any version
 // load still waiting. Switching project or version carries the configuration
-// over: the session's defconfig is loaded into the new tree with olddefconfig
-// semantics, and what did not survive (symbols the new version lacks, values
-// it would not take) is reported as a notice.
+// over: the session's defconfig, with the microcontroller it leaves to the
+// defaults, is loaded into the new tree with olddefconfig semantics, and what
+// did not survive (symbols the new version lacks, values it would not take)
+// is reported as a notice.
 
 import * as runtime from "../runtime.js";
 import { blobUrl, blobSize, formatBytes, loadIndex, projectTitle, resolveVersion } from "./sources.js";
@@ -77,6 +78,34 @@ export function describeAssignment(name, value) {
   if (value === "y") return name;
   if (value === "n" || value === undefined || value === null) return `${name} (off)`;
   return `${name}=${value}`;
+}
+
+/**
+ * The microcontroller a configuration picks: the members selected in its
+ * shown choices of MACH_ symbols (the architecture and the processor model,
+ * named alike in Klipper, Kalico and Katapult), in menu order.
+ */
+export function machineChoices(tree) {
+  const out = [];
+  for (const n of Object.values((tree && tree.nodes) || {})) {
+    if (n.kind === "choice" && n.visible && n.value && n.value.startsWith("MACH_")) out.push(n.value);
+  }
+  return out;
+}
+
+/**
+ * What a switch of project or version carries: the defconfig, after the
+ * microcontroller wherever the defconfig leaves it to the defaults. A
+ * defconfig leaves out a choice's default member and the defaults differ
+ * (Klipper's architecture is AVR, Katapult's LPC176x), so the defconfig alone
+ * could change the chip without a word. The other choices (a bootloader
+ * offset means one thing in Katapult and another in Klipper) follow the new
+ * tree's defaults.
+ */
+export function carryText(defconfigText, tree) {
+  const text = defconfigText || "";
+  const named = parseConfigLines(text);
+  return machineChoices(tree).filter((name) => !named.has(name)).map((name) => `CONFIG_${name}=y\n`).join("") + text;
 }
 
 function remembered(key) {
@@ -186,15 +215,17 @@ export class Configurator {
 
   /**
    * Load the session's project and version into the engine with a
-   * configuration (default: the session's defconfig). reason is "start",
-   * "switch" (project or version changed: report what did not carry over),
-   * "open" (a board TOML) or "restore" (undo). Resolves to true when it
-   * loaded, false when a newer load replaced it or it failed (the session's
-   * sources state then says why).
+   * configuration (default: the session's defconfig, and on a switch the
+   * microcontroller the tree shown so far has picked, see carryText). reason
+   * is "start", "switch" (project or version changed: report what did not
+   * carry over), "open" (a board TOML) or "restore" (undo). Resolves to true
+   * when it loaded, false when a newer load replaced it or it failed (the
+   * session's sources state then says why).
    */
-  load({ reason = "start", carry = this.session.defconfigText } = {}) {
+  load({ reason = "start", carry } = {}) {
     const generation = ++this._generation;
     const s = this.session;
+    if (carry === undefined) carry = reason === "switch" ? carryText(s.defconfigText, s.tree) : s.defconfigText;
     return this._enqueue(async () => {
       if (generation !== this._generation) return false;
       const project = s.project;
