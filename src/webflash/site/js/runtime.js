@@ -9,6 +9,12 @@
 // Nothing heavy downloads at page load: the first call boots the worker
 // (Pyodide from the CDN, then webflash.zip), and onProgress reports how far it
 // got, for the toolbar's status.
+//
+// Long work reports progress as it goes: call(method, params, {onProgress})
+// receives that call's own progress ({phase, detail, done, total}, done and
+// total in steps or bytes), and every listener of onProgress sees all of it.
+// A call made with {long: true, signal} can be cancelled through the
+// AbortSignal; the engine stops at its next check between steps.
 
 export const PYODIDE_VERSION = "v314.0.6";   // keep in step with engine-worker.js and PinConnect
 export const PAYLOAD_NAME = "webflash.zip";
@@ -23,7 +29,12 @@ let _nextId = 1;
 const _pending = new Map();
 const _listeners = [];
 
-/** Subscribe to boot progress. Phases: runtime, package, ready, error. */
+/**
+ * Subscribe to progress: cb(phase, detail, info), info being {done, total,
+ * call} (each may be undefined). Boot phases: runtime, package, ready, error.
+ * Source phases: sources (downloading a core bundle, in bytes), extract.
+ * Python adds its own (a build's steps).
+ */
 export function onProgress(cb) {
   _listeners.push(cb);
   return () => {
@@ -32,9 +43,9 @@ export function onProgress(cb) {
   };
 }
 
-function emit(phase, detail = "") {
+function emit(phase, detail = "", info = {}) {
   for (const cb of _listeners) {
-    try { cb(phase, detail); } catch (e) { /* a bad listener must not stop boot */ }
+    try { cb(phase, detail, info); } catch (e) { /* a bad listener must not stop boot */ }
   }
 }
 
@@ -60,7 +71,13 @@ function spawn() {
   _worker.addEventListener("message", (e) => {
     const msg = e.data || {};
     if (msg.progress) {
-      emit(msg.progress.phase, msg.progress.detail);
+      const { phase, detail = "", done, total, call: callId } = msg.progress;
+      const info = { done, total, call: callId };
+      const own = callId !== undefined && _pending.get(callId);
+      if (own && own.onProgress) {
+        try { own.onProgress({ phase, detail, done, total }); } catch (err) { /* keep the call going */ }
+      }
+      emit(phase, detail, info);
       return;
     }
     const p = _pending.get(msg.id);
@@ -77,11 +94,22 @@ function spawn() {
   });
 }
 
-function post(method, params) {
+function post(method, params, { onProgress = null, signal = null, long = false } = {}) {
   return new Promise((resolve, reject) => {
     const id = _nextId++;
-    _pending.set(id, { resolve, reject });
-    _worker.postMessage({ id, method, params });
+    const worker = _worker;
+    let onAbort = null;
+    const done = (fn) => (value) => {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      fn(value);
+    };
+    _pending.set(id, { resolve: done(resolve), reject: done(reject), onProgress });
+    worker.postMessage(long ? { id, method, params, long: true } : { id, method, params });
+    if (signal) {
+      onAbort = () => worker.postMessage({ cancel: id });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
 }
 
@@ -147,15 +175,23 @@ export function pythonMessage(e) {
 }
 
 /**
- * Call a function of the bridge (site/py/bridge.py) in the worker, booting it
- * first if needed. params are its positional arguments: strings, numbers,
- * booleans, null, or typed arrays (Python bytes). Rejects with the Python
- * error's own message.
+ * Call a function of the bridge (site/py/bridge.py), or one of the worker's
+ * own (fetchBlob, loadSources), booting the worker first if needed. params
+ * are its positional arguments: strings, numbers, booleans, null, plain
+ * objects for the worker's own methods, or typed arrays (Python bytes).
+ * Rejects with the Python error's own message.
+ *
+ * Options: onProgress({phase, detail, done, total}) for this call's own
+ * progress; long and signal for a call that can be cancelled; early to send
+ * the call as soon as the boot has started rather than once it finished (the
+ * worker's own downloads overlap the Python download that way).
  */
-export async function call(method, params = []) {
-  await ready();
+export async function call(method, params = [], { onProgress = null, signal = null, long = false, early = false } = {}) {
+  const booted = ready();
+  if (!early) await booted;
+  else booted.catch(() => {});   // the call itself reports the failure
   try {
-    return await post(method, params);
+    return await post(method, params, { onProgress, signal, long });
   } catch (e) {
     throw new Error(pythonMessage(e));
   }
@@ -186,4 +222,61 @@ export async function saveToml(tables) {
 export async function render(tomlText, { themeName = "", inline = false, files = {} } = {}) {
   const out = JSON.parse(await call("render", [tomlText, themeName, JSON.stringify({ inline, files })]));
   return { html: out.html, warnings: out.warnings || [] };
+}
+
+// ── Sources and Kconfig (the engine, chunk 03's bridge methods) ─────
+
+/**
+ * Make one ref of a project the tree the engine configures and builds: the
+ * worker downloads its core bundle (Cache Storage keeps it), gunzips it and
+ * hands it to bridge.load_sources. ref is the ref's entry in
+ * sources/index.json, url the core bundle's URL. Resolves to {project, id,
+ * sha, tree, size, cached}; onProgress gets the download in bytes.
+ */
+export async function loadSources(project, ref, url, { onProgress = null } = {}) {
+  return JSON.parse(await call("loadSources", [project, ref, url], { onProgress, early: true }));
+}
+
+/**
+ * Load a .config or a defconfig into the current tree with olddefconfig
+ * semantics ("" loads every default). Resolves to {missing: [[name, value]],
+ * warnings: [text]}: missing are the assignments to symbols this version does
+ * not have.
+ */
+export async function kconfigLoad(configText) {
+  return JSON.parse(await call("kconfig_load", [configText]));
+}
+
+/** The Kconfig tree: {root, nodes: {id: node}} (SPEC 10 nodes). */
+export async function kconfigTree() {
+  return JSON.parse(await call("kconfig_tree"));
+}
+
+/**
+ * Set one symbol ("y"/"n" for a bool, the text for int, hex and string; a
+ * choice is set by its member, with "y"). Resolves to the new tree; rejects
+ * with the engine's reason for a value it refuses.
+ */
+export async function kconfigSet(name, value) {
+  return JSON.parse(await call("kconfig_set", [name, value]));
+}
+
+/** The full .config, as make olddefconfig writes it. */
+export function kconfigConfig() { return call("kconfig_config"); }
+
+/** The minimal configuration, as make savedefconfig writes it. */
+export function kconfigDefconfig() { return call("kconfig_defconfig"); }
+
+/** What a build of this .config needs: {dirs, libs: ["lib/<dir>", ...]}. */
+export async function plan(configText) {
+  return JSON.parse(await call("plan", [configText]));
+}
+
+/**
+ * The bytes of a URL, through Cache Storage when its content is immutable
+ * (source bundles, toolchain files), in the engine worker. Resolves to
+ * {bytes, size, cached}.
+ */
+export function fetchBlob(url, { onProgress = null, phase = "download", detail = "" } = {}) {
+  return call("fetchBlob", [url, { phase, detail }], { onProgress, early: true });
 }
