@@ -125,6 +125,18 @@ CONFIG_MACH_HC32F460=y
 """
 
 [[row]]
+name = "same51-indx"
+projects = ["kalico"]
+why = "Kalico's INDX heater: the .c++ rules, libc++ headers and -lm"
+defconfig = """
+CONFIG_LOW_LEVEL_OPTIONS=y
+CONFIG_MACH_ATSAMD=y
+CONFIG_MACH_SAME51J19=y
+CONFIG_CLOCK_REF_X25M_XOSC0=y
+CONFIG_WANT_INDX_HEATER=y
+"""
+
+[[row]]
 name = "katapult-stm32g0b1-usb"
 projects = ["katapult"]
 why = "the bootloader itself + deployer"

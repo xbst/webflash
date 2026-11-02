@@ -1,0 +1,113 @@
+# The engine checks (WebFlash SPEC 9.7): on Ubuntu, with the distribution's
+# arm-none-eabi-gcc and GNU make and the pinned Arm Toolchain for Embedded,
+# clone Klipper master, Kalico main and Katapult master shallowly and run
+# `webflash make-check` (the make interpreter against GNU make and the Kconfig
+# session against olddefconfig.py, every matrix row) and `webflash parity`
+# (every row built with GCC and with clang, with and without LTO, and
+# compared). The parity tables are uploaded as an artifact. The same steps
+# gate the source snapshots in pages.yml.
+name: ci
+
+on:
+  push:
+    branches: [dev, master, "wf/**"]
+  workflow_dispatch:
+
+env:
+  ATFE_URL: https://github.com/arm/arm-toolchain/releases/download/release-23.1.0-ATfE/ATfE-23.1.0-Linux-x86_64.tar.xz
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the package, GNU make and the Arm GNU Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends make gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi g++
+          pip install .
+
+      - name: Cache the Arm Toolchain for Embedded
+        id: atfe-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/atfe
+          key: atfe-${{ env.ATFE_URL }}
+
+      - name: Download the Arm Toolchain for Embedded
+        if: steps.atfe-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/atfe
+          curl -sSL "$ATFE_URL" | tar -xJ --strip-components=1 -C ~/atfe
+          ~/atfe/bin/clang --version
+
+      - name: Clone Klipper, Kalico and Katapult
+        run: |
+          mkdir -p ~/trees
+          git clone --depth 1 https://github.com/Klipper3d/klipper ~/trees/klipper
+          git clone --depth 1 https://github.com/KalicoCrew/kalico ~/trees/kalico
+          git clone --depth 1 https://github.com/Arksine/katapult ~/trees/katapult
+          for t in klipper kalico katapult; do echo "$t $(git -C ~/trees/$t rev-parse --short HEAD)"; done
+
+      - name: make-check (the interpreter against GNU make, the session against olddefconfig)
+        run: |
+          for t in klipper kalico katapult; do
+            webflash make-check ~/trees/$t --make make
+          done
+
+      - name: Build the C++ elf2uf2 once, to compare the Python port against it
+        run: |
+          g++ -g -O -I ~/trees/klipper/lib/pico-sdk ~/trees/klipper/lib/elf2uf2/main.cpp -o ~/elf2uf2
+
+      - name: parity (GCC against clang, with and without LTO)
+        run: |
+          mkdir -p ~/parity
+          for t in klipper kalico katapult; do
+            webflash parity ~/trees/$t --toolchains gcc,clang-native,clang-native-nolto \
+              --gcc-dir /usr/bin --clang-dir ~/atfe --table ~/parity/parity.md --append \
+              --json ~/parity/$t.json --out ~/parity/out
+          done
+
+      - name: The Python elf2uf2 against the C++ tool, and inspect
+        run: |
+          set -e
+          for elf in $(find ~/parity/out -name 'klipper.elf' -path '*rp2*' -o -name 'katapult.elf' -path '*rp2*'); do
+            ~/elf2uf2 "$elf" /tmp/reference.uf2
+            python - "$elf" <<'EOF'
+          import sys
+          from pathlib import Path
+          from webflash.engine.uf2 import elf_to_uf2
+          elf = Path(sys.argv[1])
+          mine = elf_to_uf2(elf.read_bytes())
+          theirs = Path("/tmp/reference.uf2").read_bytes()
+          print(f"{elf}: {len(mine)} bytes, {'identical' if mine == theirs else 'DIFFERENT'} to the C++ tool")
+          sys.exit(0 if mine == theirs else 1)
+          EOF
+            webflash inspect "$elf" | head -4
+          done
+
+      - name: The engine's GCC build against a real make build, byte for byte
+        run: |
+          set -e
+          cd ~/trees/klipper
+          printf 'CONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n' > /tmp/g0b1.config
+          cp /tmp/g0b1.config .config
+          make olddefconfig
+          make -j"$(nproc)" all
+          cp out/klipper.bin /tmp/make-klipper.bin
+          cp out/klipper.dict /tmp/make-klipper.dict
+          version=$(git describe --always --tags --long --dirty)
+          webflash build . --config /tmp/g0b1.config --toolchain gcc --toolchain-dir /usr/bin --version "$version" --out /tmp/engine
+          cmp /tmp/make-klipper.bin /tmp/engine/klipper.bin && echo "klipper.bin: identical"
+          python -c "import json; a=json.load(open('/tmp/make-klipper.dict')); b=json.load(open('/tmp/engine/klipper.dict')); print('dict identical' if a==b else 'dict differs: ' + str({k for k in a if a[k]!=b.get(k)})); raise SystemExit(0 if a==b else 1)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity
+          path: ~/parity/*.md

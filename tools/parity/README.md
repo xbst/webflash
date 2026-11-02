@@ -1,0 +1,37 @@
+# The parity matrix
+
+`matrix.toml` lists one configuration per MCU family and flashing path (WebFlash SPEC Appendix B, plus Kalico's INDX heater for the C++ rules): a minimal defconfig, the projects it applies to and why it is there. Two maintainer commands run over it, and `.github/workflows/ci.yml` runs both on every push to `dev`, `master` and `wf/**`.
+
+## `webflash make-check`
+
+Compares the build engine's make interpreter with GNU make and its Kconfig session with the project's own `olddefconfig.py`, row by row, on a source tree:
+
+```bash
+webflash make-check path/to/klipper --make make --gcc-dir /path/to/arm-gnu-toolchain/bin
+```
+
+For every row it loads the defconfig through the tree's kconfiglib, writes `.config`, checks it against what `lib/kconfiglib/olddefconfig.py` writes for the same defconfig, then runs real `make -n V=1 all` and the interpreter's dry run on an empty `out/` and prints a unified diff of the two command lists (after dropping make's own messages, reducing the make binary's path to `make` and collapsing whitespace). The exit code is 1 on any difference. `--row NAME` limits it to one row, `--config FILE` checks a configuration of your own, `--project` overrides the detection (Kalico by `src/extras`, Katapult by `src/canboot.h`).
+
+`--gcc-dir` only matters for the Makefiles' `cc-option` probe: Klipper probes the host `gcc` (its `CROSS_PREFIX` is set after `CFLAGS`), so the probe's answer depends on the machine, and the interpreter runs the same probe so the comparison tests the interpreter and not the compiler. On Windows, GNU make comes from `winget install ezwinports.make` (`--make` takes its path) and `sh` from Git for Windows must be on `PATH`.
+
+## `webflash parity`
+
+Builds every row with each toolchain and compares the results:
+
+```bash
+webflash parity path/to/klipper --toolchains gcc,clang-native,clang-native-nolto \
+    --gcc-dir /path/to/arm-gnu-toolchain --clang-dir /path/to/ATfE --table parity.md --json parity.json
+```
+
+Toolchains: `gcc` (the Arm GNU Toolchain, the Makefiles' commands as they are), `clang-native` (Arm Toolchain for Embedded through the driver's translation, LTO on as upstream), `clang-native-nolto`, `wasm-node` and `wasm-node-nolto` (the WebAssembly release of `webflash-toolchain` run under Node with `--wasm-dir`). The checks: the `klipper.dict` of every toolchain is identical to the first one's except `build_versions`; the vector table's stack pointer lies in RAM and is the same for every toolchain; the reset vector is a Thumb address inside flash; the flash image fits the `rom` region of the linker script. It prints a Markdown table (row, toolchain, text, data, bss, flash used and region size, the size difference against the first toolchain, dict identity, stack and reset vectors) and exits 1 on any failure. `--out DIR` keeps every build's outputs for `webflash inspect` and the UF2 comparison.
+
+## `webflash build` and `webflash inspect`
+
+`webflash build TREE --config FILE --toolchain gcc|clang-native|wasm-node --toolchain-dir DIR [--version V] [-j N] [--lto on|off] [--out DIR]` builds one configuration natively and prints the memory table and the outputs. `webflash inspect FILE` prints an ELF's sizes, segments, sections, vector table and the dictionary beside it, or the segments of a `.bin`, `.hex` or `.uf2`.
+
+## Where the toolchains come from
+
+- GNU make: `apt-get install make` on Ubuntu, `winget install ezwinports.make` on Windows.
+- Arm GNU Toolchain: `apt-get install gcc-arm-none-eabi` on Ubuntu, or a release zip from Arm (`arm-gnu-toolchain-14.3.rel1-mingw-w64-x86_64-arm-none-eabi.zip`) unpacked anywhere outside the repository.
+- Arm Toolchain for Embedded: the release `release-23.1.0-ATfE` from `github.com/arm/arm-toolchain` (the Linux tarball or the Windows zip), unpacked anywhere outside the repository. The engine uses its `armv6m_soft_nofp_size`, `armv7m_soft_nofp_unaligned_size` and `armv8m.main_soft_nofp_unaligned_size` libraries, the same three the WebAssembly release ships.
+- The WebAssembly release: `toolchain.tar` from `github.com/xbst/webflash-toolchain` releases, unpacked to a folder with `manifest.json`, for `wasm-node` (needs Node 20 or newer).

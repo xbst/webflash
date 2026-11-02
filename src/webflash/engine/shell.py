@@ -38,6 +38,7 @@ class CommandResult:
     code: int
     stdout: str = ""
     stderr: str = ""
+    argv: Optional[list[str]] = None   # the command as the toolchain ran it, for tool commands
 
 
 @dataclass
@@ -137,6 +138,9 @@ def tr(args: list[str], data: bytes) -> bytes:
             raise ShellError("tr: -d takes one set")
         out = bytes(b for b in data if b not in set1)
         squeeze_set = set()
+    elif squeeze and len(sets) == 1:
+        out = data
+        squeeze_set = set(set1)
     else:
         if len(sets) != 2:
             raise ShellError("tr: two sets are needed")
@@ -510,8 +514,8 @@ class Shell:
         result = await self.toolchain.run(command, cwd=self.tree, env=env, links=self.links)
         if redirect is not None:
             self._deliver(result.stdout.encode("utf-8"), redirect)
-            return CommandResult(result.code, "", result.stderr)
-        return CommandResult(result.code, result.stdout, result.stderr)
+            return CommandResult(result.code, "", result.stderr, list(command.argv))
+        return CommandResult(result.code, result.stdout, result.stderr, list(command.argv))
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -551,8 +555,10 @@ def _take_redirect(tokens: list[str]) -> tuple[list[str], Optional[str]]:
 
 
 def _posix_rel(path: Path, tree: Path) -> str:
+    """A path relative to the tree, without following links (resolving
+    ``out/board`` would name its target)."""
     try:
-        return path.resolve().relative_to(tree.resolve()).as_posix()
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(tree)).replace("\\", "/")
     except ValueError:
         return path.as_posix()
 

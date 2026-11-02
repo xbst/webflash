@@ -39,6 +39,18 @@ class ScriptResult:
     stderr: str
 
 
+# The real Popen, for the toolchain backends to run processes while a
+# script runs with the shim installed.
+_REAL_POPEN = subprocess.Popen
+
+
+def real_output(argv: list[str], timeout: float = 60) -> str:
+    """Run a real process and return its stdout (CPython only)."""
+    proc = _REAL_POPEN(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, _err = proc.communicate(timeout=timeout)
+    return out.decode("utf-8", errors="replace")
+
+
 class _FakePopen:
     """What ``buildcommands.py``'s ``check_output`` needs of ``Popen``: the
     output and the return code of one of three commands."""
@@ -144,6 +156,10 @@ class PyRunner:
             return self.tool_version(args[0]) + "\n"
         if args[:2] == ["git", "describe"]:
             return self.version + "\n"
+        if args and args[0].replace("\\", "/").endswith("scripts/make-version.sh"):
+            # Katapult's Kconfig asks the shell for the version (through
+            # kconfiglib's $(shell,...) in genconfig.py and savedefconfig.py).
+            return self.version + "\n"
         if args == ["cat", "klippy/.version"]:
             path = Path("klippy/.version")
             if path.is_file():
@@ -181,7 +197,8 @@ class PyRunner:
             subprocess.Popen = lambda args, *a, **kw: _FakePopen(runner, args, *a, **kw)  # type: ignore[assignment]
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
-                    runpy.run_path(str(script_path), run_name="__main__")
+                    # The relative name, so sys.argv[0] reads as the Makefile wrote it.
+                    runpy.run_path(script, run_name="__main__")
                 except SystemExit as e:
                     code = _exit_code(e.code)
                 except ShellError:

@@ -5,16 +5,21 @@ the browser side never holds a Python proxy it has to free.  This module is
 the only Python the site adds: a thin shim over the package, so the renderer,
 the loaders and the build engine stay the same code the command line runs.
 
-The engine methods (sources, Kconfig, build, method inference) are stubs until
-the build engine and the configure UI land (chunks 03 and 05).
+The engine methods (sources, Kconfig, plan, build, method inference) run the
+build engine on a source snapshot extracted under ``/webflash/src``: the
+project's own kconfiglib, Makefiles and scripts, with the compiler commands
+handed to the page's toolchain workers through ``webflash_js.run_tool``.
+Progress goes through ``webflash_js.progress(phase, detail)``.
 """
 from __future__ import annotations
 
 import base64
 import binascii
+import io
 import json
 import shutil
 import sys
+import tarfile
 from pathlib import Path, PurePosixPath
 
 import webflash
@@ -31,6 +36,9 @@ _BUNDLED_THEMES = _PKG / "themes"
 # does for a board file saved somewhere with no themes folder beside it.
 WORK = Path("/webflash/work")
 BOARD_NAME = "board.toml"
+
+# Where source snapshots are extracted: /webflash/src/<project>/<sha>/.
+SRC = Path("/webflash/src")
 
 _DEFAULT_THEME_DIR = "./themes"
 _CUSTOM_THEME_HINT = (
@@ -167,67 +175,265 @@ def render(toml_text: str, theme_name: str = "", inline_json: str = "") -> str:
     return json.dumps({"html": html, "warnings": _theme_warnings(config, theme_name) + warnings})
 
 
-# ── Build engine (chunks 03 and 05) ──────────────────────────────────
+# ── Build engine ─────────────────────────────────────────────────────
 
-def _not_yet(*_args, **_kwargs):
-    raise NotImplementedError("chunk 03/05")
+# The current snapshot: {"project", "sha", "describe", "ref", "tree"}.
+_sources: dict = {}
+_session = None
+_toolchain_manifest: dict | None = None
+_last_build = None
+
+
+def _progress(phase: str, detail: str = "") -> None:
+    """``webflash_js.progress`` when the worker registered it (Pyodide);
+    nothing under CPython unless a test installs a module of that name."""
+    try:
+        import webflash_js  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    fn = getattr(webflash_js, "progress", None)
+    if fn is not None:
+        fn(str(phase), "" if detail is None else str(detail))
+
+
+def _run_tool_js():
+    try:
+        import webflash_js  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return getattr(webflash_js, "run_tool", None)
+
+
+def _tree() -> Path:
+    tree = _sources.get("tree")
+    if not tree:
+        raise RuntimeError("no sources loaded: call load_sources first")
+    return Path(tree)
+
+
+def _extract(data: bytes, into: Path) -> int:
+    """Extract a tar.gz bundle under ``into`` (paths that would leave it are
+    refused), returning the number of files written."""
+    count = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar:
+            rel = PurePosixPath(member.name.replace("\\", "/"))
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                raise ValueError(f"the bundle holds a path outside the tree: {member.name}")
+            target = into.joinpath(*rel.parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = tar.extractfile(member)
+                target.write_bytes(extracted.read() if extracted else b"")
+                count += 1
+            elif member.issym() or member.islnk():
+                raise ValueError(f"the bundle holds a link, which snapshots never do: {member.name}")
+    return count
 
 
 def load_sources(project: str, ref_json: str, core_bytes: bytes) -> str:
-    """Extract a ref's core bundle into /webflash/src/<project>/<sha>/."""
-    return _not_yet()
+    """Extract a ref's core bundle into ``/webflash/src/<project>/<sha>/`` and
+    make it the current tree. ``ref_json`` is the ref's entry of the sources
+    index (``sha``, ``describe``, ``libs``, ...). Returns
+    ``{"tree", "project", "sha", "describe", "files"}``."""
+    global _session, _sources, _last_build
+    ref = json.loads(ref_json) if ref_json else {}
+    sha = str(ref.get("sha") or "local")
+    tree = SRC / project / sha
+    _progress("sources", f"extracting {project} {ref.get('id') or sha}")
+    if tree.exists():
+        shutil.rmtree(tree)
+    tree.mkdir(parents=True)
+    count = _extract(bytes(core_bytes), tree)
+    _sources = {"project": project, "sha": sha, "describe": str(ref.get("describe") or sha),
+                "ref": ref, "tree": str(tree)}
+    _session = None
+    _last_build = None
+    return json.dumps({"tree": str(tree), "project": project, "sha": sha,
+                       "describe": _sources["describe"], "files": count})
+
+
+def _get_session():
+    global _session
+    if _session is None:
+        from webflash.engine.kconfig import Session
+        _session = Session(_tree(), _sources["project"], _sources["describe"])
+    return _session
 
 
 def kconfig_load(config_text: str) -> str:
-    """Load the tree's Kconfig with a .config or a defconfig (olddefconfig)."""
-    return _not_yet()
+    """Load the tree's Kconfig with a ``.config`` or a defconfig (new symbols
+    take their defaults, as ``olddefconfig`` does); an empty text resets to
+    the defaults. Returns ``{"warnings": [...], "tree": <tree JSON>}``."""
+    session = _get_session()
+    warnings = session.load(config_text if config_text else None)
+    return json.dumps({"warnings": warnings, "tree": session.tree_json()})
 
 
 def kconfig_tree() -> str:
-    """The Kconfig tree as node JSON (SPEC 10)."""
-    return _not_yet()
+    """The Kconfig tree as node JSON (SPEC 10): ``{"root", "nodes", "title"}``."""
+    return json.dumps(_get_session().tree_json())
 
 
 def kconfig_set(name: str, value: str) -> str:
-    """Set a symbol or a choice, returning the new tree."""
-    return _not_yet()
+    """Set a symbol (``y``/``n``, a number, text) or a choice (``name`` is its
+    node id, ``value`` the member symbol), returning the new tree."""
+    from webflash.engine.kconfig import KconfigError
+    try:
+        return json.dumps(_get_session().set(name, value))
+    except KconfigError as e:
+        raise ValueError(str(e)) from None
 
 
 def kconfig_config() -> str:
-    """The full .config text."""
-    return _not_yet()
+    """The full ``.config`` text."""
+    return _get_session().config_text()
 
 
 def kconfig_defconfig() -> str:
-    """The minimal configuration, as make savedefconfig writes it."""
-    return _not_yet()
+    """The minimal configuration, as ``make savedefconfig`` writes it."""
+    return _get_session().defconfig_text()
 
 
 def kconfig_symbol(name: str) -> str:
-    """One symbol's node JSON."""
-    return _not_yet()
+    """One symbol's node JSON, or ``null``."""
+    return json.dumps(_get_session().symbol(name))
 
 
 def kconfig_search(text: str) -> str:
-    """The ids of the nodes whose name, prompt or help match."""
-    return _not_yet()
+    """The ids of the nodes whose name, prompt or help mention the text."""
+    return json.dumps(_get_session().search(text))
+
+
+def _lib_dirs(ev) -> list[str]:
+    """The ``lib/<dir>`` directories the evaluated Makefiles refer to: in
+    ``dirs-y``, in the include flags of ``CFLAGS`` and in ``src-y``'s
+    ``../lib/`` sources, plus the rp2040 stage2 folder."""
+    names: list[str] = []
+
+    def add(path: str) -> None:
+        parts = path.replace("\\", "/").strip("/").split("/")
+        while parts and parts[0] in ("..", ".", "src"):
+            parts.pop(0)
+        if len(parts) >= 2 and parts[0] == "lib":
+            name = "lib/" + parts[1]
+            if name not in names:
+                names.append(name)
+
+    for word in ev.expand("$(dirs-y)").split():
+        add(word)
+    for word in ev.expand("$(CFLAGS)").split():
+        if word.startswith(("-I", "-iquote")):
+            add(word[2:] if word.startswith("-I") else word[7:])
+    for word in ev.expand("$(src-y) $(deployer-y) $(mcu-y)").split():
+        if word.startswith("../lib/"):
+            add(word[3:])
+    stage2 = ev.expand("$(STAGE2_FILE)").strip()
+    mcu = ev.expand("$(MCU)").strip()
+    if stage2 and mcu:
+        add(f"lib/pico-sdk/{mcu}/boot_stage2/{stage2}")
+    return names
 
 
 def plan(config_text: str) -> str:
-    """The lib/ directories a build of this configuration needs."""
-    return _not_yet()
+    """Evaluate the Makefiles for a configuration and name the ``lib/``
+    directories the build needs: ``{"dirs": [dirs-y], "libs": [lib/<dir>],
+    "missing": [the ones not in the tree yet], "targets": [target-y]}``."""
+    from webflash.engine.make import Evaluator, run_sync
+    from webflash.engine.shell import Shell
+    tree = _tree()
+    session = _get_session()
+    session.load(config_text if config_text else None)
+    session.write_config()
+    ev = Evaluator(tree, Shell(tree))
+    run_sync(ev.load())
+    libs = _lib_dirs(ev)
+    missing = [name for name in libs if not (tree / name).is_dir()]
+    return json.dumps({"dirs": ev.expand("$(dirs-y)").split(), "libs": libs, "missing": missing,
+                       "targets": ev.expand("$(target-y)").split()})
 
 
 def add_lib(name: str, data: bytes) -> str:
-    """Extract a lib bundle into the current tree."""
-    return _not_yet()
+    """Extract one ``lib/<dir>`` bundle into the current tree. Returns
+    ``{"name", "files"}``."""
+    tree = _tree()
+    rel = PurePosixPath(name.replace("\\", "/"))
+    if rel.is_absolute() or ".." in rel.parts or len(rel.parts) != 2 or rel.parts[0] != "lib":
+        raise ValueError(f"a lib bundle is named lib/<dir>, not {name!r}")
+    count = _extract(bytes(data), tree)
+    if not (tree / name).is_dir():
+        raise ValueError(f"the bundle did not create {name}")
+    return json.dumps({"name": name, "files": count})
 
 
-def build(config_text: str, version: str, jobs: int = 1) -> str:
-    """Build the firmware; progress goes through a JavaScript callback."""
-    return _not_yet()
+def set_toolchain(manifest_json: str) -> str:
+    """Tell the engine which toolchain release the page's workers run: its
+    ``manifest.json``. Returns ``{"id", "llvm"}``."""
+    global _toolchain_manifest
+    manifest = json.loads(manifest_json)
+    if manifest.get("schema") != 1:
+        raise ValueError(f"toolchain manifest schema {manifest.get('schema')!r} is not supported")
+    _toolchain_manifest = manifest
+    return json.dumps({"id": manifest.get("id"), "llvm": manifest.get("llvm")})
+
+
+async def build(config_text: str, version: str = "", jobs: int = 1) -> str:
+    """Build the firmware for a configuration with the page's toolchain
+    workers (``webflash_js.run_tool``). A coroutine: the worker awaits it.
+    Returns ``{"outputs": {name: size}, "memory", "log", "duration", "version",
+    "config", "defconfig", "project", "methods", "commands"}``; the output
+    files come from ``build_output(name)``."""
+    global _last_build
+    from webflash.engine.build import Build, BuildError
+    from webflash.engine.methods import infer_methods as _infer
+    from webflash.engine.toolchain import JsToolchain
+    tree = _tree()
+    run_tool = _run_tool_js()
+    if run_tool is None:
+        raise RuntimeError("no toolchain: the page has not registered webflash_js.run_tool")
+    if _toolchain_manifest is None:
+        raise RuntimeError("no toolchain manifest: call set_toolchain first")
+    toolchain = JsToolchain(run_tool, _toolchain_manifest, jobs=max(1, int(jobs)))
+    version = version or _sources.get("describe") or "?"
+    b = Build(tree, config_text, toolchain=toolchain, version=version, jobs=max(1, int(jobs)),
+              log=lambda line: _progress("log", line), progress=_progress)
+    try:
+        result = await b.run_async()
+    except BuildError as e:
+        _progress("failed", str(e))
+        raise RuntimeError(str(e)) from None
+    _last_build = result
+    session = _get_session()
+    session.load(result.config)
+    methods = _infer(session.values(), result.project)
+    _progress("finished", "")
+    return json.dumps({
+        "outputs": {name: len(data) for name, data in result.outputs.items()},
+        "memory": result.memory, "log": result.log, "duration": result.duration,
+        "version": result.version, "config": result.config, "defconfig": result.defconfig,
+        "project": result.project, "methods": methods, "commands": result.commands,
+    })
+
+
+def build_output(name: str) -> bytes:
+    """One output file of the last build (``klipper.bin``, ``klipper.uf2``,
+    ``klipper.dict``, ``.config``, ...)."""
+    if _last_build is None:
+        raise RuntimeError("nothing built yet")
+    try:
+        return _last_build.outputs[name]
+    except KeyError:
+        raise ValueError(f"the last build has no output named {name!r} "
+                         f"(it has {', '.join(_last_build.outputs)})") from None
 
 
 def infer_methods(config_text: str) -> str:
-    """The flashing methods a configuration can use, best first (SPEC 11.2)."""
-    return _not_yet()
+    """The flashing methods a configuration can use, best first (SPEC 11.2):
+    the text (a ``.config`` or a defconfig) is resolved through the tree's
+    Kconfig first. Returns a JSON list of method ids."""
+    from webflash.engine.methods import infer_methods as _infer
+    session = _get_session()
+    session.load(config_text if config_text else None)
+    return json.dumps(_infer(session.values(), _sources.get("project", "klipper")))

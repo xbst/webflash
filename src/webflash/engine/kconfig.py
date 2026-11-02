@@ -112,7 +112,12 @@ class Session:
         path = self.tree / ".config"
         path.write_bytes(text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"))
         self._in_tree(self.kconf.load_config, ".config", True)
-        return [w for w in self.kconf.warnings]
+        warnings = list(self.kconf.warnings)
+        # kconfiglib keeps assignments to undefined symbols quiet unless
+        # KCONFIG_WARN_UNDEF is set; the site wants to hear about them.
+        for name, value in getattr(self.kconf, "missing_syms", []):
+            warnings.append(f"CONFIG_{name} is not a symbol of this version (ignored {name}={value})")
+        return warnings
 
     # ── Output texts ──────────────────────────────────────────────────
 
@@ -120,7 +125,9 @@ class Session:
         path = self.tree / "out" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         self._in_tree(writer, str(path), **kwargs)
-        return path.read_bytes().decode("utf-8")
+        # kconfiglib writes in text mode, which is CRLF on Windows; the texts
+        # are LF everywhere, as make olddefconfig writes them on Linux.
+        return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
 
     def config_text(self) -> str:
         """The full ``.config`` as ``make olddefconfig`` writes it."""
@@ -248,7 +255,7 @@ class Session:
             "kind": "menu", "name": "", "prompt": node.prompt[0] if node.prompt else "",
             "type": None, "value": None, "user_value": None,
             "visible": id(node) in shown, "menuconfig": bool(node.is_menuconfig),
-            "range": None, "help": node.help or "", "children": [], "members": [],
+            "range": None, "help": getattr(node, "help", None) or "", "children": [], "members": [],
             "depends": lib.expr_str(node.dep),
         }
         child = node.list
@@ -315,7 +322,7 @@ class Session:
         for node in self._nodes:
             name = getattr(node.item, "name", "") or ""
             prompt = node.prompt[0] if node.prompt else ""
-            help_text = node.help or ""
+            help_text = getattr(node, "help", None) or ""
             if needle in name.lower() or needle in prompt.lower() or needle in help_text.lower():
                 out.append(self._ids[id(node)])
         return out
