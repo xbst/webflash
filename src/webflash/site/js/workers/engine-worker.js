@@ -209,6 +209,8 @@ self.addEventListener("message", async (event) => {
   try {
     const result = await handle(id, method, Array.isArray(params) ? params : [params]);
     if (result instanceof Transfer) postMessage({ id, result: result.value }, result.buffers);
+    // Bytes from Python (build_output) arrive as a fresh Uint8Array: hand it over.
+    else if (ArrayBuffer.isView(result)) postMessage({ id, result }, [result.buffer]);
     else postMessage({ id, result });
   } catch (e) {
     postMessage({ id, error: e && e.message ? e.message : String(e) });
