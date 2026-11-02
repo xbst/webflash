@@ -18,7 +18,7 @@
 // TOML's name and files); a "restore" event tells the configure code to load
 // the restored defconfig into the engine.
 
-import { writeBoardToml, DEFAULT_ENGINE_URL } from "./toml-io.js";
+import { parseToml, writeBoardToml, DEFAULT_ENGINE_URL } from "./toml-io.js";
 
 export const PROJECTS = ["klipper", "kalico", "katapult"];
 export const PROJECT_TITLES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult" };
@@ -136,6 +136,19 @@ export class Session {
 
   /** A copy of the tables, in board_data's shape: what save_toml and writeBoardToml take. */
   tables() { return clone(this._t); }
+
+  /**
+   * The board TOML read into objects, as toml-io.js's parseToml reads the
+   * text Save TOML writes ([[option]] as option, keys at their defaults left
+   * out): the shape chunk 01's session offered, which the flash panel reads.
+   */
+  get toml() {
+    if (this._tomlParsed === undefined || this._tomlParsedFrom !== this.tomlText) {
+      this._tomlParsedFrom = this.tomlText;
+      this._tomlParsed = parseToml(this.tomlText);
+    }
+    return this._tomlParsed;
+  }
 
   // The TOML text follows the tables.
   _sync(origin) {

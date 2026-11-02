@@ -598,11 +598,14 @@ function setupFileIO() {
 async function openFromUrl({ hashOnly = false } = {}) {
   const params = new URLSearchParams(location.search);
   if (!hashOnly) {
+    // A preselection is where the page starts, not a change to save.
+    const clean = !hasUnsavedChanges();
     const project = params.get("project");
     const version = params.get("version");
     if (PROJECTS.includes(project)) session.setProject(project, { version: version || "latest", undoable: false });
     // The project may be the one already picked, which setProject leaves alone.
     if (version) session.setVersion(version, { undoable: false });
+    if (clean) markSaved(session.tomlText);
   }
 
   let text = null;
