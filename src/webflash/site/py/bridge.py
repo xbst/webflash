@@ -79,10 +79,16 @@ def theme_catalog() -> str:
 
 # ── Board TOML ───────────────────────────────────────────────────────
 
-def _load(toml_text: str) -> BoardConfig:
+def _write_toml(toml_text: str) -> Path:
     path = _fresh_work()
-    path.write_text(toml_text, encoding="utf-8")
-    return load_board(path)
+    # Bytes, not text: text mode would turn every "\n" into "\r\n" where the
+    # platform does that, and a "\r\n" the browser kept into "\r\r\n".
+    path.write_bytes(toml_text.encode("utf-8"))
+    return path
+
+
+def _load(toml_text: str) -> BoardConfig:
+    return load_board(_write_toml(toml_text))
 
 
 def check_board(toml_text: str) -> str:
@@ -150,8 +156,7 @@ def render(toml_text: str, theme_name: str = "", inline_json: str = "") -> str:
     warning.
     """
     options = json.loads(inline_json) if inline_json else {}
-    path = _fresh_work()
-    path.write_text(toml_text, encoding="utf-8")
+    path = _write_toml(toml_text)
     _place_files(options.get("files") or {})
     config = load_board(path)
     try:
