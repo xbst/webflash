@@ -49,9 +49,13 @@ async function sha256Hex(bytes) {
 
 /**
  * Download a file into memory, reporting progress as onProgress(done, total)
- * in bytes (total null when the server does not say).
+ * in bytes (total null when it is not known). size is the file's size when
+ * the caller knows it (the index's blobs table does): GitHub Pages compresses
+ * .gz files again in transit, so Content-Length counts the bytes on the wire,
+ * not the ones the body yields, and a cross-origin page cannot even see the
+ * Content-Encoding that would say so.
  */
-async function download(url, { revalidate, onProgress }) {
+async function download(url, { revalidate, onProgress, size = null }) {
   let resp;
   try {
     resp = await fetch(url, { cache: revalidate ? "no-cache" : "default" });
@@ -59,10 +63,9 @@ async function download(url, { revalidate, onProgress }) {
     throw new Error(`Could not download ${url}: the network request failed. Check your connection.`);
   }
   if (!resp.ok) throw new Error(`Could not download ${url} (HTTP ${resp.status}).`);
-  // A Content-Length of a compressed transfer counts other bytes than the
-  // body yields, so only trust it for an identity transfer.
   const encoded = (resp.headers.get("Content-Encoding") || "identity") !== "identity";
-  const total = encoded ? null : Number(resp.headers.get("Content-Length")) || null;
+  let total = Number.isFinite(size) && size > 0 ? size
+    : encoded ? null : Number(resp.headers.get("Content-Length")) || null;
   if (!resp.body || !resp.body.getReader) {
     const bytes = new Uint8Array(await resp.arrayBuffer());
     if (onProgress) onProgress(bytes.length, bytes.length);
@@ -77,6 +80,8 @@ async function download(url, { revalidate, onProgress }) {
     if (end) break;
     chunks.push(value);
     done += value.length;
+    // More bytes than the total said: it counted something else. Unknown, then.
+    if (total !== null && done > total) total = null;
     if (onProgress) onProgress(done, total);
   }
   return { bytes: concat(chunks, done), type: resp.headers.get("Content-Type") || "" };
@@ -85,9 +90,10 @@ async function download(url, { revalidate, onProgress }) {
 /**
  * The bytes of a URL: from Cache Storage when its content is immutable and
  * cached, else downloaded (and cached when immutable). Resolves to
- * {bytes: Uint8Array, size, cached}. onProgress(done, total) reports bytes.
+ * {bytes: Uint8Array, size, cached}. onProgress(done, total) reports bytes;
+ * size, when known, is the total to report (see download).
  */
-export async function fetchBlob(url, { onProgress = null } = {}) {
+export async function fetchBlob(url, { onProgress = null, size = null } = {}) {
   const href = new URL(url, self.location.href).href;
   const immutable = isImmutable(href);
   const cache = immutable ? await openCache() : null;
@@ -101,7 +107,7 @@ export async function fetchBlob(url, { onProgress = null } = {}) {
       }
     } catch (e) { /* a damaged cache entry: download it again */ }
   }
-  const { bytes, type } = await download(href, { revalidate: !immutable, onProgress });
+  const { bytes, type } = await download(href, { revalidate: !immutable, onProgress, size });
   const named = BLOB_RE.exec(new URL(href).pathname);
   if (named && crypto.subtle && (await sha256Hex(bytes)) !== named[1]) {
     throw new Error(`${href} did not download completely (its content does not match its name). Try again.`);

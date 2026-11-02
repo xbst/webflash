@@ -157,21 +157,26 @@ class Transfer {
 }
 
 const OWN = {
-  /** {bytes, size, cached} for a URL, through Cache Storage when it is content-addressed. */
-  async fetchBlob(id, [url, { phase = "download", detail = "" } = {}]) {
-    const out = await fetchBlob(url, { onProgress: (done, total) => progress(phase, detail, done, total, id) });
+  /**
+   * {bytes, size, cached} for a URL, through Cache Storage when it is
+   * content-addressed. size is the file's size when the caller knows it
+   * (sources/index.json's blobs table), for the progress total.
+   */
+  async fetchBlob(id, [url, { phase = "download", detail = "", size = null } = {}]) {
+    const out = await fetchBlob(url, { size, onProgress: (done, total) => progress(phase, detail, done, total, id) });
     return new Transfer(out, [out.bytes.buffer]);
   },
 
   /**
    * Download a ref's core bundle (cached), gunzip it here, and hand the tar
    * to bridge.load_sources(project, ref_json, tar_bytes). ref is the ref's
-   * entry from sources/index.json, url the core bundle's URL. Resolves to
-   * the bridge's JSON plus how many bytes came over the network.
+   * entry from sources/index.json, url the core bundle's URL, size its size
+   * from the index (or null). Resolves to the bridge's JSON plus the bundle's
+   * size and whether it came from the cache.
    */
-  async loadSources(id, [project, ref, url]) {
+  async loadSources(id, [project, ref, url, size = null]) {
     const label = `${project} ${ref && ref.id ? ref.id : ""}`.trim();
-    const blob = await fetchBlob(url, { onProgress: (done, total) => progress("sources", label, done, total, id) });
+    const blob = await fetchBlob(url, { size, onProgress: (done, total) => progress("sources", label, done, total, id) });
     progress("extract", label, null, null, id);
     const tar = await gunzip(blob.bytes);
     await booting;

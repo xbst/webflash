@@ -230,11 +230,12 @@ export async function render(tomlText, { themeName = "", inline = false, files =
  * Make one ref of a project the tree the engine configures and builds: the
  * worker downloads its core bundle (Cache Storage keeps it), gunzips it and
  * hands it to bridge.load_sources. ref is the ref's entry in
- * sources/index.json, url the core bundle's URL. Resolves to {project, id,
- * sha, tree, size, cached}; onProgress gets the download in bytes.
+ * sources/index.json, url the core bundle's URL, size its size from the
+ * index's blobs table (the progress total; null when unknown). Resolves to
+ * {project, id, sha, tree, size, cached}; onProgress gets the download in bytes.
  */
-export async function loadSources(project, ref, url, { onProgress = null } = {}) {
-  return JSON.parse(await call("loadSources", [project, ref, url], { onProgress, early: true }));
+export async function loadSources(project, ref, url, { onProgress = null, size = null } = {}) {
+  return JSON.parse(await call("loadSources", [project, ref, url, size], { onProgress, early: true }));
 }
 
 /**
@@ -274,9 +275,11 @@ export async function plan(configText) {
 
 /**
  * The bytes of a URL, through Cache Storage when its content is immutable
- * (source bundles, toolchain files), in the engine worker. Resolves to
- * {bytes, size, cached}.
+ * (source bundles, toolchain files), in the engine worker. size is the
+ * file's size when known (the index's blobs table): Content-Length is not
+ * (GitHub Pages compresses .gz files again in transit). Resolves to {bytes,
+ * size, cached}.
  */
-export function fetchBlob(url, { onProgress = null, phase = "download", detail = "" } = {}) {
-  return call("fetchBlob", [url, { phase, detail }], { onProgress, early: true });
+export function fetchBlob(url, { onProgress = null, phase = "download", detail = "", size = null } = {}) {
+  return call("fetchBlob", [url, { phase, detail, size }], { onProgress, early: true });
 }
