@@ -20,6 +20,7 @@ from .shell import ShellError, find_firmware_extras
 
 _PROJECT_MARKERS = (
     ("katapult", "src/canboot.h"),
+    ("katapult", "src/flashcmd.c"),  # the flash command handler: every tag, v0.0.1 included
     ("kalico", "src/extras"),
     ("klipper", "klippy"),
 )
@@ -69,8 +70,11 @@ class Session:
         version = self.version
 
         def shell_fn(kconf, _name, command):
+            # Katapult asks the shell for its version: through make-version.sh
+            # on master, and with git describe itself on v0.0.1.
             text = command.strip()
-            if re.fullmatch(r"\./scripts/make-version\.sh(\s+2>\s*/dev/null)?", text):
+            if re.fullmatch(r"\./scripts/make-version\.sh(\s+2>\s*/dev/null)?", text) \
+                    or re.match(r"git describe\b", text):
                 return version
             raise ShellError(f"unsupported Kconfig $(shell,{command})")
 

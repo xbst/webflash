@@ -457,6 +457,11 @@ class Driver:
             elif a in ("-nostdlib", "-nostartfiles", "-nodefaultlibs", "-static", "-mthumb",
                        "-fwhole-program", "-fno-use-linker-plugin", "-ggdb3", "-g", "-MD"):
                 pass
+            elif a.startswith(("--specs=", "-specs=")):
+                # Klipper before v0.13.0 linked with --specs=nano.specs
+                # --specs=nosys.specs (newlib-nano and stub syscalls); the
+                # sysroot's picolibc -lc is both.
+                pass
             elif a.endswith((".o", ".a", ".obj")) or (not a.startswith("-") and "." in _basename(a)):
                 objects.append(a)
             elif a.startswith(("-I", "-iquote", "-D", "-std=", "-W", "-f", "-m", "-isystem")):
