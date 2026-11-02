@@ -18,7 +18,8 @@ snapshot of every ref that ``sources.toml`` selects, as immutable bundles:
 
 ``webflash sources build`` keeps its work in a cache folder, which the
 workflow restores and saves with ``actions/cache``: a full bare clone per
-project (``git/``, which the workflow leaves out of the saved cache), the
+project (``git/``, or the ``--clones`` folder, which the workflow points
+outside the saved cache), the
 bundles, a manifest per snapshot, a record per bundled ``lib/<dir>`` tree
 (``trees/``, so an unchanged vendor tree is never read or compressed again) and
 ``state.json``, which remembers what each ref pointed at and when the policy
@@ -659,16 +660,16 @@ def _board_directories(texts: dict[str, bytes]) -> list[str]:
 
 @dataclass
 class _Repos:
-    """The full bare clone of each project, cloned or fetched once per run and
-    only when a snapshot needs building."""
-    cache: Path
+    """The full bare clone of each project, in ``folder``, cloned or fetched
+    once per run and only when a snapshot needs building."""
+    folder: Path
     log: object
     ready: dict[str, Path] = field(default_factory=dict)
 
     def get(self, project: ProjectPolicy) -> Path:
         if project.name in self.ready:
             return self.ready[project.name]
-        path = self.cache / _GIT / f"{project.name}.git"
+        path = self.folder / f"{project.name}.git"
         current = None
         if (path / "HEAD").is_file():
             try:
@@ -1099,16 +1100,24 @@ def _same_index(a: dict, b: dict) -> bool:
     return strip(a) == strip(b)
 
 
-def write_index(out: Path, index: dict) -> bool:
-    """Write ``index.json``, keeping the file as it is (its ``generated``
-    stamp too) when nothing else changed. Returns whether it changed."""
+def write_index(out: Path, index: dict, last: Path | None = None) -> bool:
+    """Write ``index.json``. When nothing but the ``generated`` stamp would
+    change, the earlier file is kept byte for byte: the one in ``out``, or
+    ``last``, the index the cache remembers publishing (the workflow starts
+    each run with an empty ``out``). So ``generated`` says when the content
+    last changed, and a run with nothing new deploys the same bytes. Returns
+    whether the content changed."""
     path = out / INDEX_FILE
-    try:
-        old = json.loads(path.read_bytes())
-    except (OSError, ValueError):
-        old = None
-    if isinstance(old, dict) and _same_index(old, index):
-        return False
+    for earlier in (path, last):
+        try:
+            data = earlier.read_bytes() if earlier else b""
+            old = json.loads(data)
+        except (OSError, ValueError):
+            continue
+        if isinstance(old, dict) and _same_index(old, index):
+            if earlier != path:
+                _write_bytes(path, data)
+            return False
     _write_json(path, index)
     return True
 
@@ -1161,7 +1170,8 @@ def publish(cache: Path, out: Path, index: dict, state: dict) -> dict:
                 dst = snapshot_dir(out, name, sha) / fname
                 wanted.add(dst)
                 _copy_if_changed(src, dst)
-    changed = write_index(out, index)
+    changed = write_index(out, index, cache / INDEX_FILE)
+    _copy_if_changed(out / INDEX_FILE, cache / INDEX_FILE)
     wanted.add(out / INDEX_FILE)
     removed = 0
     managed = list((out / BLOBS).glob("*.tar.gz")) if (out / BLOBS).is_dir() else []
@@ -1371,17 +1381,18 @@ def _check_folders(out: Path, cache: Path) -> None:
 
 def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None = None,
           refs: list[str] | None = None, gate: bool = True, matrix: Path = DEFAULT_MATRIX,
-          now: _dt.datetime | None = None, log=_log) -> int:
+          clones: Path | None = None, now: _dt.datetime | None = None, log=_log) -> int:
     """``webflash sources build``: snapshot what the policy selects, gate the
-    new snapshots, age out old refs, and publish into ``out``. Returns the exit
-    code: 0, or 2 when a listed snapshot failed the gate."""
+    new snapshots, age out old refs, and publish into ``out``. The full
+    clones go to ``clones`` (default ``<cache>/git``). Returns the exit code:
+    0, or 2 when a listed snapshot failed the gate."""
     now = now or _dt.datetime.now(_dt.timezone.utc)
     today = now.astimezone(_dt.timezone.utc).date()
     _check_folders(out, cache)
     cache.mkdir(parents=True, exist_ok=True)
     state = load_state(cache)
     warnings: list[str] = []
-    repos = _Repos(cache, log)
+    repos = _Repos(clones or cache / _GIT, log)
     names = projects or list(policy.projects)
     unknown = [n for n in names if n not in policy.projects]
     if unknown:
@@ -1492,6 +1503,9 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--ref", action="append", default=None, metavar="R",
                    help="Only refs with this id, such as master or v0.13.0 (repeatable). "
                         "Refs left out keep what an earlier run recorded.")
+    b.add_argument("--clones", type=Path, default=None, metavar="DIR",
+                   help="Where the full clones of the projects go.  Default: <cache>/git. "
+                        "They are needed only when a ref has a new commit.")
     b.add_argument("--no-gate", action="store_true",
                    help="Do not run the snapshot gate: new snapshots get checked: null.")
     b.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX, metavar="FILE",
@@ -1531,7 +1545,7 @@ def main(argv: list[str]) -> int:
         if args.action == "index":
             return rebuild_index(policy, args.out, args.cache)
         return build(policy, args.out, args.cache, projects=args.project, refs=args.ref,
-                     gate=not args.no_gate, matrix=args.matrix)
+                     gate=not args.no_gate, matrix=args.matrix, clones=args.clones)
     except (ValueError, SourcesError, OSError) as e:
         for line in str(e).splitlines() or [""]:
             print(f"Error: {line}", file=sys.stderr)
