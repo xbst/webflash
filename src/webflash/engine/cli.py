@@ -31,7 +31,12 @@ from .make import Evaluator, MakeError, run_sync
 from .shell import Shell, ShellError
 from .toolchain import NativeToolchain, WasmNodeToolchain
 
+# The parity matrix, tools/parity/matrix.toml: the checkout's when this
+# package runs from one, else the current directory's (an installed package
+# has no checkout around it: ci.yml runs `pip install .` and then works in
+# the checkout).
 DEFAULT_MATRIX = Path(__file__).resolve().parents[3] / "tools" / "parity" / "matrix.toml"
+_MATRIX_CANDIDATES = (DEFAULT_MATRIX, Path("tools") / "parity" / "matrix.toml")
 
 # Variables of the environment that would change what make does; the
 # comparison runs both sides without them.
@@ -68,6 +73,16 @@ def load_matrix(path: Path) -> list[dict]:
         out.append({"name": row["name"], "projects": list(row["projects"]),
                     "defconfig": row["defconfig"], "why": row.get("why", "")})
     return out
+
+
+def matrix_path(args: argparse.Namespace) -> Path:
+    """``--matrix`` when given, else the first of the candidates that exists."""
+    if args.matrix:
+        return Path(args.matrix)
+    for candidate in _MATRIX_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    raise ValueError("no parity matrix found: run from a checkout of WebFlash, or pass --matrix tools/parity/matrix.toml")
 
 
 def matrix_rows(path: Path, project: str, names: Optional[list[str]] = None) -> list[dict]:
@@ -225,7 +240,7 @@ def cmd_make_check(args: argparse.Namespace) -> int:
         if args.config:
             configs = [(Path(args.config).stem, Path(args.config).read_text(encoding="utf-8"))]
         else:
-            rows = matrix_rows(Path(args.matrix), project, args.row)
+            rows = matrix_rows(matrix_path(args), project, args.row)
             configs = [(r["name"], r["defconfig"]) for r in rows]
     except (OSError, ValueError) as e:
         return _error(e)
@@ -523,7 +538,7 @@ def cmd_parity(args: argparse.Namespace) -> int:
         if v not in VARIANTS:
             return _error(f"unknown toolchain {v!r} (choose from {', '.join(VARIANTS)})")
     try:
-        rows = matrix_rows(Path(args.matrix), project, args.row)
+        rows = matrix_rows(matrix_path(args), project, args.row)
     except (OSError, ValueError) as e:
         return _error(e)
     if not rows:
@@ -596,7 +611,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("make-check", help="compare the make interpreter with GNU make on a tree")
     p.add_argument("tree", help="a Klipper, Kalico or Katapult source tree")
     p.add_argument("--config", help="a .config or defconfig to check (default: the matrix rows)")
-    p.add_argument("--matrix", default=str(DEFAULT_MATRIX), help="the parity matrix (tools/parity/matrix.toml)")
+    p.add_argument("--matrix", help="the parity matrix (default: tools/parity/matrix.toml of the checkout, else of the current directory)")
     p.add_argument("--row", action="append", help="only this matrix row (repeatable)")
     p.add_argument("--project", choices=("klipper", "kalico", "katapult"), help="which project the tree is (default: detected)")
     p.add_argument("--make", default="make", help="the GNU make to run (default: make)")
@@ -624,7 +639,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("parity", help="build the parity matrix with several toolchains and compare")
     p.add_argument("tree", help="a Klipper, Kalico or Katapult source tree")
-    p.add_argument("--matrix", default=str(DEFAULT_MATRIX), help="the parity matrix (tools/parity/matrix.toml)")
+    p.add_argument("--matrix", help="the parity matrix (default: tools/parity/matrix.toml of the checkout, else of the current directory)")
     p.add_argument("--row", action="append", help="only this matrix row (repeatable)")
     p.add_argument("--project", choices=("klipper", "kalico", "katapult"), help="which project the tree is (default: detected)")
     p.add_argument("--toolchains", default="gcc,clang-native", help=f"comma-separated, from {', '.join(VARIANTS)}")

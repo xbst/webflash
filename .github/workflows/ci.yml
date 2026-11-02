@@ -77,7 +77,9 @@ jobs:
       - name: The Python elf2uf2 against the C++ tool, and inspect
         run: |
           set -e
-          for elf in $(find ~/parity/out -name 'klipper.elf' -path '*rp2*' -o -name 'katapult.elf' -path '*rp2*'); do
+          elfs=$(find ~/parity/out -name 'klipper.elf' -path '*rp2*' -o -name 'katapult.elf' -path '*rp2*')
+          test -n "$elfs" || { echo "no rp2040/rp2350 ELF under ~/parity/out"; exit 1; }
+          for elf in $elfs; do
             ~/elf2uf2 "$elf" /tmp/reference.uf2
             python - "$elf" <<'EOF'
           import sys

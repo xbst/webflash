@@ -306,7 +306,14 @@ class WasmNodeToolchain:
         self.version = str(self.manifest.get("llvm", "0"))
         self.sysroot = Sysroot.from_manifest(self.manifest, root="/")
         self.node = shutil.which(node) or node
-        self.runner = Path(runner) if runner else Path(__file__).resolve().parents[3] / "tools" / "parity" / "wasm-node-runner.mjs"
+        if runner:
+            self.runner = Path(runner)
+        else:
+            # tools/parity/wasm-node-runner.mjs of the checkout, else of the
+            # current directory (an installed package has no checkout).
+            candidates = (Path(__file__).resolve().parents[3] / "tools" / "parity" / "wasm-node-runner.mjs",
+                          Path("tools") / "parity" / "wasm-node-runner.mjs")
+            self.runner = next((c for c in candidates if c.is_file()), candidates[0])
         self.jobs = max(1, int(jobs))
         self._pool: Optional[asyncio.Queue] = None
         self._procs: list = []
