@@ -11,6 +11,7 @@
 
 import * as runtime from "../runtime.js";
 import { blobUrl, blobSize, formatBytes, loadIndex, projectTitle, resolveVersion } from "./sources.js";
+import { normalizeTree, symbolNames } from "./kconfig-tree.js";
 
 const AUTO_KEY = "webflash.configure.auto";
 
@@ -48,6 +49,25 @@ export function notApplied(carriedText, configText, missing = []) {
     if (got !== wanted) out.push({ name, wanted, got });
   }
   return out;
+}
+
+/**
+ * What a load reports, whatever shape the engine gives it ({missing,
+ * warnings}, or a list of warnings): {missing, warnings}, missing being the
+ * assignments to symbols the loaded tree does not define, from the tree
+ * itself when the engine does not list them.
+ */
+export function loadReport(result, carriedText, tree) {
+  const warnings = Array.isArray(result) ? result : (result && result.warnings) || [];
+  let missing = result && !Array.isArray(result) && Array.isArray(result.missing) ? result.missing : null;
+  if (!missing) {
+    const names = symbolNames(tree);
+    missing = [...parseConfigLines(carriedText)].filter(([name]) => !names.has(name));
+  }
+  // kconfiglib's own warning for an undefined symbol says what missing says.
+  const dropped = new Set(missing.map(([name]) => name));
+  const rest = warnings.filter((w) => ![...dropped].some((name) => String(w).includes(`undefined symbol ${name}`)));
+  return { missing, warnings: rest };
 }
 
 /** An assignment as a sentence reads it: NAME, NAME (off), or NAME=value. */
@@ -127,8 +147,12 @@ export class Configurator {
 
   // ── The index ──────────────────────────────────────────────────────
 
-  /** sources/index.json into the session (once; again after a failure). */
-  loadIndex() {
+  /**
+   * sources/index.json into the session (once; again after a failure, or
+   * with fresh: the index moved on and a bundle it named is gone).
+   */
+  loadIndex({ fresh = false } = {}) {
+    if (fresh) this._indexPromise = null;
     if (!this._indexPromise) {
       this._indexPromise = loadIndex().then((index) => {
         this.session.setIndex(index);
@@ -170,55 +194,78 @@ export class Configurator {
       const project = s.project;
       const version = s.version;
       if (!project) return false;
-      let index;
-      try {
-        index = await this.loadIndex();
-      } catch (e) {
-        s.setSources("error", e.message);
-        return false;
-      }
-      const { ref, error, note } = resolveVersion(index, project, version);
-      if (!ref) {
-        s.setSources("error", error);
-        this._setNotice({ kind: "error", title: "This version is not available", lines: [error] });
-        return false;
-      }
-      const label = `${projectTitle(index, project)} ${ref.id}`;
-      const size = this.coreSize(ref);
-      s.setSources("loading", label, { ref, total: size, done: 0 });
       const previous = this.loaded;
-      try {
-        const out = await runtime.loadSources(project, ref, blobUrl(ref.core), {
-          onProgress: ({ phase, done, total }) => {
-            if (generation !== this._generation) return;
-            if (phase === "sources") s.setSources("loading", label, { ref, done, total: total || size });
-            else if (phase === "extract") s.setSources("loading", label, { ref, phase: "extract" });
-          },
-        });
-        if (generation !== this._generation) return false;
-        s.setSources("loading", label, { ref, phase: "kconfig" });
-        const result = await runtime.kconfigLoad(carry || "");
-        const tree = await runtime.kconfigTree();
-        const configText = await runtime.kconfigConfig();
-        const defconfigText = await runtime.kconfigDefconfig();
-        if (generation !== this._generation) return false;
-        this.loaded = { project, ref, version };
-        s.setRef(ref);
-        s.setTree(tree);
-        s.setConfig({ configText, defconfigText });
-        s.setSources("ready", label, { ref, size: out.size, cached: out.cached });
-        remember(AUTO_KEY, "1");
-        this._report(reason, { result, carry, configText, previous, ref, note });
-        this.schedulePlan(0);
-        return true;
-      } catch (e) {
-        if (generation === this._generation) {
-          s.setSources("error", e.message, { ref });
-          this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] });
+      // A branch's old bundles stay published for a short while only: a 404
+      // means the index this page holds is out of date, so read it again
+      // once and resolve the version anew.
+      for (let attempt = 0; ; attempt++) {
+        let index;
+        try {
+          index = await this.loadIndex({ fresh: attempt > 0 });
+        } catch (e) {
+          s.setSources("error", e.message);
+          return false;
         }
-        return false;
+        const { ref, error, note } = resolveVersion(index, project, version);
+        if (!ref) {
+          s.setSources("error", error);
+          this._setNotice({ kind: "error", title: "This version is not available", lines: [error] });
+          return false;
+        }
+        const label = `${projectTitle(index, project)} ${ref.id}`;
+        const size = this.coreSize(ref);
+        s.setSources("loading", label, { ref, total: size, done: 0 });
+        let out;
+        try {
+          out = await runtime.loadSources(project, ref, blobUrl(ref.core), {
+            onProgress: ({ phase, done, total }) => {
+              if (generation !== this._generation) return;
+              if (phase === "sources") s.setSources("loading", label, { ref, done, total: total || size });
+              else if (phase === "extract") s.setSources("loading", label, { ref, phase: "extract" });
+            },
+          });
+        } catch (e) {
+          if (attempt === 0 && /\(HTTP 404\)/.test(e.message) && generation === this._generation) continue;
+          if (generation === this._generation) {
+            s.setSources("error", e.message, { ref });
+            this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] });
+          }
+          return false;
+        }
+        if (generation !== this._generation) return false;
+        return this._configure({ generation, reason, carry, project, version, ref, label, note, previous, out });
       }
     });
+  }
+
+  // The second half of load: the sources are in the engine; read the
+  // configuration into them and report.
+  async _configure({ generation, reason, carry, project, version, ref, label, note, previous, out }) {
+    const s = this.session;
+    try {
+      s.setSources("loading", label, { ref, phase: "kconfig" });
+      const loaded = await runtime.kconfigLoad(carry || "");
+      const tree = normalizeTree(await runtime.kconfigTree());
+      const result = loadReport(loaded, carry || "", tree);
+      const configText = await runtime.kconfigConfig();
+      const defconfigText = await runtime.kconfigDefconfig();
+      if (generation !== this._generation) return false;
+      this.loaded = { project, ref, version };
+      s.setRef(ref);
+      s.setTree(tree);
+      s.setConfig({ configText, defconfigText });
+      s.setSources("ready", label, { ref, size: out.size, cached: out.cached });
+      remember(AUTO_KEY, "1");
+      this._report(reason, { result, carry, configText, previous, ref, note });
+      this.schedulePlan(0);
+      return true;
+    } catch (e) {
+      if (generation === this._generation) {
+        s.setSources("error", e.message, { ref });
+        this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] });
+      }
+      return false;
+    }
   }
 
   _report(reason, { result, carry, configText, previous, ref, note }) {
@@ -257,7 +304,7 @@ export class Configurator {
   _unknownOptions() {
     const s = this.session;
     if (!s.tree) return [];
-    const names = new Set(Object.values(s.tree.nodes).map((n) => n.name).filter(Boolean));
+    const names = symbolNames(s.tree);
     return s.options.map((o) => o.symbol).filter((sym) => !names.has(sym));
   }
 
@@ -269,7 +316,7 @@ export class Configurator {
 
   async _refresh(tree) {
     const s = this.session;
-    s.setTree(tree || await runtime.kconfigTree());
+    s.setTree(normalizeTree(tree || await runtime.kconfigTree()));
     const configText = await runtime.kconfigConfig();
     const defconfigText = await runtime.kconfigDefconfig();
     s.setConfig({ configText, defconfigText });
@@ -305,15 +352,16 @@ export class Configurator {
     return this._enqueue(async () => {
       if (!this.ready || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       s.checkpoint();
-      const result = await runtime.kconfigLoad(text);
+      const loaded = await runtime.kconfigLoad(text);
       await this._refresh();
-      const missing = result.missing || [];
+      const result = loadReport(loaded, text, s.tree);
+      const missing = result.missing;
       const lines = [];
       if (missing.length) {
         lines.push(`Not in ${projectTitle(s.index, s.project)} ${this.loaded.ref.id}, so dropped: ` +
           `${missing.map(([n, v]) => describeAssignment(n, v)).join(", ")}.`);
       }
-      for (const w of result.warnings || []) lines.push(w);
+      for (const w of result.warnings) lines.push(w);
       this._setNotice(lines.length ? { kind: "warn", title, lines } : null);
       return result;
     });

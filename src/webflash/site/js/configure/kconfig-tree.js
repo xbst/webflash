@@ -65,6 +65,64 @@ function isMember(choice, node) {
   return node.kind === "symbol" && (choice.members || []).some((m) => m.name === node.name);
 }
 
+export const ROOT_ID = "$root";
+
+/**
+ * The engine's tree in the shape this module reads: {root: <id of a root
+ * menu>, nodes}, every node with null for what it lacks (name, prompt, help,
+ * depends, a choice's value), members [] outside choices, and editable.
+ * Accepts the engine's {root: [top-level ids], nodes, title}, empty strings
+ * for missing texts and "y" for no dependency, and fills editable in when the
+ * engine leaves it out (a shown symbol or choice with a prompt; a bool that
+ * another option selects then still looks editable, and the engine keeps its
+ * value).
+ */
+export function normalizeTree(tree) {
+  if (!tree || !tree.nodes) return tree;
+  const nodes = {};
+  for (const [id, n] of Object.entries(tree.nodes)) {
+    const kind = n.kind || "symbol";
+    const node = {
+      ...n,
+      id: n.id || id,
+      kind,
+      name: n.name || null,
+      prompt: n.prompt || null,
+      help: n.help || null,
+      depends: !n.depends || n.depends === "y" ? null : n.depends,
+      value: kind === "choice" ? (n.value || null) : (n.value ?? null),
+      children: n.children || [],
+      members: kind === "choice" ? (n.members || []) : [],
+      menuconfig: kind === "symbol" && Boolean(n.menuconfig),
+    };
+    if (typeof n.editable !== "boolean") {
+      node.editable = Boolean(n.visible) && Boolean(n.prompt) && (kind === "symbol" || kind === "choice") &&
+        (kind !== "choice" || node.members.some((m) => m.visible));
+    }
+    nodes[node.id] = node;
+  }
+  let root = tree.root;
+  if (Array.isArray(root)) {
+    nodes[ROOT_ID] = {
+      id: ROOT_ID, kind: "menu", name: null, prompt: tree.title || null, type: null, value: null,
+      user_value: null, visible: true, menuconfig: false, editable: false, range: null, help: null,
+      children: root, members: [], depends: null,
+    };
+    root = ROOT_ID;
+  }
+  return { root, nodes };
+}
+
+/** Every symbol name the tree defines. */
+export function symbolNames(tree) {
+  const names = new Set();
+  for (const n of Object.values((tree && tree.nodes) || {})) {
+    if (n.name && n.kind === "symbol") names.add(n.name);
+    for (const m of n.members || []) names.add(m.name);
+  }
+  return names;
+}
+
 /** The value text an int or hex input accepts, normalized, or an error sentence. */
 export function checkNumber(node, raw) {
   const s = String(raw).trim();

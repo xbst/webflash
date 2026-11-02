@@ -134,10 +134,13 @@ export function uncheckedText(ref) {
   return ref.checked === false ? "failed the snapshot check" : "not checked";
 }
 
-/** The size of a blob in bytes, from the index's sizes map, or null when it does not say. */
+/**
+ * The size of a blob in bytes, from the index's blobs table ({path: {size,
+ * unpacked, files}}), or null when it does not say.
+ */
 export function blobSize(index, path) {
-  const sizes = index && index.sizes;
-  const n = sizes && path ? sizes[path] : undefined;
+  const entry = index && index.blobs && path ? index.blobs[path] : undefined;
+  const n = entry ? entry.size : undefined;
   return Number.isFinite(n) ? n : null;
 }
 
