@@ -628,6 +628,16 @@ def _toml_inline_table(table: dict) -> str:
     return "{ " + body + " }" if body else "{}"
 
 
+def _label_order(labels: dict, values: list | None) -> dict:
+    """An option's labels in the order the writers use: the order of values,
+    then any other keys sorted. Not the TOML's own order, which JavaScript
+    cannot keep (an object lists integer-like keys such as "500000" first,
+    in numeric order), so that toml-io.js writes the same text."""
+    keys = [k for k in (values or []) if k in labels]
+    keys += sorted(k for k in labels if k not in keys)
+    return {k: labels[k] for k in keys}
+
+
 def dump_board(data: dict) -> str:
     """A board TOML from its tables, in the shape :func:`board_data` returns
     (the site's session has the same shape): the tables in the order of the
@@ -669,7 +679,8 @@ def dump_board(data: dict) -> str:
             if option.get("values") is not None:
                 lines.append(f"values = {_toml_array(option['values'])}")
             if option.get("labels"):
-                lines.append(f"labels = {_toml_inline_table(option['labels'])}")
+                labels = _label_order(option["labels"], option.get("values"))
+                lines.append(f"labels = {_toml_inline_table(labels)}")
             if option.get("help"):
                 lines.append(f"help = {_toml_text(option['help'])}")
 

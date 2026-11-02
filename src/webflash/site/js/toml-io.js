@@ -535,9 +535,18 @@ function tomlArray(items) {
   return `[${items.map((item) => tomlString(String(item))).join(", ")}]`;
 }
 
-function tomlInlineTable(table) {
-  const body = Object.entries(table).map(([k, v]) => `${tomlKey(String(k))} = ${tomlString(String(v))}`).join(", ");
+function tomlInlineTable(table, keys = Object.keys(table)) {
+  const body = keys.map((k) => `${tomlKey(String(k))} = ${tomlString(String(table[k]))}`).join(", ");
   return body ? `{ ${body} }` : "{}";
+}
+
+// An option's labels in the order both writers use: the order of values, then
+// any other keys sorted. Not the TOML's own order, which an object cannot keep
+// (it lists integer-like keys such as "500000" first, in numeric order).
+function labelOrder(labels, values) {
+  const keys = (values || []).map(String).filter((k) => Object.prototype.hasOwnProperty.call(labels, k));
+  const rest = Object.keys(labels).filter((k) => !keys.includes(k)).sort();
+  return [...keys, ...rest];
 }
 
 /** Any value patchValue writes: text, a number, a boolean, a list of text. */
@@ -639,7 +648,9 @@ export function writeBoardToml(data) {
       lines.push("", "[[option]]", `symbol = ${tomlString(option.symbol || "")}`);
       if (option.label) lines.push(`label = ${tomlText(option.label)}`);
       if (option.values !== undefined && option.values !== null) lines.push(`values = ${tomlArray(option.values)}`);
-      if (option.labels && Object.keys(option.labels).length) lines.push(`labels = ${tomlInlineTable(option.labels)}`);
+      if (option.labels && Object.keys(option.labels).length) {
+        lines.push(`labels = ${tomlInlineTable(option.labels, labelOrder(option.labels, option.values))}`);
+      }
       if (option.help) lines.push(`help = ${tomlText(option.help)}`);
     }
   }
