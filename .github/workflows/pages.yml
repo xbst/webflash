@@ -1,0 +1,311 @@
+name: Deploy the site to GitHub Pages
+
+# The site is static: the webflash package runs in the browser under Pyodide,
+# the compiler is the latest webflash-toolchain release, and the firmware
+# sources are snapshots built here from sources.toml (webflash sources build),
+# all served from the site's own origin, which GitHub Pages serves with
+# access-control-allow-origin: * for embedded pages.
+#
+# master deploys: on a push, daily (new upstream commits become snapshots) and
+# by hand. Pushes to dev and wf/** branches build and check the same site
+# without deploying it, so a branch can be tested before it is merged.
+
+on:
+  push:
+    branches: [master, dev, "wf/**"]
+    paths:
+      - "src/**"
+      - "sources.toml"
+      - "tools/parity/**"
+      - ".github/workflows/pages.yml"
+  schedule:
+    # Daily, away from the top of the hour, when GitHub delays scheduled runs.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to GitHub Pages (off: build and check only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it; a half-published site
+# is worse than a slightly stale one. One group per branch: only master
+# deploys, and a test run of another branch must never displace a deploy
+# waiting its turn (GitHub keeps one pending run per group).
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SITE_DOMAIN: webflash.isiks.tech
+  TOOLCHAIN_REPO: xbst/webflash-toolchain
+  SOURCES_CACHE: .sources-cache
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      gate: ${{ steps.sources.outputs.gate }}
+      pages: ${{ steps.pages.outputs.pages }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install webflash
+        run: python -m pip install --quiet .
+
+      - name: Build the Pyodide payload
+        run: PYTHONPATH=src python -m webflash.payload
+
+      - name: Stage the site
+        run: |
+          site=src/webflash/site
+          mkdir -p _site/engine/v1
+          cp "$site/index.html" "$site/webflash.zip" _site/
+          cp -r "$site/css" _site/css
+          cp -r "$site/js" _site/js
+          # The embed runtime, laid out as the local server serves it
+          # (serve.py): js/embed/ at its root, then flash/, build/, workers/
+          # and css/ beside it. Folders a later chunk adds are copied once
+          # they exist.
+          if [ -d "$site/js/embed" ]; then cp -r "$site/js/embed/." _site/engine/v1/; fi
+          for part in flash build workers; do
+            if [ -d "$site/js/$part" ]; then cp -r "$site/js/$part" "_site/engine/v1/$part"; fi
+          done
+          cp -r "$site/css" _site/engine/v1/css
+          find _site -name __pycache__ -type d -prune -exec rm -rf {} +
+          echo "$SITE_DOMAIN" > _site/CNAME
+
+      - name: Copy the latest toolchain release
+        env:
+          # A token that can read the toolchain repository: the workflow's own
+          # works once that repository is public; a TOOLCHAIN_TOKEN secret (a
+          # fine-grained token with read access to its contents) while private.
+          GH_TOKEN: ${{ secrets.TOOLCHAIN_TOKEN || github.token }}
+        run: |
+          api="https://api.github.com/repos/$TOOLCHAIN_REPO"
+          auth=()
+          if [ -n "$GH_TOKEN" ]; then auth=(-H "Authorization: Bearer $GH_TOKEN"); fi
+          get() { curl -sS "${auth[@]}" -H "Accept: application/vnd.github+json" "$@"; }
+          code=$(get -o release.json -w '%{http_code}' "$api/releases/latest")
+          if [ "$code" = 404 ]; then
+            # No release yet, or no access: the site deploys without
+            # /toolchain/, and Build says the compiler is missing.
+            if [ "$(get -o /dev/null -w '%{http_code}' "$api")" = 404 ]; then
+              why="cannot see $TOOLCHAIN_REPO: it does not exist, or it is private and no TOOLCHAIN_TOKEN secret gives access"
+            else
+              why="$TOOLCHAIN_REPO has no release yet"
+            fi
+            echo "::warning title=No toolchain::$why. The site is built without /toolchain/, so building firmware stays unavailable until a release can be copied."
+            exit 0
+          fi
+          if [ "$code" != 200 ]; then
+            echo "::error::the GitHub API answered $code for the latest $TOOLCHAIN_REPO release"
+            cat release.json
+            exit 1
+          fi
+          read -r tag asset < <(python -c "
+          import json
+          release = json.load(open('release.json'))
+          url = next((a['url'] for a in release['assets'] if a['name'] == 'toolchain.tar'), '')
+          print(release['tag_name'], url)")
+          if [ -z "$asset" ]; then
+            echo "::error::the latest $TOOLCHAIN_REPO release ($tag) has no toolchain.tar"
+            exit 1
+          fi
+          curl -sSfL "${auth[@]}" -H "Accept: application/octet-stream" -o toolchain.tar "$asset"
+          # The release's tag is the toolchain id, and so is the manifest's id.
+          id=$(tar -xOf toolchain.tar manifest.json | python -c "import json, sys; print(json.load(sys.stdin)['id'])")
+          if ! [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [ "$id" != "$tag" ]; then
+            echo "::error::the toolchain id '$id' is not usable or differs from the release tag '$tag'"
+            exit 1
+          fi
+          mkdir -p "_site/toolchain/$id"
+          tar -xf toolchain.tar -C "_site/toolchain/$id"
+          printf '{"id": "%s"}\n' "$id" > _site/toolchain/current.json
+          rm toolchain.tar release.json
+          echo "::notice title=Toolchain::$id ($(du -sh "_site/toolchain/$id" | cut -f1))"
+
+      - name: Restore the snapshot cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.SOURCES_CACHE }}
+          key: sources-${{ hashFiles('sources.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # The newest cache wins; one from an older sources.toml is still
+          # useful, since a snapshot built under other rules is rebuilt.
+          restore-keys: |
+            sources-${{ hashFiles('sources.toml') }}-
+            sources-
+
+      - name: Install the snapshot gate's compiler
+        run: |
+          # The gate (webflash make-check and webflash build --toolchain gcc)
+          # comes with the build engine; without it new snapshots are
+          # published with checked: null.
+          if [ -f src/webflash/engine/cli.py ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gcc-arm-none-eabi
+            arm-none-eabi-gcc --version | head -n 1
+            make --version | head -n 1
+          else
+            echo "::notice title=Snapshot gate::the build engine is not in this checkout yet, so new snapshots get checked: null"
+          fi
+
+      - name: Build the source snapshots
+        id: sources
+        run: |
+          # Exit code 2: everything was written, but a snapshot failed the
+          # gate. It is published with checked: false (the site offers it with
+          # a warning), and the gate job below marks the run failed.
+          set +e
+          webflash sources build --policy sources.toml --out _site/sources \
+            --cache "$SOURCES_CACHE" --clones "$RUNNER_TEMP/clones"
+          code=$?
+          set -e
+          if [ "$code" = 2 ]; then
+            echo "gate=failed" >> "$GITHUB_OUTPUT"
+            echo "::error title=Snapshot gate::a snapshot failed the gate and is published with checked: false; its make-check.json says why"
+          elif [ "$code" != 0 ]; then
+            exit "$code"
+          fi
+
+      - name: Save the snapshot cache
+        # Also after a failure: every snapshot in the cache is complete, so
+        # the next run carries on from there.
+        if: always() && steps.sources.outcome != 'skipped'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.SOURCES_CACHE }}
+          key: sources-${{ hashFiles('sources.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Check the site
+        run: |
+          test -s _site/index.html
+          test "$(cat _site/CNAME)" = "$SITE_DOMAIN"
+          python - <<'PY'
+          import hashlib, json, sys, zipfile
+          from pathlib import Path
+
+          site, src = Path("_site"), Path("src/webflash/site")
+          names = zipfile.ZipFile(site / "webflash.zip").namelist()
+          assert names[0] == "bridge.py", "the payload must start with the bridge module"
+          for needed in ("webflash/__init__.py", "webflash/config.py", "webflash/renderer.py",
+                         "webflash/themes/default.toml"):
+              assert needed in names, f"the payload is missing {needed}"
+          stray = [n for n in names if n != "bridge.py" and not n.startswith("webflash/")]
+          assert not stray, f"the payload has entries outside webflash/: {stray}"
+          server = [n for n in names if n.split("/")[-1] in ("cli.py", "serve.py", "payload.py", "sources.py")
+                    and n.count("/") == 1]
+          assert not server, f"the payload holds server-side modules: {server}"
+          print(f"payload ok: {len(names)} entries")
+
+          # /engine/v1/ mirrors the folders it is staged from, file for file.
+          def files(folder):
+              return {p.relative_to(folder).as_posix(): p.read_bytes()
+                      for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+          engine = site / "engine" / "v1"
+          parts = {"": src / "js" / "embed", "flash/": src / "js" / "flash", "build/": src / "js" / "build",
+                   "workers/": src / "js" / "workers", "css/": src / "css"}
+          expected = {prefix + name: data for prefix, folder in parts.items() if folder.is_dir()
+                      for name, data in files(folder).items()}
+          assert files(engine) == expected, "engine/v1/ differs from the site folders it is staged from"
+          assert "workers/engine-worker.js" in expected, "engine/v1/workers/engine-worker.js is missing"
+          print(f"engine/v1 ok: {len(expected)} files")
+
+          # The toolchain, when there is one: current.json names a folder whose
+          # files match the manifest's sizes and SHA-256.
+          current = site / "toolchain" / "current.json"
+          if current.is_file():
+              tid = json.loads(current.read_text())["id"]
+              folder = site / "toolchain" / tid
+              manifest = json.loads((folder / "manifest.json").read_text())
+              assert manifest["id"] == tid, "current.json and the manifest name different toolchains"
+              for name, info in manifest["files"].items():
+                  data = (folder / name).read_bytes()
+                  assert len(data) == info["size"], f"toolchain {name}: size {len(data)}, manifest {info['size']}"
+                  assert hashlib.sha256(data).hexdigest() == info["sha256"], f"toolchain {name}: SHA-256 differs"
+              print(f"toolchain ok: {tid}, {len(manifest['files'])} files")
+          else:
+              assert not (site / "toolchain").exists() or not any((site / "toolchain").iterdir()), \
+                  "toolchain/ has files but no current.json"
+              print("toolchain: none (see the warning above)")
+          PY
+          webflash sources check --out _site/sources
+
+      - name: Report the size
+        run: |
+          # GitHub Pages publishes sites of up to 1 GB. A part that does not
+          # exist (no toolchain yet) counts 0.
+          size() { { du -sb "$@" 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}'; }
+          total=$(size _site)
+          {
+            echo "### Site size"
+            echo ""
+            echo "| Part | MB |"
+            echo "|---|---:|"
+            for part in "site:_site/index.html _site/css _site/js _site/CNAME" "payload:_site/webflash.zip" \
+                        "engine/v1:_site/engine" "toolchain:_site/toolchain" "sources:_site/sources"; do
+              bytes=$(size ${part#*:})
+              echo "| ${part%%:*} | $(awk "BEGIN {printf \"%.2f\", $bytes / 1048576}") |"
+            done
+            echo "| **total** | **$(awk "BEGIN {printf \"%.2f\", $total / 1048576}")** |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -gt 950000000 ]; then
+            echo "::error::the site is $total bytes, too close to GitHub Pages' 1 GB limit: publish fewer refs in sources.toml"
+            exit 1
+          elif [ "$total" -gt 700000000 ]; then
+            echo "::warning::the site is $total bytes; GitHub Pages publishes up to 1 GB"
+          fi
+
+      - name: Check whether Pages is enabled
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=()
+          if [ -n "$GH_TOKEN" ]; then auth=(-H "Authorization: Bearer $GH_TOKEN"); fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" || true)
+          if [ "$code" = 200 ]; then
+            echo "pages=enabled" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Not deployed::GitHub Pages is not enabled for this repository (API answered $code); enable it with GitHub Actions as the source to deploy."
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        if: github.ref == 'refs/heads/master' && steps.pages.outputs.pages == 'enabled'
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/master' && needs.build.outputs.pages == 'enabled' &&
+      (github.event_name != 'workflow_dispatch' || inputs.deploy)
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  gate:
+    # After the deploy, so a snapshot that failed the gate is still served
+    # (checked: false) while the failed run tells the maintainer.
+    needs: [build, deploy]
+    if: always() && needs.build.outputs.gate == 'failed'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::the snapshot gate failed for at least one ref: see the build job's log and that ref's make-check.json"
+          exit 1
