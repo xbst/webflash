@@ -313,7 +313,7 @@ def _glob_regex(pattern: str) -> re.Pattern:
             out.append("(?:.*/)?")
             i += 3
         elif pattern.startswith("/**", i) and i + 3 == len(pattern):
-            out.append("(?:/.*)?")
+            out.append("/.+")       # everything under the folder, not the folder
             i += 3
         elif pattern.startswith("**", i):
             out.append(".*")
@@ -875,15 +875,14 @@ def _run(argv: list[str], cwd: Path, timeout: int) -> dict:
 
 
 def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
-             *, skip: str | None = None) -> dict:
+             *, now: _dt.datetime, skip: str | None = None) -> dict:
     """Run the snapshot gate on a snapshot's bundles and write its report,
     ``<project>/<sha>/make-check.json``. ``checked`` is True when every row of
     the matrix that applies passed both commands, False when one failed, and
     None when the gate did not run (``skip`` or no engine) or no row applies."""
     project, sha = manifest["project"], manifest["sha"]
     report = {"schema": SCHEMA, "project": project, "sha": sha, "describe": describe,
-              "checked": None, "note": "", "webflash": __version__,
-              "ran": _stamp(_dt.datetime.now(_dt.timezone.utc)), "rows": []}
+              "checked": None, "note": "", "webflash": __version__, "ran": _stamp(now), "rows": []}
     reason = skip or gate_unavailable()
     if reason is None and not matrix.is_file():
         reason = f"there is no parity matrix at {matrix.as_posix()}"
@@ -1412,7 +1411,7 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
                         else manifest["describe"])
             report = _read_json(snapshot_dir(cache, name, ref.sha) / REPORT_FILE)
             if gate_needed(report, matrix, gate=gate):
-                run_gate(cache, manifest, describe, matrix, log,
+                run_gate(cache, manifest, describe, matrix, log, now=now,
                          skip=None if gate else "it was skipped (--no-gate)")
     if refs:
         missing = sorted(set(refs) - matched_refs)
