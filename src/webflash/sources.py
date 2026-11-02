@@ -844,7 +844,9 @@ def _missing_symbols(tree: Path, defconfig: str) -> list[str]:
     row for an MCU an old tag predates does not apply to that tag."""
     defined: set[str] = set()
     for path in tree.rglob("Kconfig*"):
-        if path.is_file():
+        # The name test again, case-sensitive: on Windows the glob is not, and
+        # would also read lib/kconfiglib/kconfiglib.py.
+        if path.is_file() and path.name.startswith("Kconfig"):
             defined.update(_KCONFIG_SYMBOL_RE.findall(path.read_text("utf-8", "replace")))
     wanted = _DEFCONFIG_SYMBOL_RE.findall(defconfig)
     return sorted({s for s in wanted if s not in defined})
