@@ -98,6 +98,7 @@ jobs:
         run: |
           set -e
           cd ~/trees/klipper
+          rm -rf out
           printf 'CONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n' > /tmp/g0b1.config
           cp /tmp/g0b1.config .config
           make olddefconfig
