@@ -365,9 +365,9 @@ export class UsbDevice {
    * descriptors: the configuration descriptor gives each alternate's string
    * index (WebUSB does not expose it), then each string is read once.
    * Returns {raw, langId, names: Map<alternateSetting, string|null>,
-   * failures: [text]}: raw is the configuration descriptor, for the
-   * class-specific descriptors in it, and failures says which reads the
-   * device refused.
+   * indexes: Map<alternateSetting, iInterface>, failures: [text]}: raw is
+   * the configuration descriptor, for the class-specific descriptors in
+   * it, and failures says which reads the device refused.
    */
   async readInterfaceNames(interfaceNumber = this.interfaceNumber) {
     const raw = await this.readConfigurationDescriptor();
@@ -380,9 +380,11 @@ export class UsbDevice {
       failures.push(`string descriptor 0 (the language list): ${e.message}`);
     }
     const names = new Map();
+    const indexes = new Map();
     const strings = new Map();
     for (const d of parsed.interfaces) {
       if (interfaceNumber !== null && interfaceNumber !== undefined && d.interfaceNumber !== interfaceNumber) continue;
+      indexes.set(d.alternateSetting, d.iInterface);
       let text = null;
       if (d.iInterface) {
         if (!strings.has(d.iInterface)) {
@@ -397,7 +399,7 @@ export class UsbDevice {
       }
       names.set(d.alternateSetting, text);
     }
-    return { raw, langId, names, failures };
+    return { raw, langId, names, indexes, failures };
   }
 }
 

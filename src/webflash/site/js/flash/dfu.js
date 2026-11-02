@@ -161,17 +161,24 @@ export class DfuDevice {
     // way dfu-util and webdfu read it.
     const names = new Map(alternates.map((a) => [a.alternateSetting, typeof a.interfaceName === "string" && a.interfaceName.trim() ? a.interfaceName : null]));
     let raw = null;
+    let indexes = null;
     if ([...names.values()].some((n) => n === null)) {
       try {
         const read = await this.usb.readInterfaceNames(found.interfaceNumber);
         raw = read.raw;
+        indexes = read.indexes;
         for (const [setting, text] of read.names) if (names.get(setting) === null && text) names.set(setting, text);
         for (const f of read.failures) this.log(`Could not read ${f}`);
       } catch (e) {
         this.log(`Could not read the interface names from the device (${e.message}).`);
       }
     }
-    this.log(`DFU interface ${found.interfaceNumber}: ${alternates.map((a) => `alternate ${a.alternateSetting} "${names.get(a.alternateSetting) || ""}"`).join(", ")}`);
+    // The string index goes into the log because the STM32G0B1 ROM answered
+    // the internal flash's name for all three of its alternates (hardware.md);
+    // the index tells whether the ROM shares one string or names the
+    // alternate currently selected.
+    const describeAlt = (a) => `alternate ${a.alternateSetting} "${names.get(a.alternateSetting) || ""}"${indexes && indexes.has(a.alternateSetting) ? ` (string ${indexes.get(a.alternateSetting)})` : ""}`;
+    this.log(`DFU interface ${found.interfaceNumber}: ${alternates.map(describeAlt).join(", ")}`);
 
     let alt = alternates.find((a) => /internal\s*flash/i.test(names.get(a.alternateSetting) || "")) || null;
     if (!alt && this.altSetting !== null) alt = alternates.find((a) => a.alternateSetting === this.altSetting) || null;
