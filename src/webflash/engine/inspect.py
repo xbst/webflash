@@ -99,17 +99,26 @@ def elf_sizes(elf: dict) -> dict[str, int]:
 
 
 def _content_segments(elf: dict) -> list[dict]:
-    """The LOAD segments that hold a section's bytes. lld may add a LOAD
-    segment for the ELF and program headers alone below the first section;
-    objcopy writes sections, so an image never holds it."""
+    """The LOAD segments that hold a section's bytes, clipped to those bytes.
+    lld puts the ELF and program headers in a LOAD segment of their own below
+    the first section, and GNU ld may put them in the first section's segment
+    when the section's address leaves room, so that the segment starts at the
+    flash base, a bootloader's length below the code. objcopy writes
+    sections, so an image holds neither the headers nor that gap."""
     out = []
     for seg in elf["segments"]:
         if seg["type"] != PT_LOAD or not seg["filesz"]:
             continue
         lo, hi = seg["offset"], seg["offset"] + seg["filesz"]
-        if any(s["flags"] & SHF_ALLOC and s["size"] and s["type"] != SHT_NOBITS and lo <= s["offset"] < hi
-               for s in elf["sections"]):
-            out.append(seg)
+        held = [s for s in elf["sections"]
+                if s["flags"] & SHF_ALLOC and s["size"] and s["type"] != SHT_NOBITS and lo <= s["offset"] < hi]
+        if not held:
+            continue
+        start = min(s["offset"] for s in held)
+        end = min(hi, max(s["offset"] + s["size"] for s in held))
+        skip = start - lo
+        out.append({**seg, "offset": start, "vaddr": seg["vaddr"] + skip, "paddr": seg["paddr"] + skip,
+                    "filesz": end - start, "memsz": max(seg["memsz"] - skip, end - start)})
     return out
 
 

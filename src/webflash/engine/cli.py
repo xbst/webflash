@@ -430,6 +430,7 @@ def dicts_equivalent(base: Optional[dict], other: Optional[dict]) -> bool:
 def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs: int) -> dict:
     """Build one row with one toolchain variant and measure the result."""
     from .inspect import elf_sizes, linker_memory, parse_elf, vector_table
+    from .uf2 import uf2_blocks
     backend, lto = VARIANTS[variant]
     build = Build(tree, row["defconfig"], toolchain=toolchain, version=version, jobs=jobs, lto=lto)
     started = time.perf_counter()
@@ -443,6 +444,14 @@ def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs
         info["sizes"] = elf_sizes(elf)
         info["vector_table"] = vector_table(elf, result.outputs[elf_name])
         info["elf"] = elf_name
+    # The address range each UF2 writes: elf2uf2 maps the ELF's load
+    # segments, so a linker that loaded the ELF headers below the
+    # application would put them in the file.
+    info["uf2"] = {}
+    for name, data in result.outputs.items():
+        blocks = uf2_blocks(data) if name.endswith(".uf2") else []
+        if blocks:
+            info["uf2"][name] = [min(b["address"] for b in blocks), max(b["address"] + b["size"] for b in blocks)]
     # The regions of the linker script the main ELF was linked with (Katapult
     # has a second script for the deployer).
     scripts = []
@@ -491,6 +500,9 @@ def check_parity(rows: list[dict], builds: dict[tuple[str, str], dict], variants
                     failures.append(f"{name}/{variant}: reset vector 0x{vt['reset']:08x} is outside flash")
             if rom and sizes and sizes["flash"] > rom["length"]:
                 failures.append(f"{name}/{variant}: flash image {sizes['flash']} exceeds the {rom['length']} byte region")
+            for uf2_name, (lo, hi) in (b.get("uf2") or {}).items():
+                if rom and not (rom["origin"] <= lo and hi <= rom["origin"] + rom["length"]):
+                    failures.append(f"{name}/{variant}: {uf2_name} writes 0x{lo:08x}..0x{hi:08x}, outside the rom region")
             if base is not None and "error" not in base and b is not base:
                 if not dicts_equivalent(base["dict"], b["dict"]):
                     failures.append(f"{name}/{variant}: the dictionary differs from {variants[0]}'s")
