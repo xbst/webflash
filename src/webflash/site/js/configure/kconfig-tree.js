@@ -334,17 +334,23 @@ export class KconfigTree {
       const node = nodes[id];
       if (!node) continue;
       let rec = this.recs.get(id);
-      if (!rec && !this._shows(node)) continue;
-      const shape = this._shape(node);
-      if (!rec || rec.shape !== shape) {
-        if (rec && rec.el.parentNode) {
-          if (rec.el === cursor) cursor = cursor.nextElementSibling;
-          rec.el.remove();
+      const shows = this._shows(node);
+      if (!rec && !shows) continue;
+      if (shows) {
+        const shape = this._shape(node);
+        if (!rec || rec.shape !== shape) {
+          if (rec && rec.el.parentNode) {
+            if (rec.el === cursor) cursor = cursor.nextElementSibling;
+            rec.el.remove();
+          }
+          rec = this._create(node, shape);
+          this.recs.set(id, rec);
         }
-        rec = this._create(node, shape);
-        this.recs.set(id, rec);
+        this._update(rec, node, nodes);
+      } else {
+        // Hidden: left as it is (with what it holds) until it shows again.
+        rec.el.hidden = true;
       }
-      this._update(rec, node, nodes);
       if (rec.el === cursor) cursor = cursor.nextElementSibling;
       else parent.insertBefore(rec.el, cursor);
     }
