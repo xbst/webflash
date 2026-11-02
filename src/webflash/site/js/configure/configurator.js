@@ -64,9 +64,11 @@ export function loadReport(result, carriedText, tree) {
     const names = symbolNames(tree);
     missing = [...parseConfigLines(carriedText)].filter(([name]) => !names.has(name));
   }
-  // kconfiglib's own warning for an undefined symbol says what missing says.
-  const dropped = new Set(missing.map(([name]) => name));
-  const rest = warnings.filter((w) => ![...dropped].some((name) => String(w).includes(`undefined symbol ${name}`)));
+  // A warning about a symbol that is not defined says what missing says
+  // (kconfiglib's "undefined symbol X", the engine's "CONFIG_X is not a symbol").
+  const dropped = [...new Set(missing.map(([name]) => name))];
+  const rest = warnings.filter((w) => !dropped.some((name) =>
+    String(w).includes(`undefined symbol ${name}`) || String(w).includes(`CONFIG_${name} is not a symbol`)));
   return { missing, warnings: rest };
 }
 
@@ -97,10 +99,14 @@ export class Configurator {
     this.notice = null;         // what the last load or switch could not carry over
     this._noticeListeners = [];
     session.on("restore", () => this.reapply());
-    // A prebuilt board TOML configures nothing: whatever was loaded no longer applies.
     session.on("change", ({ what }) => {
+      // A prebuilt board TOML configures nothing: whatever was loaded no longer applies.
       if ((what === "open" || what === "prebuilt") && !session.firmware &&
           (this.loaded || session.sources.state !== "idle")) this.unload();
+      // A build (chunk 06) loads the built .config into the engine's Kconfig
+      // session, which pins every symbol; load the defconfig again so later
+      // edits follow the defaults as before.
+      if (what === "build" && this.loaded && session.firmware) this.reapply();
     });
   }
 
@@ -246,7 +252,8 @@ export class Configurator {
     try {
       s.setSources("loading", label, { ref, phase: "kconfig" });
       const loaded = await runtime.kconfigLoad(carry || "");
-      const tree = normalizeTree(await runtime.kconfigTree());
+      // The engine sends the tree with the load; ask for it when it does not.
+      const tree = normalizeTree(loaded && loaded.tree ? loaded.tree : await runtime.kconfigTree());
       const result = loadReport(loaded, carry || "", tree);
       const configText = await runtime.kconfigConfig();
       const defconfigText = await runtime.kconfigDefconfig();
@@ -354,7 +361,7 @@ export class Configurator {
       if (!this.ready || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       s.checkpoint();
       const loaded = await runtime.kconfigLoad(text);
-      await this._refresh();
+      await this._refresh(loaded && loaded.tree ? loaded.tree : null);
       const result = loadReport(loaded, text, s.tree);
       const missing = result.missing;
       const lines = [];
@@ -376,8 +383,8 @@ export class Configurator {
     if (!same) return this.load({ reason: "restore" });
     const text = s.defconfigText;
     return this._enqueue(async () => {
-      await runtime.kconfigLoad(text);
-      await this._refresh();
+      const loaded = await runtime.kconfigLoad(text);
+      await this._refresh(loaded && loaded.tree ? loaded.tree : null);
       return true;
     });
   }
@@ -390,16 +397,22 @@ export class Configurator {
     this._planTimer = setTimeout(() => this._plan(), delay);
   }
 
+  // The engine's plan loads the text it is given into the Kconfig session
+  // before it evaluates the Makefiles. A full .config would pin every symbol
+  // as if the user had set it, so later edits would stop following the
+  // defaults; the defconfig leaves the session as it is (olddefconfig of the
+  // defconfig, which is what the board TOML stores).
   _plan() {
     const s = this.session;
     const mine = ++this._planCount;
     const ref = this.loaded && this.loaded.ref;
     const configText = s.configText;
+    const defconfigText = s.defconfigText;
     if (!ref || !configText) return Promise.resolve();
     return this._enqueue(async () => {
       if (mine !== this._planCount) return;
       try {
-        const out = await runtime.plan(configText);
+        const out = await runtime.plan(defconfigText);
         if (mine !== this._planCount) return;
         // Folders the core bundle holds are here already; one that is in
         // neither the core nor a lib bundle is missing from the snapshot.
