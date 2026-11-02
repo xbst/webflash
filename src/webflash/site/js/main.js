@@ -376,19 +376,22 @@ function setupPlan() {
       return;
     }
     el.hidden = false;
+    el.classList.toggle("warn", Boolean(p.error || (p.missing && p.missing.length)));
     if (p.error) {
       el.textContent = `Could not work out what the build needs: ${p.error}`;
       return;
     }
+    const missing = p.missing && p.missing.length
+      ? ` This snapshot does not include ${p.missing.join(", ")}, which the build needs, so it would fail.` : "";
     if (!p.libs.length) {
-      el.textContent = "The build needs no library bundles beyond the sources already loaded.";
+      el.textContent = `The build needs no library bundles beyond the sources already loaded.${missing}`;
       return;
     }
     const known = p.libs.filter((l) => Number.isFinite(l.size));
     const total = known.reduce((n, l) => n + l.size, 0);
     el.textContent = `The build downloads ${p.libs.length === 1 ? "one library bundle" : `${p.libs.length} library bundles`}: ` +
       p.libs.map((l) => `${l.dir}${Number.isFinite(l.size) ? ` (${formatBytes(l.size)})` : ""}`).join(", ") +
-      (known.length > 1 ? `, ${formatBytes(total)} in all.` : ".");
+      (known.length > 1 ? `, ${formatBytes(total)} in all.` : ".") + missing;
   };
   session.on("change", ({ what }) => { if (["plan", "sources", "ref"].includes(what)) render(); });
   render();

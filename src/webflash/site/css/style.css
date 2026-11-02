@@ -567,6 +567,7 @@ textarea.load-config { min-height: 200px; border: 1px solid var(--border); borde
 .opt-editor .mini { align-self: flex-start; }
 
 .build-plan { color: var(--text); }
+.build-plan.warn { color: var(--warn); }
 
 /* --- Build and flash cards --- */
 

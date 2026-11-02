@@ -218,6 +218,7 @@ export class Configurator {
         let out;
         try {
           out = await runtime.loadSources(project, ref, blobUrl(ref.core), {
+            size,
             onProgress: ({ phase, done, total }) => {
               if (generation !== this._generation) return;
               if (phase === "sources") s.setSources("loading", label, { ref, done, total: total || size });
@@ -400,13 +401,17 @@ export class Configurator {
       try {
         const out = await runtime.plan(configText);
         if (mine !== this._planCount) return;
-        const libs = (out.libs || []).map((dir) => {
+        // Folders the core bundle holds are here already; one that is in
+        // neither the core nor a lib bundle is missing from the snapshot.
+        const inCore = new Set(ref.core_libs || []);
+        const libs = (out.libs || []).filter((dir) => !inCore.has(dir)).map((dir) => {
           const blob = (ref.libs || {})[dir] || null;
           return { dir, blob, size: blob ? blobSize(s.index, blob) : null };
         });
-        s.setPlan({ dirs: out.dirs || [], libs, configText, ref: ref.id });
+        const missing = libs.filter((l) => !l.blob).map((l) => l.dir);
+        s.setPlan({ dirs: out.dirs || [], libs: libs.filter((l) => l.blob), missing, configText, ref: ref.id });
       } catch (e) {
-        if (mine === this._planCount) s.setPlan({ dirs: [], libs: [], error: e.message, configText, ref: ref.id });
+        if (mine === this._planCount) s.setPlan({ dirs: [], libs: [], missing: [], error: e.message, configText, ref: ref.id });
       }
     });
   }
