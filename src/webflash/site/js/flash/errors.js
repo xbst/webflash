@@ -98,7 +98,7 @@ const PICKER_NOTE = "Make sure the board is in the right mode and is plugged str
 
 function deviceLabel(method) {
   switch (method) {
-    case "dfu": return "STM32 BOOTLOADER";
+    case "dfu": return "\"DFU in FS Mode\" or \"STM32 BOOTLOADER\"";
     case "picoboot": return "RP2 Boot (Interface 1)";
     case "katapult-can": return "candleLight USB to CAN adapter";
     default: return "the board";

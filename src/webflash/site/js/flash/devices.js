@@ -61,7 +61,7 @@ export const METHODS = {
   dfu: {
     id: "dfu", label: "DFU (STM32 ROM bootloader)", transport: "usb",
     short: "DFU",
-    needs: "Windows: the WinUSB driver on STM32 BOOTLOADER (Zadig, once). Linux: a udev rule. macOS: nothing.",
+    needs: "Windows: the WinUSB driver on the bootloader device, \"DFU in FS Mode\" or \"STM32 BOOTLOADER\" (Zadig, once). Linux: a udev rule. macOS: nothing.",
   },
   picoboot: {
     id: "picoboot", label: "PICOBOOT (RP2040/RP2350 BOOTSEL)", transport: "usb",
@@ -469,7 +469,7 @@ export function defaultInstructions(method, family = null, { fromKlipper = true 
     case "katapult-can":
       return "Plug the USB to CAN adapter (candleLight, CANable in candleLight mode, or a Klipper board in USB to CAN bridge mode) into this computer with the toolhead on its bus, then click Connect and pick the adapter. WebFlash lists the nodes on the bus; a node running Klipper is restarted into Katapult first.";
     case "dfu":
-      return "Put the board in its ROM bootloader: hold BOOT0 (or BOOT), tap RESET, release BOOT0; or plug it in with BOOT0 held. Then click Connect and pick \"STM32 BOOTLOADER\". On Windows that device needs the WinUSB driver once (Zadig).";
+      return "Put the board in its ROM bootloader: hold BOOT0 (or BOOT), tap RESET, release BOOT0; or plug it in with BOOT0 held. Then click Connect and pick \"DFU in FS Mode\" (older ROMs say \"STM32 BOOTLOADER\"). On Windows that device needs the WinUSB driver once (Zadig).";
     case "picoboot":
       return "Hold BOOTSEL while plugging the board in (or while tapping RESET), then click Connect and pick \"RP2 Boot\". On Windows the RP2040's \"RP2 Boot (Interface 1)\" needs the WinUSB driver once (Zadig).";
     case "uf2":

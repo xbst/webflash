@@ -34,7 +34,7 @@ export function makeConfiguration({ value = 1, interfaces }) {
       interfaceSubclass: alt.subclassCode ?? alt.interfaceSubclass ?? 0,
       interfaceProtocol: alt.protocolCode ?? alt.interfaceProtocol ?? 0,
       interfaceName: alt.name ?? alt.interfaceName ?? null,
-      iInterface: alt.iInterface ?? 0,
+      mockStringIndex: alt.iInterface ?? 0,   // the mock's own, for its configuration descriptor: WebUSB exposes no string index
       endpoints: (alt.endpoints || []).map((ep) => ({
         endpointNumber: ep.number ?? ep.endpointNumber,
         direction: ep.direction,

@@ -47,10 +47,12 @@ Board: an STM32G0B1 board with Katapult in its first 8 KiB (Hedgehog or Birds' N
 
 Board: the same STM32G0B1, put in its ROM bootloader (hold BOOT0, tap RESET, release BOOT0; or **Restart Klipper into the bootloader** from the page when Klipper runs with a DFU-capable build).
 
-1. Windows only, first time: the "STM32 BOOTLOADER" device needs WinUSB. Zadig (zadig.akeo.ie): Options → List All Devices, pick "STM32 BOOTLOADER", driver WinUSB, Replace Driver. Note here whether STM32CubeProgrammer's driver was in the way.
+1. Windows only, first time: the bootloader device needs WinUSB. It is "DFU in FS Mode" in Zadig's list and in Chrome's picker on a G0B1 (older ROMs say "STM32  BOOTLOADER"; Device Manager shows "STM32 BOOTLOADER"). Zadig (zadig.akeo.ie): Options → List All Devices, pick it, driver WinUSB, Replace Driver. Note here whether STM32CubeProgrammer's driver was in the way.
 2. **Upload firmware** → the same `klipper.bin` at `0x08002000` (Katapult stays in place; the DFU bootloader writes anywhere in flash). Method **DFU**.
-3. **Connect**, pick "STM32 BOOTLOADER" (`0483:df11`), check the confirmation (23 pages of 2 KiB are erased), **Flash**. Expected: "Erasing", "Writing", "Verifying", then "Flashed and verified ... The board has restarted into the new firmware." and the hint with `<serial>` (the DFU device's serial is not Klipper's).
-4. Confirm Klipper enumerates. Optional: repeat with `katapult-stm32g0b1-usb/katapult.bin` at `0x08000000` to reinstall Katapult itself.
+3. **Connect**, pick "DFU in FS Mode" (`0483:df11`), check the confirmation (23 pages of 2 KiB are erased), **Flash**. Expected: the log names the three alternates ("@Internal Flash  /0x08000000/256*02Kg", "@Option Bytes", "@OTP Memory") and a 1024-byte transfer size, then "Erasing", "Writing", "Verifying", then "Flashed and verified ... The board has restarted into the new firmware." and the hint with `<serial>` (the DFU device's serial is not Klipper's).
+4. Confirm Klipper enumerates. If the board stays in the bootloader instead, power-cycle it and say so: the page would then have to stop claiming a restart. Optional: repeat with `katapult-stm32g0b1-usb/katapult.bin` at `0x08000000` to reinstall Katapult itself.
+
+Attempt 1 (2026-11-02) failed before the erase: Chrome on Windows leaves the alternates' `interfaceName` null, and the page's fallback read the string descriptors through a field only the mock had, so the memory map came out empty (see Results). Fixed the same day; the retry needs a hard reload (Ctrl+F5) so the browser drops the old modules.
 
 ### STOP 3: PICOBOOT and the UF2 drive, RP2040
 
@@ -81,3 +83,4 @@ Board: a board built with a serial interface and Katapult in UART mode, on a USB
 | Date | OS and browser | Board | Method | File | Result | Notes |
 |---|---|---|---|---|---|---|
 | 2026-11-02 | Windows 10 Pro 19045, Chrome 156.0.8078.79 | STM32G0B1 with Katapult, USB | Katapult over USB (STOP 1) | `klipper-stm32g0b1-usb-katapult/klipper.bin` at `0x08002000` | Pass: flashed and verified, Klipper enumerated and the host connected | As reported by the user from the page; the Katapult version string and the entry path (restart from Klipper or double-tap RESET) were not recorded |
+| 2026-11-02 | Windows 10 Pro 19045, Chrome 156.0.8078.79 | STM32G0B1 in its ROM bootloader ("STMicroelectronics DFU in FS Mode", `0483:df11`) | DFU (STOP 2, attempt 1) | `klipper-stm32g0b1-usb-katapult/klipper.bin` at `0x08002000` | Fail before any erase: `The DFU interface does not describe its memory ("")` | Chrome on Windows gives no `interfaceName` for the alternates, and the page's fallback read the string descriptors through a field only the mock had, so the map was empty. Fixed the same day: the names are read from the configuration and string descriptors, as dfu-util reads them, and the mock now hides the names like Chrome on Windows. Also seen: the ROM's transfer size is 1024, not 2048, and Chrome's picker shows "DFU in FS Mode", not "STM32 BOOTLOADER". The WinUSB driver was already in place (Zadig not reported). Retry pending |

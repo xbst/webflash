@@ -40,7 +40,7 @@ export const DFU_CLASS = 0xfe;
 export const DFU_SUBCLASS = 0x01;
 export const DFU_PROTOCOL_DFU_MODE = 0x02;
 export const DT_DFU_FUNCTIONAL = 0x21;
-export const DEFAULT_TRANSFER_SIZE = 2048;    // what the ST ROMs report
+export const DEFAULT_TRANSFER_SIZE = 2048;    // when the functional descriptor cannot be read; the F4 ROMs say 2048, the G0B1 ROM 1024
 export const DFU_TIMEOUT_MS = 5000;
 
 const STATE_NAMES = Object.fromEntries(Object.entries(DFU_STATE).map(([k, v]) => [v, k]));
@@ -149,31 +149,50 @@ export class DfuDevice {
       fail("not-bootloader", "The device has no DFU interface: it is not in its ROM bootloader (hold BOOT0 and tap RESET), or it is a different device.");
     }
     const alternates = found.interface.alternates || [];
-    let alt = alternates.find((a) => /internal\s*flash/i.test(a.interfaceName || "")) || null;
-    if (!alt && this.altSetting !== null) alt = alternates.find((a) => a.alternateSetting === this.altSetting) || null;
-    if (!alt) alt = alternates[0];
-    if (alt.interfaceProtocol === 0x01) {
+    if (!alternates.length || alternates.every((a) => a.interfaceProtocol === 0x01)) {
       fail("not-bootloader", "The device is in run-time DFU mode (its application is running), not in the bootloader. Put it in its bootloader first.");
     }
     await this.usb.claim({ number: found.interfaceNumber });
     this.interfaceNumber = found.interfaceNumber;
+
+    // Each alternate's name is its DfuSe memory map. Chrome gives the name
+    // as interfaceName on Linux and macOS and leaves it null on Windows, so
+    // whatever is missing is read from the device's own descriptors, the
+    // way dfu-util and webdfu read it.
+    const names = new Map(alternates.map((a) => [a.alternateSetting, typeof a.interfaceName === "string" && a.interfaceName.trim() ? a.interfaceName : null]));
+    let raw = null;
+    if ([...names.values()].some((n) => n === null)) {
+      try {
+        const read = await this.usb.readInterfaceNames(found.interfaceNumber);
+        raw = read.raw;
+        for (const [setting, text] of read.names) if (names.get(setting) === null && text) names.set(setting, text);
+        for (const f of read.failures) this.log(`Could not read ${f}`);
+      } catch (e) {
+        this.log(`Could not read the interface names from the device (${e.message}).`);
+      }
+    }
+    this.log(`DFU interface ${found.interfaceNumber}: ${alternates.map((a) => `alternate ${a.alternateSetting} "${names.get(a.alternateSetting) || ""}"`).join(", ")}`);
+
+    let alt = alternates.find((a) => /internal\s*flash/i.test(names.get(a.alternateSetting) || "")) || null;
+    if (!alt && this.altSetting !== null) alt = alternates.find((a) => a.alternateSetting === this.altSetting) || null;
+    if (!alt) alt = alternates[0];
     if (alternates.length > 1 || (found.interface.alternate && found.interface.alternate.alternateSetting !== alt.alternateSetting)) {
       await this.usb.selectAlternate(alt.alternateSetting, found.interfaceNumber);
     }
-    this.alternateName = alt.interfaceName || "";
-    if (!this.alternateName && alt.iInterface) {
-      try { this.alternateName = await this.usb.readStringDescriptor(alt.iInterface); } catch (e) { /* keep "" */ }
-    }
+    this.alternateName = names.get(alt.alternateSetting) || "";
     this.memoryMap = parseMemoryMap(this.alternateName);
     try {
-      const raw = await this.usb.readConfigurationDescriptor(0);
+      if (!raw) raw = await this.usb.readConfigurationDescriptor();
       this.functional = parseFunctionalDescriptor(raw);
     } catch (e) {
       this.log(`Could not read the configuration descriptor (${e.message}); assuming a ${DEFAULT_TRANSFER_SIZE}-byte transfer size.`);
     }
     this.transferSize = (this.functional && this.functional.transferSize) || DEFAULT_TRANSFER_SIZE;
-    this.log(`DFU interface ${found.interfaceNumber}, alternate ${alt.alternateSetting} "${this.alternateName}", transfer size ${this.transferSize}`);
+    this.log(`Using alternate ${alt.alternateSetting} "${this.alternateName}", transfer size ${this.transferSize}`);
     if (!this.memoryMap || !this.memoryMap.segments.length) {
+      if (!this.alternateName) {
+        fail("not-bootloader", "The name of the DFU interface, which carries an STM32 ROM bootloader's memory map, could not be read from the device. Unplug the board, put it back in its bootloader and try again; if it is not an STM32, WebFlash cannot flash it over DFU.");
+      }
       fail("not-bootloader", `The DFU interface does not describe its memory ("${this.alternateName}"), so it is not an STM32 ROM bootloader WebFlash knows how to write.`);
     }
     return this.info();

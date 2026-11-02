@@ -5,8 +5,11 @@
 // the bootloader and the device disappears. Writes into pages that were not
 // erased first fail with errWRITE, so a client that forgets to erase is
 // caught. Knobs: the memory map string, the transfer size, read-out
-// protection (uploads fail with errVENDOR), a refused claim, and a flash
-// byte the device corrupts on read-back.
+// protection (uploads fail with errVENDOR), a refused claim, a flash byte
+// the device corrupts on read-back, whether the browser hands over the
+// alternates' names (browserNames: Chrome does on Linux and macOS, not on
+// Windows, where they must come from the string descriptors) and string
+// descriptor reads the device refuses (stringsFail).
 
 import { MockUsbDevice, makeConfiguration, domError } from "./mock-usb.js";
 
@@ -24,18 +27,21 @@ export class DfuseDevice extends MockUsbDevice {
   constructor({
     memoryMap = G0B1_MAP, transferSize = 2048, flashStart = 0x08000000, flashSize = 0x80000,
     rdp = false, claimError = null, pollTimeoutMs = 2, corruptReadAt = null, serialNumber = "FFFFFFFEFFFF",
-    productId = 0xdf11, protocol = 2,
+    productId = 0xdf11, protocol = 2, browserNames = false, stringsFail = false, productName = "DFU in FS Mode",
   } = {}) {
+    const named = (text) => (browserNames ? text : null);
     const alternates = [
-      { alternateSetting: 0, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: memoryMap, iInterface: 4 },
-      { alternateSetting: 1, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: OPTION_BYTES_MAP, iInterface: 5 },
-      { alternateSetting: 2, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: OTP_MAP, iInterface: 6 },
+      { alternateSetting: 0, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: named(memoryMap), iInterface: 4 },
+      { alternateSetting: 1, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: named(OPTION_BYTES_MAP), iInterface: 5 },
+      { alternateSetting: 2, classCode: 0xfe, subclassCode: 1, protocolCode: protocol, name: named(OTP_MAP), iInterface: 6 },
     ];
     super({
-      vendorId: 0x0483, productId, productName: "STM32  BOOTLOADER", manufacturerName: "STMicroelectronics", serialNumber,
+      // "DFU in FS Mode" is what the STM32G0B1 ROM says (seen on hardware); older ROMs say "STM32  BOOTLOADER".
+      vendorId: 0x0483, productId, productName, manufacturerName: "STMicroelectronics", serialNumber,
       configurations: [makeConfiguration({ value: 1, interfaces: [{ number: 0, alternates }] })],
       claimError,
     });
+    this.stringsFail = stringsFail;
     this.memoryMapText = memoryMap;
     this.transferSize = transferSize;
     this.flashStart = flashStart;
@@ -66,6 +72,7 @@ export class DfuseDevice extends MockUsbDevice {
     if (type === 0x02) return this._configDescriptor().subarray(0, length);
     if (type === 0x03) {
       if (index === 0) return new Uint8Array([4, 3, 0x09, 0x04]);
+      if (this.stringsFail && index >= 4) return { status: "stall" };
       const text = index === 1 ? this.manufacturerName : index === 2 ? this.productName : index === 3 ? this.serialNumber : this.alternateNames[index];
       if (text === undefined) return { status: "stall" };
       const out = new Uint8Array(2 + text.length * 2);
@@ -83,7 +90,7 @@ export class DfuseDevice extends MockUsbDevice {
     out.set([9, 2, total & 0xff, total >> 8, 1, 1, 0, 0xc0, 50], 0);
     let off = 9;
     for (const alt of alts) {
-      out.set([9, 4, 0, alt.alternateSetting, 0, 0xfe, 1, alt.interfaceProtocol, alt.iInterface], off);
+      out.set([9, 4, 0, alt.alternateSetting, 0, 0xfe, 1, alt.interfaceProtocol, alt.mockStringIndex], off);
       off += 9;
     }
     // DFU functional descriptor: bmAttributes (download, upload, manifestation tolerant, will detach), detach timeout, transfer size, bcdDFU 1.1a

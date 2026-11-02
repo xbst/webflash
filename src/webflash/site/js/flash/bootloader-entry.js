@@ -67,7 +67,7 @@ export function manualInstructions(method, family = null, tomlInstructions = nul
 export function expectedAfterTouch(method) {
   switch (method) {
     case "katapult": return { kind: "serial", filters: SERIAL_FILTERS.katapult, label: "the Katapult port" };
-    case "dfu": return { kind: "usb", filters: USB_FILTERS.dfu, label: "STM32 BOOTLOADER" };
+    case "dfu": return { kind: "usb", filters: USB_FILTERS.dfu, label: "\"DFU in FS Mode\" (or \"STM32 BOOTLOADER\")" };
     case "picoboot": return { kind: "usb", filters: USB_FILTERS.picoboot, label: "RP2 Boot" };
     case "uf2": return { kind: "filesystem", filters: [], label: "the RPI-RP2 drive" };
     default: return { kind: "none", filters: [], label: "" };

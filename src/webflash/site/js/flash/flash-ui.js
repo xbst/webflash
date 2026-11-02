@@ -216,7 +216,7 @@ export function createFlashPanel(root, options = {}) {
       actions.appendChild(button("Any serial port", () => connectAndConfirm("any"), { title: "For a USB-UART adapter wired to a board in Katapult's UART mode" }));
       actions.appendChild(button("Restart Klipper into Katapult", () => enterFromKlipper(), { title: "Pick the Klipper port; WebFlash asks it to restart into its bootloader", id: "flash-from-klipper" }));
     } else if (transport === "usb") {
-      actions.appendChild(button("Connect", () => connectAndConfirm(), { primary: true, title: `Pick the ${expectedAfterTouch(method).label || "device"} in the browser's device list`, id: "flash-connect" }));
+      actions.appendChild(button("Connect", () => connectAndConfirm(), { primary: true, title: `Pick ${expectedAfterTouch(method).label || "the device"} in the browser's device list`, id: "flash-connect" }));
       if (caps.serial && (method === "dfu" || method === "picoboot")) {
         actions.appendChild(button("Restart Klipper into the bootloader", () => enterFromKlipper(), { title: "Pick the Klipper port; WebFlash asks it to restart into its bootloader", id: "flash-from-klipper" }));
       }

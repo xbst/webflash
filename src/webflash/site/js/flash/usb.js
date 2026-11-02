@@ -8,9 +8,11 @@
 // What the wrapper adds: picking a configuration and an interface by class
 // or number, timeouts on transfers (WebUSB has none, and a transfer that
 // times out is left pending, which is the best the API allows), the error
-// mapping for a refused claim, and string descriptor reads for the DfuSe
-// memory map, which WebUSB exposes as interfaceName only when the device
-// enumerated with it.
+// mapping for a refused claim, and descriptor reads for what WebUSB leaves
+// out: the DFU functional descriptor, and the alternates' names (the DfuSe
+// memory map), which Chrome fills in as interfaceName on Linux and macOS
+// but leaves null on Windows, so they are read from the configuration and
+// string descriptors the way dfu-util and webdfu read them.
 
 import { FlashError, fail, isCancel } from "./errors.js";
 
@@ -318,27 +320,117 @@ export class UsbDevice {
 
   // ── Descriptors ───────────────────────────────────────────────────
 
-  /** The raw configuration descriptor (with its sub-descriptors) by index. */
-  async readConfigurationDescriptor(index = 0) {
-    const setup = { requestType: "standard", recipient: "device", request: 0x06, value: (0x02 << 8) | index, index: 0 };
+  /** The position of the active configuration among the device's, for GET_DESCRIPTOR. */
+  _configurationIndex() {
+    const current = this.configuration;
+    const i = current ? this.configurations.findIndex((c) => c.configurationValue === current.configurationValue) : 0;
+    return i < 0 ? 0 : i;
+  }
+
+  /** The raw configuration descriptor (with its sub-descriptors) by index (default: the active configuration's). */
+  async readConfigurationDescriptor(index = null) {
+    const which = index === null ? this._configurationIndex() : index;
+    const setup = { requestType: "standard", recipient: "device", request: 0x06, value: (0x02 << 8) | which, index: 0 };
     const head = await this.controlIn(setup, 9);
+    if (head.byteLength < 4) fail("protocol", "The configuration descriptor came back short.");
     const total = head.getUint16(2, true);
     const full = await this.controlIn(setup, total);
     return new Uint8Array(full.buffer, full.byteOffset, full.byteLength);
   }
 
-  /** A string descriptor as text (US English). */
+  /** The language ids the device's strings come in (string descriptor 0), or [0x0409] when it lists none. */
+  async readLangIds() {
+    const setup = { requestType: "standard", recipient: "device", request: 0x06, value: 0x03 << 8, index: 0 };
+    const data = await this.controlIn(setup, 255);
+    const ids = [];
+    const length = data.byteLength ? Math.min(data.getUint8(0), data.byteLength) : 0;
+    for (let i = 2; i + 1 < length; i += 2) ids.push(data.getUint16(i, true));
+    return ids.length ? ids : [0x0409];
+  }
+
+  /** A string descriptor as text: one 255-byte read, as libusb does it. */
   async readStringDescriptor(index, langId = 0x0409) {
     if (!index) return "";
     const setup = { requestType: "standard", recipient: "device", request: 0x06, value: (0x03 << 8) | index, index: langId };
-    const head = await this.controlIn(setup, 1);
-    const length = head.getUint8(0);
-    if (length < 2) return "";
-    const full = await this.controlIn(setup, length);
+    const data = await this.controlIn(setup, 255);
+    if (data.byteLength < 2) return "";
+    const length = Math.min(data.getUint8(0), data.byteLength);
     const codes = [];
-    for (let i = 2; i + 1 < full.byteLength; i += 2) codes.push(full.getUint16(i, true));
+    for (let i = 2; i + 1 < length; i += 2) codes.push(data.getUint16(i, true));
     return String.fromCharCode(...codes);
   }
+
+  /**
+   * The name of each alternate of an interface, read from the device's own
+   * descriptors: the configuration descriptor gives each alternate's string
+   * index (WebUSB does not expose it), then each string is read once.
+   * Returns {raw, langId, names: Map<alternateSetting, string|null>,
+   * failures: [text]}: raw is the configuration descriptor, for the
+   * class-specific descriptors in it, and failures says which reads the
+   * device refused.
+   */
+  async readInterfaceNames(interfaceNumber = this.interfaceNumber) {
+    const raw = await this.readConfigurationDescriptor();
+    const parsed = parseConfigurationDescriptor(raw);
+    const failures = [];
+    let langId = 0x0409;
+    try {
+      langId = (await this.readLangIds())[0];
+    } catch (e) {
+      failures.push(`string descriptor 0 (the language list): ${e.message}`);
+    }
+    const names = new Map();
+    const strings = new Map();
+    for (const d of parsed.interfaces) {
+      if (interfaceNumber !== null && interfaceNumber !== undefined && d.interfaceNumber !== interfaceNumber) continue;
+      let text = null;
+      if (d.iInterface) {
+        if (!strings.has(d.iInterface)) {
+          try {
+            strings.set(d.iInterface, await this.readStringDescriptor(d.iInterface, langId));
+          } catch (e) {
+            strings.set(d.iInterface, null);
+            failures.push(`string descriptor ${d.iInterface}: ${e.message}`);
+          }
+        }
+        text = strings.get(d.iInterface);
+      }
+      names.set(d.alternateSetting, text);
+    }
+    return { raw, langId, names, failures };
+  }
+}
+
+/**
+ * Walk a raw configuration descriptor: the header, every interface
+ * descriptor (type 4) with the string index WebUSB leaves out, and the
+ * position of every descriptor in it. Returns {configurationValue,
+ * totalLength, iConfiguration, interfaces: [{interfaceNumber,
+ * alternateSetting, endpoints, interfaceClass, interfaceSubclass,
+ * interfaceProtocol, iInterface}], descriptors: [{type, offset, length}]}.
+ */
+export function parseConfigurationDescriptor(bytes) {
+  const out = { configurationValue: 0, totalLength: bytes.length, iConfiguration: 0, interfaces: [], descriptors: [] };
+  if (bytes.length >= 9 && bytes[1] === 0x02) {
+    out.totalLength = bytes[2] | (bytes[3] << 8);
+    out.configurationValue = bytes[5];
+    out.iConfiguration = bytes[6];
+  }
+  let off = 0;
+  while (off + 2 <= bytes.length) {
+    const length = bytes[off];
+    const type = bytes[off + 1];
+    if (length < 2) break;
+    out.descriptors.push({ type, offset: off, length });
+    if (type === 0x04 && length >= 9) {
+      out.interfaces.push({
+        interfaceNumber: bytes[off + 2], alternateSetting: bytes[off + 3], endpoints: bytes[off + 4],
+        interfaceClass: bytes[off + 5], interfaceSubclass: bytes[off + 6], interfaceProtocol: bytes[off + 7], iInterface: bytes[off + 8],
+      });
+    }
+    off += length;
+  }
+  return out;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
