@@ -131,7 +131,11 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     } else {
       ({ methods, warnings } = methodsForPrebuilt({ mcu: (pre && pre.mcu) || u.image.mcu || null, image: u.image, tomlMethods: tomlFlash().methods }));
     }
-    const mcu = u.image.mcu || (pre && pre.mcu) || (cfg ? mcuOf(cfg) : null);
+    // A UF2 names its chip; the configuration's MCU only stands in when it is the same family.
+    const imageChip = u.image.family ? (u.image.family.startsWith("rp2350") ? "rp2350" : u.image.family === "rp2040" ? "rp2040" : null) : null;
+    const cfgMcu = cfg ? mcuOf(cfg) : null;
+    const cfgFits = !imageChip || familyOf(cfg) === imageChip;
+    const mcu = u.image.mcu || (pre && pre.mcu) || (cfgFits ? cfgMcu : imageChip);
     if (u.preferredMethod && !methods.some((m) => m.id === u.preferredMethod)) {
       // The mock mode asks for a method the configuration would not offer.
       methods = [{ id: u.preferredMethod, reason: "the mock mode asked for it" }, ...methods];
