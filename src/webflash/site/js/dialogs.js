@@ -4,6 +4,7 @@
 // what the preview shows is what the downloaded file contains.
 
 import * as runtime from "./runtime.js";
+import { clearCache } from "./workers/blob-cache.js";
 
 const REPO_URL = "https://github.com/xbst/webflash";
 const DOCS_URL = "https://doctools.isiks.tech/webflash/";
@@ -243,7 +244,8 @@ const LICENSES = [
   ["Emscripten runtime", "MIT", "https://emscripten.org"],
 ];
 
-export function openAbout() {
+/** The About box. sources says which snapshot is loaded, as the toolbar's status does. */
+export function openAbout({ sources = "" } = {}) {
   const { body } = openModal("About WebFlash");
   const about = runtime.about();
   const row = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
@@ -259,7 +261,7 @@ export function openAbout() {
     row("WebFlash", about ? esc(about.webflash) : "loads with the Python runtime") +
     row("Python", about ? `${esc(about.python)} (Pyodide ${esc(about.pyodide)})` : `Pyodide ${esc(runtime.PYODIDE_VERSION)}, not loaded yet`) +
     row("Toolchain", "loads on the first build (chunk 06)") +
-    row("Sources", "the source snapshots (chunks 04 and 05)") +
+    row("Sources", sources ? esc(sources) : "a version's source snapshot loads when you configure it") +
     `</table>` +
     `<h3>Licenses</h3><table class="about-table">` +
     LICENSES.map(([what, license, url]) =>
@@ -268,8 +270,13 @@ export function openAbout() {
     `<p class="about-links">` +
     `<a href="${DOCS_URL}" target="_blank" rel="noopener">Documentation</a>` +
     `<a href="${REPO_URL}" target="_blank" rel="noopener">Source on GitHub</a>` +
-    `<button id="about-clear-cache" disabled title="Clears the downloaded toolchain and sources (chunk 06)">Clear cache</button>` +
+    `<button id="about-clear-cache" title="Forget the downloaded toolchain and sources, so the next use downloads them again">Clear cache</button>` +
     `</p>`;
+  const clear = body.querySelector("#about-clear-cache");
+  clear.addEventListener("click", async () => {
+    clear.disabled = true;
+    clear.textContent = (await clearCache()) ? "Cache cleared" : "Nothing cached";
+  });
 }
 
 /** Show the About box once per browser, for someone arriving with no context. */

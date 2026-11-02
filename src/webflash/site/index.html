@@ -40,9 +40,10 @@
     </label>
     <label class="field">
       Version
-      <select id="version-select" disabled title="Versions come from the source snapshots (chunk 05)">
-        <option value="latest">Latest</option>
+      <select id="version-select" disabled title="The version to configure, from the source snapshots">
+        <option value="latest">Loading versions…</option>
       </select>
+      <span class="ref-badge" id="version-badge" hidden>unchecked</span>
     </label>
     <span class="separator"></span>
     <label class="file-btn" id="open-toml-label" title="Open a board TOML, with its image and firmware file if it names them">
@@ -61,7 +62,7 @@
     <span class="runtime" id="runtime" aria-live="polite">
       <span class="pill" id="status-python" title="The Python runtime (Pyodide), loaded when it is first needed">Python</span>
       <span class="pill off" id="status-toolchain" title="The compiler, loaded on the first build (chunk 06)">Toolchain</span>
-      <span class="pill off" id="status-sources" title="The source snapshots, loaded when a version is configured (chunk 05)">Sources</span>
+      <span class="pill" id="status-sources" title="The source snapshots, loaded when a version is configured">Sources</span>
     </span>
     <button id="about-btn" class="icon-btn" title="About WebFlash" aria-label="About WebFlash">?</button>
   </header>
@@ -80,53 +81,42 @@
 
       <div id="configure-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-configure">
         <div class="panel-bar">
-          <input type="search" id="kconfig-search" placeholder="Search options" disabled title="Searching the Kconfig tree (chunk 05)">
-          <button id="kconfig-reset" disabled title="Reset every option to its default (chunk 05)">Reset to defaults</button>
-          <button id="kconfig-load" disabled title="Paste a .config to load it (chunk 05)">Load .config</button>
+          <input type="search" id="kconfig-search" placeholder="Search options (/)" aria-label="Search the options" disabled>
+          <span class="kc-count" id="kconfig-count"></span>
+          <button id="kconfig-reset" disabled title="Set every option back to its Kconfig default (Ctrl+Z undoes it)">Reset to defaults</button>
+          <button id="kconfig-load" disabled title="Paste or open a .config or defconfig and apply it">Load .config</button>
         </div>
-        <div class="placeholder" id="kconfig-tree">
-          <p><strong>Configure</strong> shows every option of <code>make menuconfig</code> for the project and version picked above, from that version's own Kconfig files.</p>
-          <p>The Kconfig tree arrives with chunk 05. Until then, open a board TOML and edit it in the <strong>TOML</strong> tab.</p>
+        <div class="kc-status" id="kconfig-status" hidden></div>
+        <div class="kc-notice" id="kconfig-notice" role="status" hidden></div>
+        <div class="kc-scroll" id="kconfig-scroll">
+          <div class="kc-start" id="kconfig-start"></div>
+          <div id="kconfig-tree"></div>
         </div>
       </div>
 
       <div id="config-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-config" hidden>
         <div class="panel-bar">
-          <label class="check"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
+          <label class="check" title="The defconfig: only what differs from the defaults, as a board TOML's [config] holds it"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
+          <span class="bar-note" id="config-note"></span>
           <span class="bar-spacer"></span>
-          <button id="config-copy" disabled title="Copy the .config (chunk 05)">Copy</button>
-          <button id="config-download" disabled title="Download the .config (chunk 05)">Download</button>
+          <button id="config-copy" disabled>Copy</button>
+          <button id="config-download" disabled>Download</button>
         </div>
-        <textarea id="config-text" class="code" readonly spellcheck="false" placeholder="The full .config of the configuration (chunk 05)."></textarea>
+        <textarea id="config-text" class="code" readonly spellcheck="false" aria-label="The configuration"></textarea>
       </div>
 
       <div id="embed-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-embed" hidden>
-        <div class="form">
-          <label class="form-row">Title
-            <input type="text" id="embed-title" autocomplete="off" disabled title="Edited from the configure session (chunk 05); edit it in the TOML tab for now">
-          </label>
-          <label class="form-row">Description
-            <textarea id="embed-description" rows="3" disabled title="Edited from the configure session (chunk 05); edit it in the TOML tab for now"></textarea>
-          </label>
-          <label class="form-row">Image
-            <input type="text" id="embed-image" autocomplete="off" disabled title="Edited from the configure session (chunk 05); edit it in the TOML tab for now">
-          </label>
-          <label class="form-row">Instructions
-            <textarea id="embed-instructions" rows="3" disabled title="Per flashing method (chunk 05)"></textarea>
-          </label>
-        </div>
-        <div class="placeholder">
-          <p>Each option of the configuration gets a <strong>The reader can change this</strong> box here, which becomes an <code>[[option]]</code> in the board TOML (chunk 05).</p>
-        </div>
+        <div class="opt-panel" id="embed-options"></div>
       </div>
 
       <div id="toml-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-toml" hidden>
         <div class="panel-bar">
           <span class="file-name" id="toml-name">board.toml</span>
-          <span class="bar-spacer"></span>
           <span class="toml-files" id="toml-files"></span>
+          <span class="bar-spacer"></span>
+          <button id="toml-copy" title="Copy the board TOML">Copy</button>
         </div>
-        <textarea id="toml-text" class="code" spellcheck="false" aria-label="Board TOML"></textarea>
+        <textarea id="toml-text" class="code" readonly spellcheck="false" aria-label="Board TOML: what Save TOML writes"></textarea>
         <div class="toml-status" id="toml-status" role="status"></div>
       </div>
     </section>
@@ -146,6 +136,7 @@
         </details>
         <table class="memory" id="build-memory" hidden aria-label="Memory use"></table>
         <div class="artifacts" id="build-artifacts"></div>
+        <p class="card-note build-plan" id="build-plan" hidden></p>
         <p class="card-note">Builds run in your browser with clang and lld compiled to WebAssembly, driving the project's own Makefiles (chunk 06).</p>
       </div>
 
