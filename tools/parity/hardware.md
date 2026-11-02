@@ -80,4 +80,4 @@ Board: a board built with a serial interface and Katapult in UART mode, on a USB
 
 | Date | OS and browser | Board | Method | File | Result | Notes |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| 2026-11-02 | Windows 10 Pro 19045, Chrome 156.0.8078.79 | STM32G0B1 with Katapult, USB | Katapult over USB (STOP 1) | `klipper-stm32g0b1-usb-katapult/klipper.bin` at `0x08002000` | Pass: flashed and verified, Klipper enumerated and the host connected | As reported by the user from the page; the Katapult version string and the entry path (restart from Klipper or double-tap RESET) were not recorded |
