@@ -10,6 +10,7 @@
 
 import { METHODS, PROJECTS, PROJECT_TITLES } from "../state.js";
 import { esc } from "../dialogs.js";
+import { inferMethods } from "../flash/devices.js";
 import { KconfigTree } from "./kconfig-tree.js";
 import { versionOptions } from "./version-picker.js";
 import { groupRefs } from "./sources.js";
@@ -240,10 +241,17 @@ export class OptionsPanel {
     });
   }
 
-  // The order inference would use is the configuration's (chunk 07); a fresh
-  // list starts from the methods in their usual order.
+  // A fresh list starts as what the flash panel infers from the configuration
+  // (the full .config once a version is loaded, else the defconfig), for the
+  // author to trim and reorder.
   _inferredOrder() {
-    return [...METHODS];
+    const s = this.session;
+    const config = s.configText || s.defconfigText;
+    let ids = [];
+    try {
+      ids = inferMethods(config, { project: s.project || "klipper" }).map((m) => m.id).filter((id) => METHODS.includes(id));
+    } catch (e) { /* fall back to every method */ }
+    return ids.length ? ids : [...METHODS];
   }
 
   _refIds() {
