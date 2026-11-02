@@ -801,9 +801,10 @@ def gate_unavailable() -> str | None:
 
 @functools.lru_cache(maxsize=None)
 def _engine_identity(matrix: Path) -> str:
-    """A digest of the engine's code and the parity matrix: a snapshot that
-    failed the gate is checked again when either changes."""
-    digest = hashlib.sha256(__version__.encode())
+    """A digest of the engine's code, the gate's own (this module) and the
+    parity matrix: a snapshot that failed the gate is checked again when any
+    of them changes."""
+    digest = hashlib.sha256(__version__.encode() + b"\0" + Path(__file__).read_bytes())
     try:
         spec = importlib.util.find_spec("webflash.engine")
     except ModuleNotFoundError:
@@ -859,6 +860,13 @@ def _extract(cache: Path, manifest: dict, tree: Path) -> None:
                 tf.extractall(tree, filter="data")
             else:
                 tf.extractall(tree)
+    # The bundles store mtime 0, which GNU make for Windows reads as out of
+    # range and so newer than anything: make-check's real make would then
+    # remake .config from src/Kconfig on every level. One ordinary time for
+    # the whole tree, a minute back, so whatever is written next is newer.
+    stamp = time.time() - 60
+    for path in tree.rglob("*"):
+        os.utime(path, (stamp, stamp))
 
 
 def _run(argv: list[str], cwd: Path, timeout: int) -> dict:
@@ -1404,6 +1412,7 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
         log(f"{name}: no longer in the policy, dropped")
         del state["projects"][name]
     matched_refs: set[str] = set()
+    failed_now: list[str] = []
     for name in names:
         project = policy.projects[name]
         selected = select_refs(project, list_refs(project), warnings)
@@ -1424,8 +1433,10 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
                         else manifest["describe"])
             report = _read_json(snapshot_dir(cache, name, ref.sha) / REPORT_FILE)
             if gate_needed(report, matrix, gate=gate):
-                run_gate(cache, manifest, describe, matrix, log, now=now,
-                         skip=None if gate else "it was skipped (--no-gate)")
+                report = run_gate(cache, manifest, describe, matrix, log, now=now,
+                                  skip=None if gate else "it was skipped (--no-gate)")
+                if report["checked"] is False:
+                    failed_now.append(f"{name} {ref.name}")
     if refs:
         missing = sorted(set(refs) - matched_refs)
         if missing:
@@ -1446,10 +1457,17 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
     log("sizes:")
     for line in size_summary(index):
         log(line)
-    failed = [f"{name} {ref['id']}" for name, p in index["projects"].items()
-              for ref in p["refs"] if ref["checked"] is False]
-    if failed:
-        print(f"Error: the snapshot gate failed for {', '.join(failed)}: published with "
+    # A run fails for the gate failures it found itself (SPEC 7.5): a ref that
+    # failed an earlier run, under the same engine and matrix, is only a
+    # warning, so the daily run does not stay red over one old tag.
+    earlier = [f"{name} {ref['id']}" for name, p in index["projects"].items()
+               for ref in p["refs"] if ref["checked"] is False
+               and f"{name} {ref['id']}" not in failed_now]
+    if earlier:
+        print(f"Warning: still checked: false from an earlier run: {', '.join(earlier)}",
+              file=sys.stderr, flush=True)
+    if failed_now:
+        print(f"Error: the snapshot gate failed for {', '.join(failed_now)}: published with "
               "checked: false (see each ref's make-check.json)", file=sys.stderr, flush=True)
         return EXIT_GATE_FAILED
     return 0
