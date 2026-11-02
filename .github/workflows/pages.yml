@@ -151,9 +151,13 @@ jobs:
           # The gate (webflash make-check and webflash build --toolchain gcc)
           # comes with the build engine; without it new snapshots are
           # published with checked: null.
+          # The C++ headers are packaged apart on Ubuntu; Kalico's INDX row
+          # (same51-indx) needs them.
           if [ -f src/webflash/engine/cli.py ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq gcc-arm-none-eabi
+            sudo apt-get install -y -qq --no-install-recommends make gcc-arm-none-eabi \
+              binutils-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-dev \
+              libstdc++-arm-none-eabi-newlib
             arm-none-eabi-gcc --version | head -n 1
             make --version | head -n 1
           else
