@@ -259,7 +259,9 @@ export function fromUf2(bytes, { source = "upload", name = "" } = {}) {
   }
   if (!segments.length) fail("format", `${name || "The UF2 file"} holds no flash data.`);
   const family = families.length ? families[0] : null;
-  return new FirmwareImage({ segments, source, name, format: "uf2", family, families });
+  const image = new FirmwareImage({ segments, source, name, format: "uf2", family, families });
+  image.raw = data.slice();     // written as it was to a BOOTSEL drive
+  return image;
 }
 
 /**
