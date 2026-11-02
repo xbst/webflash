@@ -105,7 +105,7 @@ export class VersionPicker {
     this.project.disabled = busy || !firmware;
     if (firmware && this.project.value !== firmware.project) this.project.value = firmware.project;
 
-    this.version.innerHTML = "";
+    this.version.replaceChildren();
     if (!firmware) {
       this.version.append(new Option("No firmware (prebuilt file)", ""));
       this.version.disabled = true;
