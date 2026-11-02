@@ -1,0 +1,39 @@
+# An STM32G0B1 board on USB, the shape of the Isik's Tech boards: Klipper or
+# Kalico, with the reader choosing whether Katapult sits in the first 8 KiB.
+# Render it with: webflash examples/stm32g0b1-usb/stm32g0b1-usb.toml
+
+[board]
+title = "STM32G0B1 over USB"
+description = """
+Klipper firmware for an STM32G0B1 board connected over USB, with an 8 MHz crystal.
+
+Pick **Katapult (8 KiB)** if Katapult is already on the board; it then updates over USB with no buttons to press. Pick **No bootloader** to flash with the chip's own DFU bootloader. See the [Klipper bootloader guide](https://www.klipper3d.org/Bootloaders.html) for the details."""
+image = "stm32g0b1-usb.png"
+
+[firmware]
+project = "klipper"
+projects = ["klipper", "kalico"]
+version = "latest"
+
+# Exactly what `make savedefconfig` writes: everything left out holds its
+# default, which for an STM32G0B1 on Klipper master is an 8 KiB bootloader,
+# an 8 MHz crystal and USB on PA11/PA12.
+[config]
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+"""
+
+[[option]]
+symbol = "STM32_FLASH_START_2000"
+label = "Bootloader"
+values = ["STM32_FLASH_START_2000", "STM32_FLASH_START_0000"]
+labels = { STM32_FLASH_START_2000 = "Katapult (8 KiB)", STM32_FLASH_START_0000 = "No bootloader (flash with DFU)" }
+help = "Katapult must already be on the board for the 8 KiB offset; otherwise pick No bootloader."
+
+[flash]
+methods = ["katapult", "dfu", "download"]
+
+[flash.instructions]
+katapult = "If Klipper is running on the board, WebFlash asks it to restart into Katapult. Otherwise double-tap RESET, then click Connect."
+dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows the **STM32 BOOTLOADER** device needs the WinUSB driver (Zadig) once."

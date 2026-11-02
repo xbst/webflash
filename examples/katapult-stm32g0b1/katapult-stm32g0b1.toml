@@ -1,0 +1,29 @@
+# The Katapult bootloader itself for an STM32G0B1 on USB, flashed with the
+# chip's DFU bootloader. The build also makes Katapult's deployer, which
+# installs Katapult from a board that already runs a bootloader.
+
+[board]
+title = "Katapult for STM32G0B1"
+description = """
+The Katapult bootloader for an STM32G0B1 board on USB, taking the first 8 KiB of flash. Install it once with DFU; after that, Klipper updates go through Katapult over USB.
+
+The build also makes `deployer.bin`, which a board that already runs Katapult can use to update it."""
+
+[firmware]
+project = "katapult"
+
+# What `make savedefconfig` writes on Katapult master: the 8 KiB deployer;
+# the 8 KiB application offset, the 8 MHz crystal and USB on PA11/PA12 are
+# defaults.
+[config]
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+CONFIG_STM32_FLASH_START_2000=y
+"""
+
+[flash]
+methods = ["dfu", "download"]
+
+[flash.instructions]
+dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows the **STM32 BOOTLOADER** device needs the WinUSB driver (Zadig) once."

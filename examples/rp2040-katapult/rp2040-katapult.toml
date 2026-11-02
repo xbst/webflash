@@ -1,0 +1,24 @@
+# An RP2040 board with Katapult in its first 16 KiB: Klipper updates over USB
+# through Katapult, with PICOBOOT as the way back when Katapult is missing.
+
+[board]
+title = "RP2040 with Katapult"
+description = "Klipper firmware for an RP2040 board with the Katapult bootloader installed. Katapult takes the update over USB; if the board has no Katapult yet, flash it in BOOTSEL mode with PICOBOOT first."
+
+[firmware]
+project = "klipper"
+
+# What `make savedefconfig` writes: the 16 KiB bootloader offset; the RP2040
+# and USB are defaults.
+[config]
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+CONFIG_RPXXXX_FLASH_START_4000=y
+"""
+
+[flash]
+methods = ["katapult", "picoboot", "download"]
+
+[flash.instructions]
+katapult = "If Klipper is running on the board, WebFlash asks it to restart into Katapult. Otherwise double-tap RESET, then click Connect."
+picoboot = "Hold BOOTSEL while plugging the board in, then click Connect."

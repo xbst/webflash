@@ -1,0 +1,23 @@
+# An RP2040 board on USB with no bootloader: flashed through the chip's
+# BOOTSEL ROM, over PICOBOOT or by writing the UF2 to its drive.
+
+[board]
+title = "RP2040 over USB"
+description = "Klipper firmware for an RP2040 board connected over USB, with no bootloader. Hold **BOOTSEL** while plugging the board in to put it in its ROM bootloader."
+
+[firmware]
+project = "klipper"
+
+# What `make savedefconfig` writes for an RP2040 on USB with no bootloader:
+# the RP2040, its "No bootloader" offset and USB are all defaults.
+[config]
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+"""
+
+[flash]
+methods = ["picoboot", "uf2", "download"]
+
+[flash.instructions]
+picoboot = "Hold BOOTSEL while plugging the board in, then click Connect. On Windows the **RP2 Boot (Interface 1)** device needs the WinUSB driver (Zadig) once."
+uf2 = "Hold BOOTSEL while plugging the board in; it shows up as a drive named `RPI-RP2`. Pick that drive when asked."

@@ -1,0 +1,36 @@
+# An STM32G0B1 toolhead board on a CAN bus, with Katapult in its first 8 KiB,
+# updated through a USB to CAN adapter (candleLight / gs_usb).
+
+[board]
+title = "CAN toolhead (STM32G0B1)"
+description = """
+Klipper firmware for an STM32G0B1 toolhead board on a CAN bus (PB0/PB1), with the Katapult bootloader installed.
+
+Connect a candleLight-compatible USB to CAN adapter, or a board running Klipper in USB to CAN bridge mode, to the same bus. Set the CAN bus speed to the one your bus runs at: `canbus_frequency` in the bridge's configuration."""
+
+[firmware]
+project = "klipper"
+projects = ["klipper", "kalico"]
+
+# What `make savedefconfig` writes: low-level options on (so the CAN bus
+# speed can be set), CAN on PB0/PB1; the 8 KiB bootloader, the 8 MHz crystal
+# and the 1 Mbit/s speed are defaults.
+[config]
+defconfig = """
+CONFIG_LOW_LEVEL_OPTIONS=y
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+CONFIG_STM32_MMENU_CANBUS_PB0_PB1=y
+"""
+
+[[option]]
+symbol = "CANBUS_FREQUENCY"
+label = "CAN bus speed"
+values = [1000000, 500000, 250000]
+labels = { 1000000 = "1 Mbit/s", 500000 = "500 kbit/s", 250000 = "250 kbit/s" }
+
+[flash]
+methods = ["katapult-can", "download"]
+
+[flash.instructions]
+katapult-can = "Plug in the USB to CAN adapter and click Connect. WebFlash lists the nodes on the bus; pick the toolhead. A node running Klipper is restarted into Katapult first."
