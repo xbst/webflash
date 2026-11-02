@@ -1,5 +1,7 @@
 """Which flashing methods a configuration can use (SPEC 11.2), from the
-resolved ``.config`` values: best method first, ``download`` always last.
+resolved ``.config`` values: best method first, ``download`` always last,
+each with the reason the site shows (the shape of ``devices.js``'s
+``inferMethods`` on the JavaScript side).
 """
 from __future__ import annotations
 
@@ -20,45 +22,62 @@ def _number(values: Mapping[str, str], name: str) -> int:
         return 0
 
 
-def _katapult_methods(values: Mapping[str, str]) -> list[str]:
+def _katapult_methods(values: Mapping[str, str], why: str) -> list[dict]:
     """Katapult over the configured interface: USB or serial give the Web
     Serial method, CAN the gs_usb one, and a USB-to-CAN bridge runs Katapult
     over USB itself."""
     if _flag(values, "CANSERIAL"):
-        return ["katapult-can"]
-    if _flag(values, "USBSERIAL") or _flag(values, "SERIAL") or _flag(values, "USBCANBUS"):
-        return ["katapult"]
+        return [{"id": "katapult-can", "reason": f"{why}; the interface is CAN, so Katapult answers over the bus"}]
+    if _flag(values, "USBCANBUS"):
+        return [{"id": "katapult", "reason": f"{why}; the bridge itself runs Katapult over USB"}]
+    if _flag(values, "USBSERIAL"):
+        return [{"id": "katapult", "reason": f"{why}; the interface is USB"}]
+    if _flag(values, "SERIAL"):
+        return [{"id": "katapult", "reason": f"{why}; the interface is a serial port"}]
     return []
 
 
-def infer_methods(values: Mapping[str, str], project: str = "klipper") -> list[str]:
-    """The methods for a configuration, in order. ``values`` maps symbol names
-    (without ``CONFIG_``) to their string values (``y``/``n``, numbers, text),
-    as :meth:`kconfig.Session.values` returns them."""
-    methods: list[str] = []
-    bootloader_offset = _number(values, "FLASH_APPLICATION_ADDRESS") != _number(values, "FLASH_BOOT_ADDRESS")
+def infer_methods(values: Mapping[str, str], project: str = "klipper") -> list[dict]:
+    """The methods for a configuration, in order: ``[{"id", "reason"}]``.
+    ``values`` maps symbol names (without ``CONFIG_``) to their string values
+    (``y``/``n``, numbers, text), as :meth:`kconfig.Session.values` returns."""
+    methods: list[dict] = []
+    app = _number(values, "FLASH_APPLICATION_ADDRESS")
+    boot = _number(values, "FLASH_BOOT_ADDRESS")
+    offset = f"the application starts at 0x{app:08x}, after a bootloader"
     if project == "katapult":
         # The bootloader itself is written by the chip's own ROM method.
-        if _flag(values, "MACH_STM32") and _number(values, "STM32_DFU_ROM_ADDRESS"):
-            methods.append("dfu")
+        dfu = _number(values, "STM32_DFU_ROM_ADDRESS")
+        if _flag(values, "MACH_STM32") and dfu:
+            methods.append({"id": "dfu", "reason": f"the STM32's ROM has a USB DFU bootloader at 0x{dfu:08x}"})
         elif _flag(values, "MACH_RPXXXX"):
-            methods += ["picoboot", "uf2"]
+            methods.append({"id": "picoboot", "reason": "the RP2 ROM's PICOBOOT over USB (BOOTSEL)"})
+            methods.append({"id": "uf2", "reason": "a UF2 written to the BOOTSEL drive"})
     elif _flag(values, "MACH_STM32"):
-        if bootloader_offset:
-            methods += _katapult_methods(values)
-        if _number(values, "STM32_DFU_ROM_ADDRESS"):
-            methods.append("dfu")
+        if app != boot:
+            methods += _katapult_methods(values, offset)
+        dfu = _number(values, "STM32_DFU_ROM_ADDRESS")
+        if dfu:
+            methods.append({"id": "dfu", "reason": f"the STM32's ROM has a USB DFU bootloader at 0x{dfu:08x}"})
     elif _flag(values, "MACH_RPXXXX"):
         if _flag(values, "RPXXXX_FLASH_START_4000"):
-            methods += _katapult_methods(values)
-        methods += ["picoboot", "uf2"]
+            methods += _katapult_methods(values, offset)
+        methods.append({"id": "picoboot", "reason": "the RP2 ROM's PICOBOOT over USB (BOOTSEL)"})
+        methods.append({"id": "uf2", "reason": "a UF2 written to the BOOTSEL drive"})
     elif _flag(values, "MACH_LPC176X"):
-        methods.append("download")
+        methods.append({"id": "download", "reason": "LPC176x boards usually flash from an SD card"})
         if _flag(values, "LPC_FLASH_START_4000"):
-            methods += _katapult_methods(values)
-    methods.append("download")
-    out: list[str] = []
+            methods += _katapult_methods(values, offset)
+    methods.append({"id": "download", "reason": "the firmware files, to flash with another tool"})
+    out: list[dict] = []
+    seen: set[str] = set()
     for m in methods:
-        if m not in out:
+        if m["id"] not in seen:
+            seen.add(m["id"])
             out.append(m)
     return out
+
+
+def method_ids(values: Mapping[str, str], project: str = "klipper") -> list[str]:
+    """The method ids alone, in order."""
+    return [m["id"] for m in infer_methods(values, project)]

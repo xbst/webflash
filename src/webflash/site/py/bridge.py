@@ -429,14 +429,30 @@ async def build(config_text: str, version: str = "", jobs: int = 1) -> str:
     _last_build = result
     session = _get_session()
     session.load(result.config)
-    methods = _infer(session.values(), result.project)
+    values = session.values()
+    methods = _infer(values, result.project)
     _progress("finished", "")
     return json.dumps({
         "outputs": {name: len(data) for name, data in result.outputs.items()},
         "memory": result.memory, "log": result.log, "duration": result.duration,
         "version": result.version, "config": result.config, "defconfig": result.defconfig,
         "project": result.project, "methods": methods, "commands": result.commands,
+        "mcu": values.get("MCU", ""),
+        "app_address": _address(values, "FLASH_APPLICATION_ADDRESS"),
+        "boot_address": _address(values, "FLASH_BOOT_ADDRESS"),
+        "flash_start": _address(values, "FLASH_START"),
+        "launch_app_address": _address(values, "LAUNCH_APP_ADDRESS"),
     })
+
+
+def _address(values: dict, name: str):
+    raw = values.get(name)
+    if not raw:
+        return None
+    try:
+        return int(raw, 0)
+    except ValueError:
+        return None
 
 
 def build_output(name: str) -> bytes:
@@ -454,7 +470,8 @@ def build_output(name: str) -> bytes:
 def infer_methods(config_text: str) -> str:
     """The flashing methods a configuration can use, best first (SPEC 11.2):
     the text (a ``.config`` or a defconfig) is resolved through the tree's
-    Kconfig first. Returns a JSON list of method ids."""
+    Kconfig first. Returns a JSON list of ``{"id", "reason"}``, the shape of
+    ``devices.js``'s ``inferMethods``."""
     from webflash.engine.methods import infer_methods as _infer
     session = _get_session()
     session.load(config_text if config_text else None)
