@@ -359,18 +359,20 @@ def _lib_dirs(ev) -> list[str]:
     return names
 
 
-def plan(config_text: str) -> str:
+async def plan(config_text: str) -> str:
     """Evaluate the Makefiles for a configuration and name the ``lib/``
     directories the build needs: ``{"dirs": [dirs-y], "libs": [lib/<dir>],
-    "missing": [the ones not in the tree yet], "targets": [target-y]}``."""
-    from webflash.engine.make import Evaluator, run_sync
+    "missing": [the ones not in the tree yet], "targets": [target-y]}``.
+    A coroutine (the make interpreter is asynchronous and Pyodide's loop is
+    always running): the worker awaits it, as it does ``build``."""
+    from webflash.engine.make import Evaluator
     from webflash.engine.shell import Shell
     tree = _tree()
     session = _get_session()
     session.load(config_text if config_text else None)
     session.write_config()
     ev = Evaluator(tree, Shell(tree))
-    run_sync(ev.load())
+    await ev.load()
     libs = _lib_dirs(ev)
     missing = [name for name in libs if not (tree / name).is_dir()]
     return json.dumps({"dirs": ev.expand("$(dirs-y)").split(), "libs": libs, "missing": missing,
