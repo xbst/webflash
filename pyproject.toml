@@ -1,0 +1,44 @@
+[project]
+name = "webflash"
+version = "0.1.0"
+description = "Configure, build and flash Klipper firmware from a web browser, and embeddable firmware cards for documentation sites"
+requires-python = ">=3.9"
+dependencies = [
+    "tomli>=2.0; python_version < '3.11'",
+]
+readme = "README.md"
+license = "GPL-3.0"
+
+[project.urls]
+Homepage = "https://github.com/xbst/webflash"
+Site = "https://webflash.isiks.tech"
+Documentation = "https://doctools.isiks.tech/webflash/"
+
+[project.scripts]
+webflash = "webflash.cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+# Every folder with an __init__.py: `webflash`, and `webflash.engine` once it
+# exists. Not namespace packages, so the site's folders stay package data.
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+# The site is listed by file type rather than with a recursive glob: older
+# setuptools releases do not expand `**`, and naming the types keeps the
+# generated payload zip and any bytecode caches out of the wheel.
+webflash = [
+    "themes/*.toml",
+    "site/*.html",
+    "site/css/*.css",
+    "site/js/*.js",
+    "site/js/*/*.js",
+    "site/py/*.py",
+]

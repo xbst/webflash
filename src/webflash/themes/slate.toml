@@ -1,0 +1,53 @@
+# "Slate" — a cool blue-gray card with the Glegoo typeface.
+#
+# The palette of PinConnect's and 3DStep's Slate themes, so a site using one
+# theme family looks consistent: pale slate in light mode, deep navy in dark,
+# blue accents.  Copy and tweak to taste.
+
+[theme]
+name = "Slate"
+
+[font]
+family = "Glegoo"
+source = "google"
+weights = "400;700"
+
+[colors.light]
+bg             = "#f8fafc"
+text           = "#0f172a"
+text-muted     = "#475569"
+panel-bg       = "#ffffff"
+panel-border   = "#e2e8f0"
+panel-shadow   = "rgba(15,23,42,.10)"
+accent         = "#2563eb"
+accent-text    = "#ffffff"
+control-bg     = "#ffffff"
+control-border = "#cbd5e1"
+control-text   = "#0f172a"
+log-bg         = "#0f172a"
+log-text       = "#e2e8f0"
+ok             = "#15803d"
+warn           = "#b45309"
+error          = "#b91c1c"
+divider        = "#e2e8f0"
+scroll-thumb   = "rgba(15,23,42,.25)"
+
+[colors.dark]
+bg             = "#0b1220"
+text           = "#e2e8f0"
+text-muted     = "#9fb0c7"
+panel-bg       = "#131c2e"
+panel-border   = "#243044"
+panel-shadow   = "rgba(0,0,0,.5)"
+accent         = "#60a5fa"
+accent-text    = "#0b1220"
+control-bg     = "#0f1729"
+control-border = "#334155"
+control-text   = "#e2e8f0"
+log-bg         = "#070c16"
+log-text       = "#cbd5e1"
+ok             = "#4ade80"
+warn           = "#fbbf24"
+error          = "#f87171"
+divider        = "#243044"
+scroll-thumb   = "rgba(226,232,240,.22)"

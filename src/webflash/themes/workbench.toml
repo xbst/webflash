@@ -1,0 +1,53 @@
+# "Workbench" — warm neutrals with an amber accent.
+#
+# The palette of PinConnect's Workbench theme, with Inter for the text.  The
+# amber buttons carry dark text, which reads better on amber than white.
+# Copy and tweak to taste.
+
+[theme]
+name = "Workbench"
+
+[font]
+family = "Inter"
+source = "google"
+weights = "400;500;600"
+
+[colors.light]
+bg             = "#f5f2ec"
+text           = "#25231f"
+text-muted     = "#5f584c"
+panel-bg       = "#fffdf9"
+panel-border   = "#dbd4c6"
+panel-shadow   = "rgba(70,55,30,.12)"
+accent         = "#d6851a"
+accent-text    = "#1a1814"
+control-bg     = "#fffdf9"
+control-border = "#cfc6b5"
+control-text   = "#25231f"
+log-bg         = "#23201b"
+log-text       = "#ebe5d9"
+ok             = "#3f7d20"
+warn           = "#a85d00"
+error          = "#b3261e"
+divider        = "#e6dfd2"
+scroll-thumb   = "rgba(70,55,30,.25)"
+
+[colors.dark]
+bg             = "#1a1814"
+text           = "#ebe5d9"
+text-muted     = "#b4ab9c"
+panel-bg       = "#23201b"
+panel-border   = "#3b362d"
+panel-shadow   = "rgba(0,0,0,.5)"
+accent         = "#f0a83c"
+accent-text    = "#1a1814"
+control-bg     = "#2a2722"
+control-border = "#4a443a"
+control-text   = "#ebe5d9"
+log-bg         = "#12100d"
+log-text       = "#e6dfd2"
+ok             = "#8bc34a"
+warn           = "#f0a83c"
+error          = "#ef7a6d"
+divider        = "#37322a"
+scroll-thumb   = "rgba(235,229,217,.22)"
