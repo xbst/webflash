@@ -295,6 +295,7 @@ export function platformFor(nav, win, perms) {
     win: {
       showDirectoryPicker: perms.picker && hasPicker ? win.showDirectoryPicker.bind(win) : undefined,
       isSecureContext: win.isSecureContext,
+      crossOriginFrame: Boolean(perms.crossOrigin),
     },
   };
 }

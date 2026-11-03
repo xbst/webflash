@@ -67,6 +67,22 @@ export function detectBrowser(nav = typeof navigator !== "undefined" ? navigator
   return "other";
 }
 
+/**
+ * Whether a window is a page embedded from another origin than the top
+ * page's: browsers open no file picker there, whatever the iframe allows. A
+ * window object the embed runtime builds says so itself (crossOriginFrame).
+ */
+function isCrossOriginFrame(win) {
+  if (!win || typeof win !== "object") return false;
+  if (win.crossOriginFrame !== undefined) return Boolean(win.crossOriginFrame);
+  if (!("top" in win) || !win.top || win.top === win) return false;
+  try {
+    return typeof win.top.location.href !== "string";
+  } catch (e) {
+    return true;
+  }
+}
+
 /** What this browser can do: the panel shows download-only when none of it. */
 export function capabilities(nav = typeof navigator !== "undefined" ? navigator : null, win = typeof window !== "undefined" ? window : null) {
   return {
@@ -76,6 +92,7 @@ export function capabilities(nav = typeof navigator !== "undefined" ? navigator 
     // Chrome hides WebUSB, Web Serial and the folder picker off https and
     // localhost; a window without the flag (the Node mocks) counts as secure.
     secure: !win || win.isSecureContext !== false,
+    crossOriginFrame: isCrossOriginFrame(win),
     os: detectOs(nav),
     browser: detectBrowser(nav),
   };

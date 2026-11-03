@@ -128,9 +128,6 @@ export async function mountCard(card, config, env) {
         });
       }
       panel.setFirmware(fw);
-      if (perms.crossOrigin && !mocks && fw.methods.some((m) => m.id === "uf2")) {
-        panel.log("The browser opens no folder picker in a frame from another site, so the UF2 drive is a download here.");
-      }
     }
     relayout();
   };
