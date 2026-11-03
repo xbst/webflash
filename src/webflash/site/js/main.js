@@ -5,9 +5,9 @@
 // `make menuconfig`, decide in Embed options what the reader of the generated
 // page may change, then Save TOML or Generate the page. The session's tables
 // are the board TOML (the TOML tab shows what Save writes); the configure
-// session behind them runs in the engine worker. Build and Flash are filled
-// in by later chunks of the build-out; their controls are here, disabled,
-// with a title naming the chunk.
+// session behind them runs in the engine worker. Build compiles the
+// configuration in the browser (build/build-panel.js) and Flash writes the
+// result, or an uploaded file, to the board (flash/flash-panel.js).
 
 import { Session, PROJECTS } from "./state.js";
 import * as runtime from "./runtime.js";
@@ -21,9 +21,11 @@ import { ConfigTab, copyText } from "./configure/config-tab.js";
 import { OptionsPanel } from "./configure/options-panel.js";
 import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
+import { BuildPanel } from "./build/build-panel.js";
 
 const session = new Session();
 const configurator = new Configurator(session);
+let buildPanel = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -366,10 +368,13 @@ function openLoadConfig() {
   });
 }
 
-// What the next build downloads beyond the sources (chunk 06 fetches it).
+// What the next build downloads beyond the sources, and what of it the
+// browser's cache holds already.
 function setupPlan() {
   const el = $("build-plan");
-  const render = () => {
+  let count = 0;
+  const render = async () => {
+    const mine = ++count;
     const p = session.plan;
     if (!p || !session.ref || session.sources.state !== "ready") {
       el.hidden = true;
@@ -387,13 +392,20 @@ function setupPlan() {
       el.textContent = `The build needs no library bundles beyond the sources already loaded.${missing}`;
       return;
     }
+    const cached = await Promise.all(p.libs.map((l) => isCached(blobUrl(l.blob))));
+    if (mine !== count) return;
     const known = p.libs.filter((l) => Number.isFinite(l.size));
     const total = known.reduce((n, l) => n + l.size, 0);
-    el.textContent = `The build downloads ${p.libs.length === 1 ? "one library bundle" : `${p.libs.length} library bundles`}: ` +
-      p.libs.map((l) => `${l.dir}${Number.isFinite(l.size) ? ` (${formatBytes(l.size)})` : ""}`).join(", ") +
-      (known.length > 1 ? `, ${formatBytes(total)} in all.` : ".") + missing;
+    const all = cached.every(Boolean);
+    el.textContent = `The build ${all ? "needs" : "downloads"} ${p.libs.length === 1 ? "one library bundle" : `${p.libs.length} library bundles`}: ` +
+      p.libs.map((l, i) => {
+        const bits = [Number.isFinite(l.size) ? formatBytes(l.size) : "", cached[i] && !all ? "cached" : ""].filter(Boolean);
+        return `${l.dir}${bits.length ? ` (${bits.join(", ")})` : ""}`;
+      }).join(", ") +
+      (known.length > 1 ? `, ${formatBytes(total)} in all` : "") +
+      (all ? `, ${p.libs.length === 1 ? "already in this browser's cache" : "all in this browser's cache"}.` : ".") + missing;
   };
-  session.on("change", ({ what }) => { if (["plan", "sources", "ref"].includes(what)) render(); });
+  session.on("change", ({ what }) => { if (["plan", "sources", "ref", "build"].includes(what)) render(); });
   render();
 }
 
@@ -456,6 +468,9 @@ function setupToolbar() {
     openAbout({
       sources: st.state === "ready" && st.ref
         ? `${st.detail} (${st.ref.describe}), ${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ""}` : "",
+      toolchain: buildPanel ? buildPanel.aboutText() : "",
+      extend: buildPanel ? (el) => buildPanel.extendAbout(el) : null,
+      onClearCache: buildPanel ? () => buildPanel.cacheCleared() : null,
     });
   });
 }
@@ -683,6 +698,12 @@ async function init() {
     download: $("config-download"), note: $("config-note"),
   }, session);
   setupPlan();
+  buildPanel = new BuildPanel(session, configurator, {
+    button: $("build-btn"), cancel: $("build-cancel"), status: $("build-status"), start: $("build-start"),
+    bar: $("build-bar"), list: $("build-progress"), error: $("build-error"), memory: $("build-memory"),
+    artifacts: $("build-artifacts"), logBox: $("build-log-box"), log: $("build-log"), logCopy: $("build-log-copy"),
+    logCount: $("build-log-count"), pill: $("status-toolchain"),
+  }, { showError });
   setupToolbar();
   setupFileIO();
   setupKeys();

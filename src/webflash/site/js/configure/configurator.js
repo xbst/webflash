@@ -180,6 +180,17 @@ export class Configurator {
     return run;
   }
 
+  /**
+   * Run fn alone on the engine, after every operation queued so far and
+   * before any queued later: a build, which must not have the tree changed
+   * under it. A plan still waiting for changes to settle is dropped; the next
+   * change (the reload after the build, chunk 07's "build" event) plans again.
+   */
+  exclusive(fn) {
+    clearTimeout(this._planTimer);
+    return this._enqueue(() => fn());
+  }
+
   // ── The index ──────────────────────────────────────────────────────
 
   /**

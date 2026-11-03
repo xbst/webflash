@@ -244,8 +244,13 @@ const LICENSES = [
   ["Emscripten runtime", "MIT", "https://emscripten.org"],
 ];
 
-/** The About box. sources says which snapshot is loaded, as the toolbar's status does. */
-export function openAbout({ sources = "" } = {}) {
+/**
+ * The About box. sources says which snapshot is loaded, as the toolbar's
+ * status does; toolchain (HTML) describes the compiler; extend(el) fills the
+ * build section (the build panel's worker count and cache size);
+ * onClearCache runs after Clear cache emptied the cache.
+ */
+export function openAbout({ sources = "", toolchain = "", extend = null, onClearCache = null } = {}) {
   const { body } = openModal("About WebFlash");
   const about = runtime.about();
   const row = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
@@ -260,9 +265,10 @@ export function openAbout({ sources = "" } = {}) {
     `<h3>Versions</h3><table class="about-table">` +
     row("WebFlash", about ? esc(about.webflash) : "loads with the Python runtime") +
     row("Python", about ? `${esc(about.python)} (Pyodide ${esc(about.pyodide)})` : `Pyodide ${esc(runtime.PYODIDE_VERSION)}, not loaded yet`) +
-    row("Toolchain", "loads on the first build (chunk 06)") +
+    row("Toolchain", toolchain || "loads with the first build") +
     row("Sources", sources ? esc(sources) : "a version's source snapshot loads when you configure it") +
     `</table>` +
+    `<div id="about-build"></div>` +
     `<h3>Licenses</h3><table class="about-table">` +
     LICENSES.map(([what, license, url]) =>
       row(what, `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(license)}</a>`)).join("") +
@@ -272,10 +278,14 @@ export function openAbout({ sources = "" } = {}) {
     `<a href="${REPO_URL}" target="_blank" rel="noopener">Source on GitHub</a>` +
     `<button id="about-clear-cache" title="Forget the downloaded toolchain and sources, so the next use downloads them again">Clear cache</button>` +
     `</p>`;
+  if (extend) extend(body.querySelector("#about-build"));
   const clear = body.querySelector("#about-clear-cache");
   clear.addEventListener("click", async () => {
     clear.disabled = true;
     clear.textContent = (await clearCache()) ? "Cache cleared" : "Nothing cached";
+    if (onClearCache) await onClearCache();
+    // What the cache holds now, where About shows it.
+    if (extend) extend(body.querySelector("#about-build"));
   });
 }
 
