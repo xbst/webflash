@@ -280,8 +280,9 @@ def _bindir(path: Path) -> Path:
     return path / "bin" if (path / "bin").is_dir() else path
 
 
-def make_toolchain(name: str, toolchain_dir: Optional[Path], jobs: int):
-    """A toolchain backend by its command-line name."""
+def make_toolchain(name: str, toolchain_dir: Optional[Path], jobs: int, *, mount: Optional[str] = None):
+    """A toolchain backend by its command-line name (``mount``: where
+    ``wasm-node`` puts the tree inside the WebAssembly instance)."""
     if name == "gcc":
         if toolchain_dir is None:
             exe = shutil.which("arm-none-eabi-gcc")
@@ -299,7 +300,7 @@ def make_toolchain(name: str, toolchain_dir: Optional[Path], jobs: int):
     if name == "wasm-node":
         if toolchain_dir is None:
             raise DriverError("--toolchain-dir is needed: the unpacked toolchain release")
-        return WasmNodeToolchain(toolchain_dir, jobs=jobs)
+        return WasmNodeToolchain(toolchain_dir, jobs=jobs, mount=mount)
     raise DriverError(f"unknown toolchain {name!r}")
 
 
@@ -326,7 +327,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         return _error(e)
     version = args.version or git_describe(tree)
     try:
-        toolchain = make_toolchain(args.toolchain, args.toolchain_dir, args.jobs)
+        toolchain = make_toolchain(args.toolchain, args.toolchain_dir, args.jobs, mount=args.wasm_mount)
     except DriverError as e:
         return _error(e)
     build = Build(tree, config_text, toolchain=toolchain, version=version, jobs=args.jobs, lto=args.lto,
@@ -561,7 +562,7 @@ def cmd_parity(args: argparse.Namespace) -> int:
         for v in variants:
             backend = VARIANTS[v][0]
             if backend not in toolchains:
-                toolchains[backend] = make_toolchain(backend, _variant_dir(v, args), args.jobs)
+                toolchains[backend] = make_toolchain(backend, _variant_dir(v, args), args.jobs, mount=args.wasm_mount)
     except DriverError as e:
         return _error(e)
     builds: dict[tuple[str, str], dict] = {}
@@ -616,6 +617,11 @@ def cmd_parity(args: argparse.Namespace) -> int:
 
 # ── Parser ───────────────────────────────────────────────────────────
 
+_WASM_MOUNT_HELP = ("wasm-node: the tree's path inside the WebAssembly instance, which the ELF's debug "
+                    "information records (default: its own path, a Windows drive as /c/...; the site "
+                    "uses /webflash/src/<project>/<sha>)")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="webflash", description="WebFlash maintainer commands.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -636,6 +642,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", required=True, help="a .config or defconfig")
     p.add_argument("--toolchain", required=True, choices=("gcc", "clang-native", "wasm-node"))
     p.add_argument("--toolchain-dir", type=Path, help="the toolchain's folder (its bin/, or an unpacked release)")
+    p.add_argument("--wasm-mount", metavar="PATH", help=_WASM_MOUNT_HELP)
     p.add_argument("--version", help="the version the firmware reports (default: git describe)")
     p.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="compiles at once")
     p.add_argument("--out", help="copy the outputs to this folder")
@@ -658,6 +665,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gcc-dir", type=Path, help="the Arm GNU Toolchain (its bin/ or its root)")
     p.add_argument("--clang-dir", type=Path, help="Arm Toolchain for Embedded (its bin/ or its root)")
     p.add_argument("--wasm-dir", type=Path, help="an unpacked webflash-toolchain release, for wasm-node")
+    p.add_argument("--wasm-mount", metavar="PATH", help=_WASM_MOUNT_HELP)
     p.add_argument("--version", help="the version every build reports (default: git describe)")
     p.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="compiles at once")
     p.add_argument("--out", help="keep every build's outputs under this folder")

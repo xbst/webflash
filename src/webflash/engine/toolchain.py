@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -293,13 +296,72 @@ class JsToolchain:
 
 # ── Node ─────────────────────────────────────────────────────────────
 
+class _NodeRunner:
+    """One ``wasm-node-runner.mjs`` process: a request line in, a reply line
+    out. Its stderr is read on a thread of its own, so a chatty Node cannot
+    fill the pipe, and the last of it explains a runner that died."""
+
+    def __init__(self, argv: list[str]) -> None:
+        try:
+            self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as e:
+            raise DriverError(f"cannot run {argv[0]}: {e}") from None
+        self._stderr: collections.deque = collections.deque(maxlen=200)
+        self._reader = threading.Thread(target=self._read_stderr, daemon=True)
+        self._reader.start()
+
+    def _read_stderr(self) -> None:
+        for line in iter(self.proc.stderr.readline, b""):
+            self._stderr.append(line)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def request(self, line: bytes) -> dict:
+        try:
+            self.proc.stdin.write(line)
+            self.proc.stdin.flush()
+            reply = self.proc.stdout.readline()
+        except OSError:
+            reply = b""
+        if not reply:
+            code = self.proc.wait()
+            self._reader.join(5)
+            err = b"".join(self._stderr).decode("utf-8", errors="replace").strip()
+            raise DriverError(f"the Node runner exited with code {code}" + (f":\n{err}" if err else ""))
+        return json.loads(reply.decode("utf-8"))
+
+    def close(self) -> None:
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(10)
+        except (OSError, subprocess.TimeoutExpired):
+            self.proc.kill()
+            self.proc.wait()
+        self._reader.join(5)
+        self.proc.stdout.close()
+        self.proc.stderr.close()
+
+
 class WasmNodeToolchain:
     """The WebAssembly release run under Node through ``wasm-node-runner.mjs``
     (JSON lines over stdio), one Node process per job slot. ``toolchain_dir``
-    holds an unpacked release (``manifest.json``, ``toolchain.js``, ...)."""
+    holds an unpacked release (``manifest.json``, ``toolchain.js``, ...).
+
+    ``mount`` is the POSIX path the tree has inside the WebAssembly instance
+    (default: the tree's own path, a Windows drive as ``/c/...``). It is what
+    the ELF's debug information records as the compilation directory, so a
+    build with the site's ``/webflash/src/<project>/<sha>`` gives the browser
+    build's bytes.
+
+    The runners are plain subprocesses driven from worker threads rather than
+    asyncio subprocesses: each build runs in an ``asyncio.run`` of its own
+    (``webflash parity`` builds every row with the same toolchain), and an
+    asyncio pipe cannot outlive its event loop.
+    """
 
     def __init__(self, toolchain_dir: Path, *, jobs: int = 1, node: str = "node", runner: Optional[Path] = None,
-                 label: str = "webflash") -> None:
+                 label: str = "webflash", mount: Optional[str] = None) -> None:
         self.toolchain_dir = Path(toolchain_dir)
         manifest_path = self.toolchain_dir / "manifest.json"
         if not manifest_path.is_file():
@@ -310,6 +372,9 @@ class WasmNodeToolchain:
         self.label = label
         self.version = str(self.manifest.get("llvm", "0"))
         self.sysroot = Sysroot.from_manifest(self.manifest, root="/")
+        if mount is not None and (not str(mount).startswith("/") or str(mount).strip("/") == ""):
+            raise DriverError(f"the mount must be an absolute POSIX path below /, not {mount!r}")
+        self.mount = mount
         self.node = shutil.which(node) or node
         if runner:
             self.runner = Path(runner)
@@ -320,28 +385,27 @@ class WasmNodeToolchain:
                           Path("tools") / "parity" / "wasm-node-runner.mjs")
             self.runner = next((c for c in candidates if c.is_file()), candidates[0])
         self.jobs = max(1, int(jobs))
-        self._pool: Optional[asyncio.Queue] = None
-        self._procs: list = []
+        self._slots: queue.SimpleQueue = queue.SimpleQueue()
+        for _ in range(self.jobs):
+            self._slots.put(None)
+        self._runners: list[_NodeRunner] = []
+        self._lock = threading.Lock()
 
     def tool_version(self, tool: str) -> str:
         return synthetic_tool_version(tool, self.version, self.label)
 
-    async def _start(self):
-        proc = await asyncio.create_subprocess_exec(
-            self.node, str(self.runner), str(self.toolchain_dir / "manifest.json"),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        self._procs.append(proc)
-        return proc
-
-    async def _pool_get(self):
-        if self._pool is None:
-            self._pool = asyncio.Queue()
-            for _ in range(self.jobs):
-                self._pool.put_nowait(None)
-        slot = await self._pool.get()
-        if slot is None:
-            slot = await self._start()
-        return slot
+    def _exchange(self, line: bytes) -> dict:
+        """Send one request on a free runner (started on first need, again
+        after one died) and wait for its reply; a worker thread runs this."""
+        slot = self._slots.get()
+        try:
+            if slot is None or not slot.alive():
+                slot = _NodeRunner([self.node, str(self.runner), str(self.toolchain_dir / "manifest.json")])
+                with self._lock:
+                    self._runners.append(slot)
+            return slot.request(line)
+        finally:
+            self._slots.put(slot)
 
     async def run(self, command: Command, *, cwd: Path, env: dict[str, str], links: Any = None) -> ToolResult:
         if command.kind == "version":
@@ -353,17 +417,10 @@ class WasmNodeToolchain:
             "files": {p: base64.b64encode(b).decode("ascii") for p, b in files.items()},
             "inputs": command.inputs, "include_dirs": getattr(command, "include_dirs", []),
         }
-        proc = await self._pool_get()
-        try:
-            proc.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
-            await proc.stdin.drain()
-            line = await proc.stdout.readline()
-            if not line:
-                err = (await proc.stderr.read()).decode("utf-8", errors="replace")
-                raise DriverError(f"the Node runner exited: {err.strip()}")
-            reply = json.loads(line.decode("utf-8"))
-        finally:
-            self._pool.put_nowait(proc)
+        if self.mount:
+            request["mount"] = self.mount
+        line = (json.dumps(request) + "\n").encode("utf-8")
+        reply = await asyncio.get_running_loop().run_in_executor(None, self._exchange, line)
         for path, content in (reply.get("outputs") or {}).items():
             if path.endswith(".d"):
                 continue
@@ -376,11 +433,11 @@ class WasmNodeToolchain:
                           float(reply.get("time", 0)) / 1000.0, int(reply.get("memory", 0) or 0))
 
     async def close(self) -> None:
-        for proc in self._procs:
-            try:
-                proc.stdin.close()
-                await asyncio.wait_for(proc.wait(), 10)
-            except (OSError, asyncio.TimeoutError):
-                proc.kill()
-        self._procs = []
-        self._pool = None
+        """Stop every runner; a later ``run`` starts new ones."""
+        with self._lock:
+            runners, self._runners = self._runners, []
+        for runner in runners:
+            runner.close()
+        self._slots = queue.SimpleQueue()
+        for _ in range(self.jobs):
+            self._slots.put(None)
