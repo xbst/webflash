@@ -74,14 +74,10 @@ jobs:
           cp -r "$site/css" _site/css
           cp -r "$site/js" _site/js
           # The embed runtime, laid out as the local server serves it
-          # (serve.py): js/embed/ at its root, then flash/, build/, workers/
-          # and css/ beside it. Folders a later chunk adds are copied once
-          # they exist.
-          if [ -d "$site/js/embed" ]; then cp -r "$site/js/embed/." _site/engine/v1/; fi
-          for part in flash build workers; do
-            if [ -d "$site/js/$part" ]; then cp -r "$site/js/$part" "_site/engine/v1/$part"; fi
-          done
-          cp -r "$site/css" _site/engine/v1/css
+          # (serve.py's engine_files): js/embed/ at its root beside the
+          # modules of js/ it imports, then flash/, build/, configure/,
+          # workers/ and css/.
+          PYTHONPATH=src python -c "from webflash.serve import stage_engine; print(stage_engine('$site', '_site/engine/v1'), 'files in engine/v1')"
           find _site -name __pycache__ -type d -prune -exec rm -rf {} +
           echo "$SITE_DOMAIN" > _site/CNAME
 
@@ -220,12 +216,37 @@ jobs:
                       for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
           engine = site / "engine" / "v1"
           parts = {"": src / "js" / "embed", "flash/": src / "js" / "flash", "build/": src / "js" / "build",
-                   "workers/": src / "js" / "workers", "css/": src / "css"}
+                   "configure/": src / "js" / "configure", "workers/": src / "js" / "workers", "css/": src / "css"}
           expected = {prefix + name: data for prefix, folder in parts.items() if folder.is_dir()
                       for name, data in files(folder).items()}
+          for name in ("runtime.js", "state.js", "toml-io.js", "dialogs.js"):
+              expected[name] = (src / "js" / name).read_bytes()
           assert files(engine) == expected, "engine/v1/ differs from the site folders it is staged from"
-          assert "workers/engine-worker.js" in expected, "engine/v1/workers/engine-worker.js is missing"
-          print(f"engine/v1 ok: {len(expected)} files")
+          for needed in ("embed.js", "css/embed.css", "workers/engine-worker.js", "workers/toolchain-worker.js"):
+              assert needed in expected, f"engine/v1/{needed} is missing"
+          # Every module a generated page reaches from embed.js, statically or
+          # with import("..."), resolves under /engine/v1/.
+          import re
+          spec = re.compile(r"""(?:\bimport\s*(?:[\w*{}\s,]+?\s*from\s*)?|\bimport\s*\(\s*|\bexport\s*[\w*{}\s,]*?\bfrom\s*)["'](\.{1,2}/[^"']+)["']""")
+          seen, todo = set(), ["embed.js"]
+          while todo:
+              rel = todo.pop()
+              if rel in seen:
+                  continue
+              seen.add(rel)
+              assert rel in expected, f"engine/v1/{rel} is imported but not staged"
+              base = rel.rsplit("/", 1)[0] + "/" if "/" in rel else ""
+              for target in spec.findall(expected[rel].decode("utf-8")):
+                  parts_ = (base + target).split("/")
+                  out = []
+                  for part in parts_:
+                      if part == "..":
+                          assert out, f"engine/v1/{rel} imports {target}, outside engine/v1/"
+                          out.pop()
+                      elif part != ".":
+                          out.append(part)
+                  todo.append("/".join(out))
+          print(f"engine/v1 ok: {len(expected)} files, {len(seen)} modules reachable from embed.js")
 
           # The toolchain, when there is one: current.json names a folder whose
           # files match the manifest's sizes and SHA-256.
