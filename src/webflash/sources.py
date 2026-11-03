@@ -886,14 +886,18 @@ def _run(argv: list[str], cwd: Path, timeout: int) -> dict:
 
 
 def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
-             *, now: _dt.datetime, skip: str | None = None) -> dict:
+             *, now: _dt.datetime, skip: str | None = None, run: str | None = None) -> dict:
     """Run the snapshot gate on a snapshot's bundles and write its report,
     ``<project>/<sha>/make-check.json``. ``checked`` is True when every row of
     the matrix that applies passed both commands, False when one failed, and
-    None when the gate did not run (``skip`` or no engine) or no row applies."""
+    None when the gate did not run (``skip`` or no engine) or no row applies.
+    ``run`` names the run, recorded so that a re-run can tell its own failures."""
     project, sha = manifest["project"], manifest["sha"]
     report = {"schema": SCHEMA, "project": project, "sha": sha, "describe": describe,
-              "checked": None, "note": "", "webflash": __version__, "ran": _stamp(now), "rows": []}
+              "checked": None, "note": "", "webflash": __version__, "ran": _stamp(now)}
+    if run is not None:
+        report["run"] = run
+    report["rows"] = []
     reason = skip or gate_unavailable()
     if reason is None and not matrix.is_file():
         reason = f"there is no parity matrix at {matrix.as_posix()}"
@@ -958,10 +962,12 @@ def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
     return report
 
 
-def gate_needed(report: dict | None, matrix: Path, *, gate: bool) -> bool:
+def gate_needed(report: dict | None, matrix: Path, *, gate: bool, run: str | None = None) -> bool:
     """Whether a snapshot's gate should run (again): never ran; did not run
-    for want of an engine or a matrix that now exist; or failed under an
-    engine or matrix that has changed since."""
+    for want of an engine or a matrix that now exist; failed under an engine
+    or matrix that has changed since; or failed in this same ``run``, which is
+    then a re-run (GitHub restores the first attempt's cache, failures and
+    all), so it checks the failure again rather than passing over it."""
     if report is None:
         return True
     if not gate:
@@ -969,7 +975,8 @@ def gate_needed(report: dict | None, matrix: Path, *, gate: bool) -> bool:
     if report.get("checked") is None:
         return gate_unavailable() is None and matrix.is_file() and not report.get("rows")
     if report.get("checked") is False:
-        return report.get("engine") != _engine_identity(matrix)
+        return (report.get("engine") != _engine_identity(matrix)
+                or (run is not None and report.get("run") == run))
     return False
 
 
@@ -1391,11 +1398,13 @@ def _check_folders(out: Path, cache: Path) -> None:
 
 def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None = None,
           refs: list[str] | None = None, gate: bool = True, matrix: Path = DEFAULT_MATRIX,
-          clones: Path | None = None, now: _dt.datetime | None = None, log=_log) -> int:
+          clones: Path | None = None, run: str | None = None, now: _dt.datetime | None = None,
+          log=_log) -> int:
     """``webflash sources build``: snapshot what the policy selects, gate the
     new snapshots, age out old refs, and publish into ``out``. The full
-    clones go to ``clones`` (default ``<cache>/git``). Returns the exit code:
-    0, or 2 when a listed snapshot failed the gate."""
+    clones go to ``clones`` (default ``<cache>/git``); ``run`` names this run
+    (see ``gate_needed``). Returns the exit code: 0, or 2 when a listed
+    snapshot failed the gate in this run."""
     now = now or _dt.datetime.now(_dt.timezone.utc)
     today = now.astimezone(_dt.timezone.utc).date()
     _check_folders(out, cache)
@@ -1432,9 +1441,9 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
             describe = (f"{ref.name}-0-g{manifest['abbrev']}" if ref.kind == "tag"
                         else manifest["describe"])
             report = _read_json(snapshot_dir(cache, name, ref.sha) / REPORT_FILE)
-            if gate_needed(report, matrix, gate=gate):
+            if gate_needed(report, matrix, gate=gate, run=run):
                 report = run_gate(cache, manifest, describe, matrix, log, now=now,
-                                  skip=None if gate else "it was skipped (--no-gate)")
+                                  skip=None if gate else "it was skipped (--no-gate)", run=run)
                 if report["checked"] is False:
                     failed_now.append(f"{name} {ref.name}")
     if refs:
@@ -1459,7 +1468,8 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
         log(line)
     # A run fails for the gate failures it found itself (SPEC 7.5): a ref that
     # failed an earlier run, under the same engine and matrix, is only a
-    # warning, so the daily run does not stay red over one old tag.
+    # warning, so the daily run does not stay red over one old tag. A re-run
+    # of the run that found it (the same --run) has checked it again above.
     earlier = [f"{name} {ref['id']}" for name, p in index["projects"].items()
                for ref in p["refs"] if ref["checked"] is False
                and f"{name} {ref['id']}" not in failed_now]
@@ -1530,6 +1540,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="Do not run the snapshot gate: new snapshots get checked: null.")
     b.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX, metavar="FILE",
                    help=f"The parity matrix the gate builds.  Default: {DEFAULT_MATRIX.as_posix()}")
+    b.add_argument("--run", default=None, metavar="ID",
+                   help="An id for this run, such as $GITHUB_RUN_ID. A snapshot that failed the "
+                        "gate under the same id is checked again, so a re-run of a failed run "
+                        "does not pass on the first attempt's cache.")
 
     i = sub.add_parser("index", help="rewrite the index from the cache",
                        description="Age out old refs and write the index and the bundles into "
@@ -1565,7 +1579,8 @@ def main(argv: list[str]) -> int:
         if args.action == "index":
             return rebuild_index(policy, args.out, args.cache)
         return build(policy, args.out, args.cache, projects=args.project, refs=args.ref,
-                     gate=not args.no_gate, matrix=args.matrix, clones=args.clones)
+                     gate=not args.no_gate, matrix=args.matrix, clones=args.clones,
+                     run=args.run or None)
     except (ValueError, SourcesError, OSError) as e:
         for line in str(e).splitlines() or [""]:
             print(f"Error: {line}", file=sys.stderr)

@@ -169,10 +169,12 @@ jobs:
         run: |
           # Exit code 2: everything was written, but a snapshot failed the
           # gate. It is published with checked: false (the site offers it with
-          # a warning), and the gate job below marks the run failed.
+          # a warning), and the gate job below marks the run failed. A later
+          # run only warns about it; a re-run of this run (the same run id,
+          # with this attempt's cache) checks it again.
           set +e
           webflash sources build --policy sources.toml --out _site/sources \
-            --cache "$SOURCES_CACHE" --clones "$RUNNER_TEMP/clones"
+            --cache "$SOURCES_CACHE" --clones "$RUNNER_TEMP/clones" --run "$GITHUB_RUN_ID"
           code=$?
           set -e
           if [ "$code" = 2 ]; then
