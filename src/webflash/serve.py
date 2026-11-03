@@ -6,13 +6,15 @@ virtual environment.  The site has to be served over HTTP because it fetches
 its Python payload, so opening index.html from disk does not work.
 
 The site's files are served at ``/``, and the embed runtime at
-``/engine/v1/`` laid out as the hosted site deploys it (``js/embed/`` at its
-root, then ``flash/``, ``build/``, ``workers/`` and ``css/``), so a board TOML
-with ``engine_url = "http://127.0.0.1:<port>/engine/v1/"`` renders a page that
-runs against this server. With ``--assets <folder>``, ``/toolchain/`` and
+``/engine/v1/`` laid out as the hosted site deploys it (``engine_files``:
+``js/embed/`` at its root beside the shared modules of ``js/``, then
+``flash/``, ``build/``, ``configure/``, ``workers/`` and ``css/``), so a board
+TOML with ``engine_url = "http://127.0.0.1:<port>/engine/v1/"`` renders a page
+that runs against this server. With ``--assets <folder>``, ``/toolchain/`` and
 ``/sources/`` are served from that folder too; otherwise the page fetches them
 from the ``--assets`` URL, which it reads from a ``<meta name="webflash-assets">``
-the server writes into ``index.html``. Everything is sent with
+the server writes into ``index.html`` (and the embed runtime from the same
+URL written into ``embed.js``). Everything is sent with
 ``Access-Control-Allow-Origin: *``, as GitHub Pages sends it, so a generated
 page served from elsewhere can load the runtime.
 
@@ -25,6 +27,8 @@ from __future__ import annotations
 
 import html
 import io
+import json
+import shutil
 import socket
 import sys
 import threading
@@ -37,20 +41,64 @@ from pathlib import Path
 from .payload import PAYLOAD_NAME, build_payload, site_root
 
 # Where the embed runtime is mounted, and which site folder each part of it
-# comes from. A file directly under /engine/v1/ is one of js/embed/.
+# comes from. Its modules import their neighbors relatively, so the folders
+# they reach keep the site's layout: js/embed/ is the root, beside the
+# modules of js/ that the build's flow imports (the engine's RPC, the session's
+# names, the TOML writer, the save helpers), and the folders below js/ keep
+# their names. A file directly under /engine/v1/ is one of js/embed/ unless it
+# is one of those modules.
 ENGINE_PREFIX = "/engine/v1"
+_ENGINE_ROOT = ("js", "embed")
+_ENGINE_SHARED = ("runtime.js", "state.js", "toml-io.js", "dialogs.js")
 _ENGINE_FOLDERS = {
     "flash": ("js", "flash"),
     "build": ("js", "build"),
+    "configure": ("js", "configure"),
     "workers": ("js", "workers"),
     "css": ("css",),
 }
-_ENGINE_ROOT = ("js", "embed")
 # Served from an --assets folder.
 _ASSET_PREFIXES = ("/toolchain", "/sources")
 # Replaced in index.html by the meta tag naming the assets' origin. The hosted
 # site serves index.html untouched: no tag, so the page uses its own origin.
 ASSETS_PLACEHOLDER = "<!--webflash-assets-->"
+# The same for the embed runtime: embed.js holds an empty string with this
+# comment, which the server replaces with the --assets URL. Empty, as the
+# hosted site serves it, means the runtime's own site.
+ENGINE_ASSETS_PLACEHOLDER = '"" /* webflash-assets */'
+
+
+def engine_files(site: Path) -> dict[str, Path]:
+    """Every file of the embed runtime by its path under ``/engine/v1/``,
+    mapped to the site file it is: what the local server serves there and
+    what the Pages workflow stages (``stage_engine``)."""
+    site = Path(site)
+    files: dict[str, Path] = {}
+
+    def add(prefix: str, folder: Path) -> None:
+        if not folder.is_dir():
+            return
+        for path in sorted(folder.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                files[prefix + path.relative_to(folder).as_posix()] = path
+
+    add("", site.joinpath(*_ENGINE_ROOT))
+    for name in _ENGINE_SHARED:
+        files[name] = site / "js" / name
+    for name, folder in _ENGINE_FOLDERS.items():
+        add(f"{name}/", site.joinpath(*folder))
+    return files
+
+
+def stage_engine(site: Path, out: Path) -> int:
+    """Copy the embed runtime into ``out`` (``_site/engine/v1``) as the
+    local server serves it. Returns the number of files."""
+    files = engine_files(site)
+    for rel, source in files.items():
+        target = Path(out).joinpath(*rel.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    return len(files)
 
 
 class _Payload:
@@ -158,6 +206,13 @@ class _Handler(SimpleHTTPRequestHandler):
                 meta = f'<meta name="webflash-assets" content="{html.escape(self.assets_url)}">'
                 return self._send_bytes(text.replace(ASSETS_PLACEHOLDER, meta, 1).encode("utf-8"),
                                         "text/html; charset=utf-8")
+        if self.assets_url and _bare(self.path) == f"{ENGINE_PREFIX}/embed.js":
+            entry = Path(self.translate_path(self.path))
+            if entry.is_file():
+                text = entry.read_text(encoding="utf-8")
+                named = f"{json.dumps(self.assets_url)} /* webflash-assets */"
+                return self._send_bytes(text.replace(ENGINE_ASSETS_PLACEHOLDER, named, 1).encode("utf-8"),
+                                        self.extensions_map[".js"])
         return super().send_head()
 
     def _send_bytes(self, data: bytes, content_type: str):
@@ -176,6 +231,8 @@ class _Handler(SimpleHTTPRequestHandler):
             folder = _ENGINE_FOLDERS.get(parts[0]) if len(parts) == 2 else None
             if folder is not None:
                 return self.site.joinpath(*folder), rest[len(parts[0]) + 1:]
+            if len(parts) == 1 and parts[0] in _ENGINE_SHARED:
+                return self.site / "js", rest
             return self.site.joinpath(*_ENGINE_ROOT), rest
         if self.assets_dir is not None:
             for prefix in _ASSET_PREFIXES:
