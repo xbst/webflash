@@ -1,10 +1,13 @@
 // The Generate dialog, the About box and error dialogs.
 //
 // Generate renders through the same code path as the `webflash` command, so
-// what the preview shows is what the downloaded file contains.
+// the downloaded file is the command's bytes. The preview is the same page
+// with its runtime loaded from this site's own /engine/v1/ (and the files the
+// TOML names inlined when they are attached), so the card in it runs.
 
 import * as runtime from "./runtime.js";
 import { clearCache } from "./workers/blob-cache.js";
+import { openInSiteUrl, writeBoardToml } from "./toml-io.js";
 
 const REPO_URL = "https://github.com/xbst/webflash";
 const DOCS_URL = "https://doctools.isiks.tech/webflash/";
@@ -86,6 +89,10 @@ export function renderFiles(session) {
   return files;
 }
 
+function sizeOf(n) {
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(2)} MB`;
+}
+
 function sizeText(text) {
   const n = new TextEncoder().encode(text).length;
   return n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(2)} MB`;
@@ -95,13 +102,31 @@ function stemOf(name) {
   return (name || "board.toml").replace(/\.toml$/i, "") || "board";
 }
 
+/** This site's own embed runtime, where the Generate preview loads it from. */
+export function siteEngineUrl(base = document.baseURI) {
+  return new URL("engine/v1/", new URL("./", base)).href;
+}
+
+/**
+ * The TOML the preview renders: the session's, with engine_url pointing at
+ * this site's runtime (so the card in the preview runs here, whatever the
+ * downloaded page names), and without the image when it is not attached (an
+ * image beside the page does not exist in the preview).
+ */
+export function previewToml(tables, engineUrl, { imageAttached = true } = {}) {
+  const board = { ...tables.board, engine_url: engineUrl };
+  if (!imageAttached) board.image = "";
+  return writeBoardToml({ ...tables, board });
+}
+
 // ── Generate ────────────────────────────────────────────────────────
 
 /**
  * The page the TOML renders to, previewed and ready to download, with the
  * TOML beside it. The dialog's Theme is the TOML's [board] theme, the same
  * setting as the toolbar's, so the downloaded TOML renders to the downloaded
- * page with the command line too.
+ * page with the command line too. Attach files adds the image and firmware
+ * file the TOML names to the session (session.files), for -i and the preview.
  */
 export async function openGenerate(session) {
   const { body, close, onClose } = openModal("Generate the embeddable page", { wide: true });
@@ -113,17 +138,9 @@ export async function openGenerate(session) {
     body.innerHTML = `<pre class="error-text">${esc(e.message || e)}</pre>`;
     return close;
   }
+  const bundled = new Set(themes.map((t) => t.name));
   const current = session.theme || "default";
-  if (!themes.some((t) => t.name === current)) themes.push({ name: current, display: current });
-
-  const refs = session.referencedFiles();
-  const missing = refs.filter((r) => !r.bytes);
-  const canInline = refs.length > 0 && missing.length === 0;
-  const inlineNote = !refs.length
-    ? "The TOML names no image or firmware file, so there is nothing to embed."
-    : missing.length
-      ? `To embed them, open ${missing.map((r) => r.path).join(" and ")} together with the TOML (Open TOML takes several files).`
-      : "Embedding gives one self-contained file. Without it the page loads the files from beside it.";
+  if (!bundled.has(current)) themes.push({ name: current, display: `${current} (not bundled)` });
 
   body.innerHTML =
     `<div class="gen-bar">` +
@@ -132,16 +149,18 @@ export async function openGenerate(session) {
       `<option value="${esc(t.name)}"${t.name === current ? " selected" : ""}>${esc(t.display)}</option>`
     ).join("") +
     `</select></label>` +
-    `<label class="gen-embed" title="${esc(inlineNote)}"><input type="checkbox" id="gen-inline"` +
-    `${canInline ? " checked" : " disabled"}> Embed the image and firmware file (-i)</label>` +
+    `<label class="gen-embed"><input type="checkbox" id="gen-inline" disabled> Embed the image and firmware file (-i)</label>` +
     `<span class="gen-status" id="gen-status">Rendering…</span>` +
     `<span class="gen-spacer"></span>` +
+    `<button id="gen-copy-link" title="Copy a link that opens this board TOML on the WebFlash site (Open in WebFlash)">Copy link</button>` +
     `<button id="gen-download-toml">Download TOML</button>` +
     `<button id="gen-download" class="primary">Download HTML</button>` +
     `</div>` +
+    `<p class="gen-warn" id="gen-theme-note" hidden></p>` +
+    `<div class="gen-files" id="gen-files"></div>` +
     `<p class="gen-warn" id="gen-warn" hidden></p>` +
     `<div class="gen-preview" id="gen-preview"></div>` +
-    `<p class="gen-note">${esc(inlineNote)} The same page from the command line: ` +
+    `<p class="gen-note"><span id="gen-inline-note"></span> The same page from the command line: ` +
     `<code id="gen-command"></code></p>`;
 
   const statusEl = body.querySelector("#gen-status");
@@ -150,7 +169,56 @@ export async function openGenerate(session) {
   const inlineEl = body.querySelector("#gen-inline");
   const commandEl = body.querySelector("#gen-command");
   const downloadBtn = body.querySelector("#gen-download");
+  const filesEl = body.querySelector("#gen-files");
+  const themeNote = body.querySelector("#gen-theme-note");
   const stem = stemOf(session.tomlName);
+  const engineUrl = siteEngineUrl();
+
+  // The files the TOML names and which of them are attached; -i needs all.
+  const renderFilesList = () => {
+    const refs = session.referencedFiles();
+    const missing = refs.filter((r) => !r.bytes);
+    const canInline = refs.length > 0 && missing.length === 0;
+    const note = !refs.length
+      ? "The TOML names no image or firmware file, so there is nothing to embed."
+      : missing.length
+        ? `To embed them, attach ${missing.map((r) => r.path).join(" and ")}.`
+        : "Embedding gives one self-contained file. Without it the page loads the files from beside it.";
+    const wasDisabled = inlineEl.disabled;
+    inlineEl.disabled = !canInline;
+    if (!canInline) inlineEl.checked = false;
+    else if (wasDisabled) inlineEl.checked = true;
+    inlineEl.parentElement.title = note;
+    body.querySelector("#gen-inline-note").textContent = note;
+    filesEl.hidden = !refs.length;
+    filesEl.innerHTML = refs.length
+      ? `<span class="gen-files-head">Files the TOML names:</span>` + refs.map((r) =>
+        `<span class="gen-file${r.bytes ? " attached" : ""}" title="${esc(r.role)}: ${esc(r.path)}">${esc(r.path.split(/[\\/]/).pop())} ` +
+        `<span class="gen-file-state">${r.bytes ? `attached, ${esc(sizeOf(r.bytes.length))}` : "not attached"}</span></span>`).join("") +
+        `<label class="file-btn" title="Pick the files under the names the TOML gives them">Attach files…<input type="file" id="gen-attach" multiple></label>`
+      : "";
+    const attach = filesEl.querySelector("#gen-attach");
+    if (attach) {
+      attach.addEventListener("change", async () => {
+        const picked = [...attach.files];
+        attach.value = "";
+        if (!picked.length) return;
+        session.addFiles(await Promise.all(picked.map(async (f) => [f.name, new Uint8Array(await f.arrayBuffer())])));
+        renderFilesList();
+        refresh();
+      });
+    }
+    return { refs, canInline };
+  };
+
+  const renderThemeNote = () => {
+    const name = session.theme || "default";
+    themeNote.hidden = bundled.has(name);
+    themeNote.textContent = bundled.has(name) ? "" :
+      `This board TOML names the theme "${name}", which is not bundled with WebFlash, and the site renders with the bundled ` +
+      `themes only: pick one here, or render the page with the command line (webflash ${session.tomlName}) next to the theme's file.`;
+    return bundled.has(name);
+  };
 
   // Honor the height protocol the generated page speaks, the one md-iframe's
   // listener implements: the frame takes the height the page reports.
@@ -187,15 +255,29 @@ export async function openGenerate(session) {
     commandEl.textContent = `webflash ${session.tomlName}${inlineEl.checked ? " -i" : ""}`;
   };
 
+  // Two renders when they differ: the download is the command line's page;
+  // the preview runs its runtime from this site, with every attached file
+  // inlined so the srcdoc frame has them.
   const refresh = async () => {
     const mine = ++renderCount;
     statusEl.textContent = "Rendering…";
     showCommand();
+    const { refs, canInline } = renderFilesList();
+    if (!renderThemeNote()) {
+      setOk(false);
+      showWarnings([]);
+      previewEl.replaceChildren();
+      statusEl.textContent = "";
+      return;
+    }
+    const files = renderFiles(session);
+    const image = refs.find((r) => r.role === "image");
+    const tables = session.tables();
+    const preview = previewToml(tables, engineUrl, { imageAttached: !image || Boolean(image.bytes) });
     try {
-      const out = await runtime.render(session.tomlText, {
-        inline: inlineEl.checked,
-        files: renderFiles(session),
-      });
+      const out = await runtime.render(session.tomlText, { inline: inlineEl.checked, files });
+      const shown = preview === session.tomlText && canInline === inlineEl.checked
+        ? out : await runtime.render(preview, { inline: canInline, files });
       if (mine !== renderCount) return;     // a newer render is on its way
       html = out.html;
       setOk(true);
@@ -203,7 +285,7 @@ export async function openGenerate(session) {
       statusEl.textContent = sizeText(html);
       const frame = document.createElement("iframe");
       frame.title = "Preview of the generated page";
-      frame.srcdoc = html;
+      frame.srcdoc = shown.html;
       previewEl.replaceChildren(frame);
     } catch (e) {
       if (mine !== renderCount) return;
@@ -222,6 +304,17 @@ export async function openGenerate(session) {
   inlineEl.addEventListener("change", refresh);
   downloadBtn.addEventListener("click", () => {
     if (ok) saveFile(html, `${stem}.webflash.html`, "text/html");
+  });
+  const copyBtn = body.querySelector("#gen-copy-link");
+  copyBtn.addEventListener("click", async () => {
+    const link = openInSiteUrl(session.board.engine_url || engineUrl, session.tomlText);
+    try {
+      await navigator.clipboard.writeText(link);
+      copyBtn.textContent = "Link copied";
+    } catch (e) {
+      copyBtn.textContent = "Could not copy";
+    }
+    setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1500);
   });
   body.querySelector("#gen-download-toml").addEventListener("click", () => {
     saveFile(session.tomlText, session.tomlName, "text/plain");
