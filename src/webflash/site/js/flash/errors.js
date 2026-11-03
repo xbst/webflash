@@ -70,6 +70,9 @@ export function capabilities(nav = typeof navigator !== "undefined" ? navigator 
     usb: !!(nav && nav.usb && typeof nav.usb.requestDevice === "function"),
     serial: !!(nav && nav.serial && typeof nav.serial.requestPort === "function"),
     fileSystem: !!(win && typeof win.showDirectoryPicker === "function"),
+    // Chrome hides WebUSB, Web Serial and the folder picker off https and
+    // localhost; a window without the flag (the Node mocks) counts as secure.
+    secure: !win || win.isSecureContext !== false,
     os: detectOs(nav),
     browser: detectBrowser(nav),
   };
