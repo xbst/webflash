@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from .driver import Command, DriverError, Sysroot, tool_family
+from .driver import COMPAT_DIR, Command, DriverError, Sysroot, tool_family
 from .pyrun import real_output
 
 
@@ -180,14 +180,24 @@ def _to_py(value: Any) -> Any:
     return value
 
 
+def _inside(path: Path, folder: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(folder.resolve())
+    except AttributeError:  # pragma: no cover - Python 3.8
+        return str(path.resolve()).startswith(str(folder.resolve()))
+
+
 def job_inputs(command: Command, cwd: Path, links: Any = None) -> tuple[dict[str, bytes], dict[str, str]]:
     """The generated files a command reads, for a toolchain that holds the
     source tree already (the browser's workers): the files the command names
     under ``out/``, the generated headers and sources in the ``out/`` include
-    directories it searches, and the ``out/board`` links as symlinks.
+    directories it searches (the patched header copies under
+    ``out/webflash-compat/`` with their subfolders, since a vendor's headers
+    include ``component/x.h``), and the ``out/board`` links as symlinks.
     Everything is keyed by absolute path."""
     cwd = Path(cwd)
     out_dir = cwd / "out"
+    compat_dir = cwd / COMPAT_DIR
     files: dict[str, bytes] = {}
     symlinks: dict[str, str] = {}
 
@@ -201,16 +211,11 @@ def job_inputs(command: Command, cwd: Path, links: Any = None) -> tuple[dict[str
             add(rel)
     for inc in getattr(command, "include_dirs", []):
         inc_path = cwd / inc
-        if not inc_path.is_dir():
+        if not inc_path.is_dir() or not _inside(inc_path, out_dir):
             continue
-        try:
-            inside_out = inc_path.resolve().is_relative_to(out_dir.resolve())
-        except AttributeError:  # pragma: no cover - Python 3.8
-            inside_out = str(inc_path.resolve()).startswith(str(out_dir.resolve()))
-        if not inside_out:
-            continue
-        for p in sorted(inc_path.iterdir()):
-            if p.is_file() and p.suffix in (".h", ".hpp", ".inc", ".c", ".S", ".s", ".ld", ".lds"):
+        found = inc_path.rglob("*") if _inside(inc_path, compat_dir) else inc_path.iterdir()
+        for p in sorted(found):
+            if p.is_file() and p.suffix in (".h", ".hpp", ".hh", ".inc", ".c", ".S", ".s", ".ld", ".lds"):
                 files[p.as_posix()] = p.read_bytes()
     if links is not None:
         for link, target in links.targets.items():
