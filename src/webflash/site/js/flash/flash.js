@@ -162,20 +162,22 @@ export async function flashImage(method, image, options = {}, callbacks = {}) {
     case "dfu": {
       status("Writing over DFU");
       const r = await flashDfu(connection.device, image, { verify, leave }, { log, progress });
+      // The ST ROM's serial is not Klipper's (another derivation of the chip id), so it stays out of the hint.
       return { method, verified: r.verified, deviceText: r.device, serial: r.serial, mcu, uuid: null,
-               hint: printerConfigHint({ method, mcu, serial: null, project: options.project }), info: r, restarted: leave };
+               hint: hintFor(options, { method, mcu, serial: null }), info: r, restarted: leave };
     }
     case "picoboot": {
       status("Writing over PICOBOOT");
       const r = await flashPicoboot(connection.device, image, { verify, reboot: leave }, { log, progress });
+      // The BOOTSEL device's serial is the flash's unique id, the same bytes Klipper's RP2040 port reports as its serial.
       return { method, verified: r.verified, deviceText: r.device, serial: r.serial, mcu: mcu || r.model, uuid: null,
-               hint: printerConfigHint({ method, mcu: mcu || r.model, serial: null, project: options.project }), info: r, restarted: leave };
+               hint: hintFor(options, { method, mcu: mcu || r.model, serial: r.serial }), info: r, restarted: leave };
     }
     case "uf2": {
       status("Writing the .uf2 onto the drive");
       const r = await flashUf2(connection.device, image, { family: options.family || null, fileName: options.fileName || null }, { log, progress });
       return { method, verified: false, deviceText: `BOOTSEL drive ${r.info.boardId || r.info.model}`, serial: null, mcu: mcu || r.chip, uuid: null,
-               hint: printerConfigHint({ method, mcu: mcu || r.chip, serial: null, project: options.project }), info: r,
+               hint: hintFor(options, { method, mcu: mcu || r.chip, serial: null }), info: r,
                restarted: true, disappeared: r.disappeared };
     }
     default:
@@ -192,8 +194,9 @@ async function flashOverSerial(image, options, { log, progress, status }) {
     const prime = options.prime === null || options.prime === undefined ? shouldPrime(options.mcu) : options.prime;
     status("Talking to Katapult");
     const r = await flashKatapult(new SerialKatapultLink(link), image, { mcu: options.mcu, prime, timing: options.timing || {}, verify: options.verify }, { log, progress });
+    const onCan = options.iface === "can" || options.iface === "usbcan";
     return { method: "katapult", verified: r.verified, deviceText: `Katapult ${r.softwareVersion} on ${link.describe()} (${r.mcu})`, serial: null,
-             mcu: r.mcu, uuid: null, hint: printerConfigHint({ method: "katapult", mcu: r.mcu, serial: null, project: options.project }), info: r, restarted: true };
+             mcu: r.mcu, uuid: onCan ? options.uuid || null : null, hint: hintFor(options, { method: "katapult", mcu: r.mcu, serial: null }), info: r, restarted: true };
   } finally {
     try { await link.close(); } catch (e) { /* the board restarted */ }
   }
@@ -250,7 +253,7 @@ async function flashOverCan(image, options, { log, progress, status, pickNode })
       status("Talking to Katapult over CAN");
       const r = await flashKatapult(link, image, { mcu: options.mcu, uuid, prime: false, timing: options.timing || {}, verify: options.verify }, { log, progress });
       return { method: "katapult-can", verified: r.verified, deviceText: `Katapult ${r.softwareVersion} at CAN UUID ${uuidHex} (${r.mcu}) through ${info.device}`,
-               serial: null, mcu: r.mcu, uuid: uuidHex, hint: printerConfigHint({ method: "katapult-can", uuid: uuidHex, project: options.project }), info: r, restarted: true };
+               serial: null, mcu: r.mcu, uuid: uuidHex, hint: hintFor(options, { method: "katapult-can", mcu: r.mcu, uuid: uuidHex }), info: r, restarted: true };
     } finally {
       await link.close();
     }
@@ -287,6 +290,20 @@ export function fasthash64(bytes, seed) {
     h = (h * m) & M64;
   }
   return mix(h);
+}
+
+/**
+ * The printer.cfg hint for a result. The firmware's interface
+ * (options.iface, from its dictionary or its configuration) decides the
+ * form rather than the transport it was flashed over, and a CAN UUID known
+ * from the bus goes in: the node's own, or for a bridge flashed over USB
+ * the UUID it answered with on the bus (options.uuid, which the panel
+ * carries over from the node list).
+ */
+function hintFor(options, { method, mcu = null, serial = null, uuid = null }) {
+  const iface = options.iface || null;
+  const id = uuid || (iface === "can" || iface === "usbcan" ? options.uuid || null : null);
+  return printerConfigHint({ method, mcu, serial, uuid: id, iface, project: options.project });
 }
 
 /** The CAN UUID (12 hex digits) a Klipper bridge derives from its USB serial number (its chip id). */

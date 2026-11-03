@@ -589,14 +589,28 @@ export function defaultInstructions(method, family = null, { fromKlipper = true 
 }
 
 /** The printer.cfg line after a successful flash (SPEC 11.10), best effort. */
-export function printerConfigHint({ method, mcu = null, serial = null, uuid = null, project = "klipper" } = {}) {
+export function printerConfigHint({ method, mcu = null, serial = null, uuid = null, project = "klipper", iface = null } = {}) {
   if (project === "katapult") return null;
-  if (method === "katapult-can" || uuid) {
-    return uuid ? `[mcu]\ncanbus_uuid: ${uuid}` : "[mcu]\ncanbus_uuid: <the node's UUID>";
+  // The firmware's interface decides the form, not the transport it was
+  // flashed over: a CAN node flashed through the ROM's USB DFU, or a USB to
+  // CAN bridge flashed over its own USB port, both go into printer.cfg by
+  // canbus_uuid (STOP 4 saw a bridge get a serial path).
+  const kind = iface || (method === "katapult-can" ? "can" : null);
+  if (kind === "can" || kind === "usbcan" || uuid) {
+    if (uuid) return `[mcu]\ncanbus_uuid: ${uuid}`;
+    const query = "~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0 lists it on the host";
+    return kind === "usbcan"
+      ? `[mcu]\ncanbus_uuid: <the bridge's UUID>\n# the bridge's UUID comes from its chip id; ${query}`
+      : `[mcu]\ncanbus_uuid: <the node's UUID>\n# ${query}`;
+  }
+  if (kind === "serial") {
+    return "[mcu]\nserial: /dev/serial/by-id/<the USB-UART adapter>\n# ls /dev/serial/by-id/ on the host shows the adapter's name";
   }
   const name = mcu || "<mcu>";
-  const ser = serial && /^[0-9A-Fa-f]{8,}$/.test(serial) ? serial.toUpperCase() : "<serial>";
-  return `[mcu]\nserial: /dev/serial/by-id/usb-Klipper_${name}_${ser}-if00`;
+  const known = !!(serial && /^[0-9A-Fa-f]{8,}$/.test(serial));
+  const ser = known ? serial.toUpperCase() : "<serial>";
+  const note = known ? "" : "\n# <serial> is the chip id, which this bootloader does not tell; ls /dev/serial/by-id/ on the host shows it once Klipper runs";
+  return `[mcu]\nserial: /dev/serial/by-id/usb-Klipper_${name}_${ser}-if00${note}`;
 }
 
 export function hex(n) {

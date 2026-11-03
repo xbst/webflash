@@ -53,6 +53,7 @@ export function createFlashPanel(root, options = {}) {
   const state = {
     firmware: null,       // what setFirmware gave
     method: null,
+    bridgeUuid: null,     // a bridge's own CAN UUID, kept for the flash that follows over its USB port
     phase: "idle",        // idle | ready | connecting | connected | flashing | done | failed
     connection: null,
     result: null,
@@ -409,9 +410,13 @@ export function createFlashPanel(root, options = {}) {
     renderStep();
     setStatus("Starting");
     const method = state.method;
+    // A CAN node that turned out to be the bridge itself continues over USB
+    // serial; its UUID from the bus goes into that flash's printer.cfg hint.
+    const bridgeUuid = state.bridgeUuid;
+    state.bridgeUuid = null;
     try {
       const r = await flashImage(method, fw.image, {
-        connection, mcu: fw.mcu || null, project: fw.project || "klipper", uuid: fw.uuid || null,
+        connection, mcu: fw.mcu || null, project: fw.project || "klipper", uuid: fw.uuid || bridgeUuid || null, iface: fw.iface || null,
         baud: fw.baud || 250000, bitrate: fw.bitrate || 1000000, family: fw.image.family || (family() === "rp2350" ? "rp2350-arm-s" : family() === "rp2040" ? "rp2040" : null),
         fileName: fw.image.name ? fw.image.name.replace(/\.(bin|elf|hex|uf2)$/i, "") + ".uf2" : null,
       }, { log, progress: setProgress, status: setStatus, pickNode });
@@ -449,6 +454,7 @@ export function createFlashPanel(root, options = {}) {
     if (r.hint) result.appendChild(el("button", { class: "mini", onclick: (e) => { e.preventDefault(); copyText(r.hint); } }, ["Copy"]));
     if (r.reenumerated && r.nextMethod && state.firmware.methods.some((m) => m.id === r.nextMethod)) {
       state.method = r.nextMethod;
+      state.bridgeUuid = r.uuid || null;
     }
     help.open = false;
   }

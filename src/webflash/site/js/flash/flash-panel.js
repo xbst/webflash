@@ -88,7 +88,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const artifacts = names.filter((n) => /\.(bin|uf2|elf|hex|dict|config)$/i.test(n) || n === ".config" || n === "defconfig")
       .map((n) => ({ name: n, bytes: outputs.get(n) }));
     return {
-      image, methods, warnings, instructions: tomlFlash().instructions, mcu, project, family: familyOf(cfg), artifacts,
+      image, methods, warnings, instructions: tomlFlash().instructions, mcu, project, family: familyOf(cfg), iface: interfaceOf(cfg), artifacts,
       source: "build", version: b.version || null, label: `${project} ${b.version || ""}`.trim(), bitrate: canBitrate(cfg),
     };
   }
@@ -109,7 +109,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const { methods, warnings } = methodsForPrebuilt({ mcu: pre.mcu || null, image, tomlMethods: tomlFlash().methods });
     return {
       image, methods, warnings, instructions: tomlFlash().instructions, mcu: pre.mcu || image.mcu || null, project: "klipper",
-      family: null, artifacts: [{ name: pre.file.split(/[\\/]/).pop(), bytes }], source: "prebuilt", version: image.version, label: pre.file,
+      family: null, iface: interfaceOfImage(image), artifacts: [{ name: pre.file.split(/[\\/]/).pop(), bytes }], source: "prebuilt", version: image.version, label: pre.file,
     };
   }
 
@@ -162,12 +162,19 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     }
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
-      family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : imageFamily(u.image), artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
+      family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : imageFamily(u.image), iface: dictCfg ? interfaceOf(dictCfg) : cfg && fits ? interfaceOf(cfg) : null,
+      artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
       label: u.name, bitrate: canBitrate(dictCfg || cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };
   }
 
   const IFACE_TEXT = { usb: "USB", can: "CAN bus", usbcan: "a USB to CAN bridge", serial: "a serial port" };
+
+  /** The interface a file's own Klipper dictionary names, or null. */
+  function interfaceOfImage(image) {
+    const synth = configFromImage(image);
+    return synth ? interfaceOf(synth) : null;
+  }
 
   function canBitrate(cfg) {
     const v = cfg ? configValue(cfg, "CANBUS_FREQUENCY") : null;
