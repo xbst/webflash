@@ -699,3 +699,20 @@ export function tomlToHash(text) {
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return `#toml=${btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
 }
+
+/**
+ * The WebFlash site an engine_url belongs to, as webflash's renderer.site_url
+ * says: the URL with its engine/vN/ folder taken off (a site hosted under a
+ * path keeps it), or the origin's root for any other runtime location.
+ */
+export function siteUrl(engineUrl) {
+  const url = String(engineUrl);
+  if (/engine\/v[0-9]+\/$/.test(url)) return url.replace(/engine\/v[0-9]+\/$/, "");
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(url);
+  return m ? `${m[1].toLowerCase()}://${m[2]}/` : `${new URL(url).origin}/`;
+}
+
+/** "Open in WebFlash": the site of an engine_url with a TOML text in its "#toml=". */
+export function openInSiteUrl(engineUrl, text) {
+  return siteUrl(engineUrl) + tomlToHash(text);
+}

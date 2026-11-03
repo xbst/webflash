@@ -1,0 +1,194 @@
+/* The embed runtime's controls (js/embed/), on a generated page. Only the
+   theme's variables are used (--accent, --control-bg, --log-bg, ...: the
+   page defines them for light and dark), and sizes are in em, so the theme's
+   font_scale reaches everything. The page's own stylesheet styles the card,
+   the title, the description and the photo. The flash panel's rules match
+   the classes js/flash/flash-ui.js writes. */
+
+.wf-app { display: flex; flex-direction: column; gap: .8em; }
+.wf-app [hidden] { display: none !important; }
+.wf-app .wf-title { margin: 0; }
+.wf-app .wf-desc p:last-child { margin-bottom: 0; }
+.wf-app .wf-image { margin: 0 auto; }
+.wf-app .wf-box p, .wf-app .wf-version p, .wf-app .wf-option-note, .wf-app .wf-foot, .wf-app > p { margin: 0; }
+.wf-app h2.wf-section {
+  margin: 0; font-size: .8em; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted);
+}
+.wf-muted { color: var(--text-muted); }
+
+/* --- Controls --- */
+
+.wf-app button, .wf-app input, .wf-app select { font: inherit; font-size: .93em; color: var(--control-text); }
+.wf-app button {
+  padding: .4em .95em; background: var(--control-bg); border: 1px solid var(--control-border); border-radius: 6px;
+  cursor: pointer; line-height: 1.3; white-space: nowrap;
+}
+.wf-app button:hover:not(:disabled) { border-color: var(--accent); }
+.wf-app button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.wf-app button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.wf-app button:disabled { opacity: .5; cursor: default; }
+.wf-app button.mini { padding: .1em .55em; font-size: .78em; font-weight: 400; }
+.wf-app select, .wf-app input[type="text"] {
+  padding: .32em .5em; background: var(--control-bg); border: 1px solid var(--control-border); border-radius: 6px;
+  min-width: 0; max-width: 100%;
+}
+.wf-app select { cursor: pointer; }
+.wf-app select:disabled, .wf-app input:disabled { opacity: .55; cursor: default; }
+.wf-app input[type="checkbox"], .wf-app input[type="radio"] { accent-color: var(--accent); width: 1.1em; height: 1.1em; margin: 0; }
+.wf-app :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wf-app progress { width: 100%; height: .5em; accent-color: var(--accent); }
+
+/* --- Boxes: notices, errors, the download list --- */
+
+.wf-notes { display: flex; flex-direction: column; gap: .5em; }
+.wf-notes:empty { display: none; }
+.wf-box {
+  padding: .6em .8em; border: 1px solid var(--panel-border); border-left-width: 3px; border-radius: 6px;
+  font-size: .9em; line-height: 1.5; display: flex; flex-direction: column; gap: .35em; align-items: flex-start;
+}
+.wf-box.wf-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.wf-box.wf-error { border-color: var(--error); background: color-mix(in srgb, var(--error) 8%, transparent); }
+.wf-box.wf-info { border-color: var(--accent); }
+.wf-box.wf-consent { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.wf-box.wf-error strong { color: var(--error); }
+.wf-box pre {
+  margin: 0; padding: .45em .6em; max-height: 16em; overflow: auto; width: 100%;
+  background: var(--log-bg); color: var(--log-text); border-radius: 4px;
+  font-family: var(--mono-font); font-size: .85em; white-space: pre-wrap; word-break: break-word;
+}
+.wf-downloads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25em; width: 100%; }
+.wf-downloads li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15em .7em; }
+.wf-downloads li > span:first-child { flex: 1 1 60%; min-width: 0; }
+.wf-size { font-family: var(--mono-font); font-size: .9em; white-space: nowrap; }
+.wf-cached { font-size: .85em; color: var(--ok); white-space: nowrap; }
+.wf-badge {
+  display: inline-block; padding: 0 .45em; border: 1px solid var(--warn); border-radius: 1em;
+  color: var(--warn); font-size: .75em; line-height: 1.5; vertical-align: middle;
+}
+
+/* --- Firmware: project, version, options --- */
+
+.wf-fw { display: flex; flex-direction: column; gap: .7em; }
+.wf-version p { margin: 0; }
+.wf-fixed { font-size: .95em; }
+.wf-fixed strong { font-weight: 600; }
+.wf-row, .wf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5em .8em; }
+.wf-field { display: inline-flex; align-items: center; gap: .45em; color: var(--text-muted); font-size: .93em; min-width: 0; }
+.wf-field select { color: var(--control-text); }
+
+.wf-options { display: flex; flex-direction: column; gap: .55em; padding: .6em 0; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
+.wf-option { display: grid; grid-template-columns: minmax(8em, 1fr) minmax(0, 1.6fr); gap: .25em .8em; align-items: center; }
+.wf-option-label { font-weight: 500; }
+.wf-option-control { display: flex; align-items: center; gap: .4em; min-width: 0; flex-wrap: wrap; }
+.wf-option-control select, .wf-option-control input[type="text"] { width: 100%; }
+.wf-option-note, .wf-option-help { grid-column: 2; font-size: .85em; color: var(--text-muted); }
+.wf-option-note.wf-bad { color: var(--error); }
+.wf-option-help:empty { display: none; }
+.wf-option-help p { margin: 0 0 .3em; }
+.wf-option-help p:last-child { margin-bottom: 0; }
+.wf-more summary { cursor: pointer; }
+.wf-more p { margin-top: .3em; }
+
+/* --- Build: the button, the progress, the result --- */
+
+.wf-status { font-size: .88em; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-status.busy { color: var(--text); }
+.wf-status.ok { color: var(--ok); }
+.wf-status.error { color: var(--error); }
+.wf-progress { display: flex; flex-direction: column; gap: .3em; }
+.wf-step { font-family: var(--mono-font); font-size: .82em; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.wf-app .memory { border-collapse: collapse; font-size: .85em; width: 100%; }
+.wf-app .memory caption { text-align: left; color: var(--text-muted); padding-bottom: .25em; }
+.wf-app .memory th { text-align: left; font-weight: 500; padding: .1em .8em .1em 0; white-space: nowrap; width: 1%; }
+.wf-app .memory td { padding: .1em 0; }
+.wf-app .mem-bar { position: relative; width: 100%; padding-right: .8em !important; }
+.wf-app .mem-bar::before { content: ""; display: block; height: .45em; border-radius: .25em; background: var(--control-bg); border: 1px solid var(--control-border); }
+.wf-app .mem-fill { position: absolute; left: 0; top: 50%; height: .45em; margin-top: -.225em; border-radius: .25em; background: var(--accent); }
+.wf-app .mem-fill.full { background: var(--error); }
+.wf-app .mem-fill.ram { background: var(--text-muted); }
+.wf-app .mem-num { white-space: nowrap; font-family: var(--mono-font); color: var(--text-muted); padding-right: .6em !important; }
+.wf-app .mem-pct { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+
+.wf-app .artifacts:empty { display: none; }
+.wf-app .artifacts-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3em .6em; margin-bottom: .35em; font-size: .85em; color: var(--text-muted); }
+.wf-app .artifacts-version { font-family: var(--mono-font); }
+.wf-app .artifacts-stale { color: var(--warn); }
+.wf-app .artifact-buttons { display: flex; flex-wrap: wrap; gap: .4em; }
+.wf-app button.artifact { display: inline-flex; align-items: baseline; gap: .45em; font-family: var(--mono-font); font-size: .82em; }
+.wf-app .artifact-size { opacity: .7; font-size: .9em; }
+
+/* --- Logs --- */
+
+.wf-app .log-box summary {
+  display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-size: .88em; list-style: none;
+}
+.wf-app .log-box summary::-webkit-details-marker { display: none; }
+.wf-app .log-box summary::before { content: "\25B8"; font-size: .8em; }
+.wf-app .log-box[open] summary::before { content: "\25BE"; }
+.wf-app .log {
+  margin: .4em 0 0; min-height: 4em; max-height: 18em; overflow: auto; padding: .55em .7em;
+  background: var(--log-bg); color: var(--log-text); border-radius: 6px;
+  font-family: var(--mono-font); font-size: .8em; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+/* --- The flash panel (js/flash/flash-ui.js) --- */
+
+.wf-flash { display: flex; flex-direction: column; gap: .5em; padding-top: .7em; border-top: 1px solid var(--divider); }
+.wf-app .flash-panel { display: flex; flex-direction: column; gap: .6em; }
+.wf-app .flash-panel .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; }
+.wf-app .flash-panel .card-spacer { display: none; }
+.wf-app .flash-panel .field { display: inline-flex; align-items: center; gap: .45em; color: var(--text-muted); font-size: .93em; max-width: 100%; }
+.wf-app .flash-panel .field select { color: var(--control-text); }
+.wf-app .flash-firmware, .wf-app .flash-reason { font-size: .85em; line-height: 1.55; color: var(--text-muted); word-break: break-word; }
+.wf-app .flash-firmware strong { color: var(--text); font-weight: 500; }
+.wf-app .flash-reason:empty { display: none; }
+.wf-app .flash-muted { color: var(--text-muted); }
+.wf-app .flash-instructions { line-height: 1.55; font-size: .93em; }
+.wf-app .flash-instructions p { margin: 0 0 .4em; }
+.wf-app .flash-instructions p:last-child { margin-bottom: 0; }
+.wf-app .flash-needs { font-size: .85em; color: var(--text-muted); }
+.wf-app .flash-actions { display: flex; flex-wrap: wrap; gap: .5em; align-items: center; }
+.wf-app .flash-notice, .wf-app .flash-prompt, .wf-app .flash-confirm, .wf-app .flash-result {
+  padding: .6em .8em; border: 1px solid var(--panel-border); border-radius: 6px; font-size: .9em; line-height: 1.5;
+}
+.wf-app .flash-notice { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.wf-app .flash-notice p, .wf-app .flash-prompt p, .wf-app .flash-confirm p, .wf-app .flash-result p { margin: 0 0 .45em; }
+.wf-app .flash-notice p:last-child { margin-bottom: 0; }
+.wf-app .flash-prompt input[type="text"] { font-family: var(--mono-font); width: 11em; }
+.wf-app .flash-prompt input.bad { border-color: var(--error); }
+.wf-app .flash-table { border-collapse: collapse; margin-bottom: .45em; }
+.wf-app .flash-table td { padding: .1em .8em .1em 0; vertical-align: top; }
+.wf-app .flash-table td:first-child { color: var(--text-muted); white-space: nowrap; }
+.wf-app .flash-nodes { display: flex; flex-direction: column; gap: .3em; margin: .3em 0 .5em; }
+.wf-app .flash-node { display: flex; align-items: center; gap: .4em; font-family: var(--mono-font); font-size: .9em; cursor: pointer; }
+.wf-app .flash-progress-wrap { display: flex; flex-direction: column; gap: .3em; }
+.wf-app .flash-phase { font-size: .88em; color: var(--text-muted); }
+.wf-app .flash-result.ok { border-color: var(--ok); }
+.wf-app .flash-result.ok strong { color: var(--ok); }
+.wf-app .flash-result.error { border-color: var(--error); background: color-mix(in srgb, var(--error) 8%, transparent); }
+.wf-app .flash-result.error strong { color: var(--error); }
+.wf-app .flash-hint {
+  margin: 0 0 .45em; padding: .45em .6em; background: var(--log-bg); color: var(--log-text); border-radius: 4px;
+  font-family: var(--mono-font); font-size: .85em; white-space: pre-wrap; word-break: break-word;
+}
+.wf-app .help-box summary { cursor: pointer; color: var(--text-muted); font-size: .88em; }
+.wf-app .flash-help-body p { margin-top: .4em; color: var(--text-muted); line-height: 1.55; font-size: .9em; }
+.wf-app .flash-fixes { margin: .4em 0 0 1.2em; padding: 0; line-height: 1.55; font-size: .9em; }
+.wf-app .flash-fixes li { margin-bottom: .4em; }
+.wf-app .flash-log { max-height: 14em; }
+
+/* --- Foot --- */
+
+.wf-foot { display: flex; justify-content: flex-end; font-size: .85em; }
+.wf-open::after { content: " \2197"; }
+
+/* --- Narrow cards --- */
+
+@media (max-width: 480px) {
+  .wf-option { grid-template-columns: minmax(0, 1fr); }
+  .wf-option-note, .wf-option-help { grid-column: 1; }
+  .wf-app .flash-panel .field, .wf-field { flex: 1 1 100%; }
+  .wf-app .flash-panel .field select, .wf-field select { flex: 1; }
+}
