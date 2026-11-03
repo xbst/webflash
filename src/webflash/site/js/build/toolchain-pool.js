@@ -185,6 +185,40 @@ function now() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
+// ── Timing ───────────────────────────────────────────────────────────
+
+const median = (xs) => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * What the workers' stats (ToolchainPool.stats()) say about a build: {jobs,
+ * workers: [{jobs, busy, peakMemory}], compiles: {count, median, max,
+ * slowest}, links: [{out, ms}], others, overlap} (milliseconds; overlap the
+ * most jobs that ran at the same moment, from the timelines).
+ */
+export function summarizeStats(stats) {
+  const all = stats.flatMap((s) => s.timeline || []);
+  const compiles = all.filter((t) => /^clang/.test(t.tool) && /\.o$/.test(t.out));
+  const links = all.filter((t) => t.tool === "ld.lld" || (/^clang/.test(t.tool) && /\.elf$/.test(t.out)));
+  const slowest = compiles.reduce((a, b) => (b.ms > (a ? a.ms : -1) ? b : a), null);
+  const edges = all.flatMap((t) => [[t.start, 1], [t.start + t.ms, -1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let overlap = 0;
+  let open = 0;
+  for (const [, d] of edges) overlap = Math.max(overlap, (open += d));
+  return {
+    jobs: all.length,
+    workers: stats.map((s) => ({ jobs: s.jobs, busy: s.busy, peakMemory: s.peakMemory })),
+    compiles: { count: compiles.length, median: median(compiles.map((t) => t.ms)), max: slowest ? slowest.ms : 0, slowest: slowest ? slowest.out : "" },
+    links: links.map((t) => ({ out: t.out, ms: t.ms })),
+    others: all.length - compiles.length - links.length,
+    overlap,
+  };
+}
+
 // ── Sizing ───────────────────────────────────────────────────────────
 
 /**

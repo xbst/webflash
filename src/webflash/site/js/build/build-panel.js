@@ -21,7 +21,7 @@ import { blobSize, blobUrl, formatBytes, projectTitle } from "../configure/sourc
 import { copyText } from "../configure/config-tab.js";
 import {
   ToolchainPool, chosenWorkerCount, defaultWorkerCount, discoverToolchain, loadToolchainFiles,
-  setChosenWorkerCount, workerCount,
+  setChosenWorkerCount, summarizeStats, workerCount,
 } from "./toolchain-pool.js";
 import { cachedFlags, clearCache, isCached, storageEstimate } from "./cache.js";
 import { buildRecord, renderArtifacts, renderMemory } from "./artifacts.js";
@@ -401,9 +401,8 @@ export class BuildPanel {
     await runtime.setToolchain(tc.manifest);
     // Jobs a failed build left running must not land in this one's out/.
     await runtime.toolchainIdle();
-    await runtime.call("toolchainStats", [true]);
+    await this.pool.stats({ reset: true });
     this._check(signal);
-    this.engineStart = now();
     const off = runtime.onProgress((phase, detail, info) => this.onEngineProgress(phase, detail, info, job));
     let result;
     try {
@@ -412,7 +411,7 @@ export class BuildPanel {
       off();
       this.flushLog();
     }
-    this.workerStats = await runtime.call("toolchainStats", [true]).catch(() => null);
+    this.workerStats = await this.pool.stats({ reset: true }).catch(() => null);
     if (this.pool.reuse) await this.pool.dispose();
     const outputs = new Map();
     for (const name of Object.keys(result.outputs || {})) outputs.set(name, await runtime.buildOutput(name));
@@ -459,9 +458,17 @@ export class BuildPanel {
     renderMemory(this.els.memory, build.memory);
     const engine = Number(result.duration) * 1000;
     this.setStatus("ok", `Built in ${seconds(engine)}`, `The build took ${seconds(engine)}; ${seconds(total)} with the downloads and starting the compiler.`);
+    build.timing = { engine, total, workers: this.pool ? this.pool.size : 0, summary: null };
     if (this.workerStats && this.workerStats.length) {
-      this.appendLog(`WebFlash: ${this.workerStats.map((w, i) => `worker ${i + 1}: ${w.jobs} jobs, ${seconds(w.busy)} busy` +
-        `${w.peakMemory ? `, ${formatBytes(w.peakMemory)} peak` : ""}`).join("; ")}.`);
+      const sum = summarizeStats(this.workerStats);
+      build.timing.summary = sum;
+      const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : seconds(n));
+      this.appendLog(`WebFlash: ${sum.jobs} tool runs on ${sum.workers.length} compiler worker${sum.workers.length === 1 ? "" : "s"}, ` +
+        `up to ${sum.overlap} at once; ${sum.compiles.count} compiles, median ${ms(sum.compiles.median)}, ` +
+        `slowest ${ms(sum.compiles.max)} (${sum.compiles.slowest})` +
+        `${sum.links.length ? `; ${sum.links.map((l) => `link ${l.out} ${ms(l.ms)}`).join(", ")}` : ""}.`);
+      this.appendLog(`WebFlash: ${sum.workers.map((w, i) => `worker ${i + 1}: ${w.jobs} runs, ${ms(w.busy)} busy` +
+        `${w.peakMemory ? `, ${formatBytes(w.peakMemory)} peak memory` : ""}`).join("; ")}.`);
       this.flushLog();
     }
     s.build = build;
