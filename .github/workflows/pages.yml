@@ -245,6 +245,51 @@ jobs:
           PY
           webflash sources check --out _site/sources
 
+      - name: Report the snapshot gate
+        run: |
+          # What the gate found for every published ref, on the run's page: a
+          # failure turns the run red, but a green run should still say that
+          # the gate ran, and on which rows.
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path("_site/sources")
+          index = json.loads((root / "index.json").read_text(encoding="utf-8"))
+          table = ["### Snapshot gate", "", "| Project | Ref | Version | Gate |", "|---|---|---|---|"]
+          passed, failed, unchecked = [], [], []
+          for name, project in index["projects"].items():
+              for ref in project["refs"]:
+                  label = f"{name} {ref['id']}"
+                  report = json.loads((root / ref["check_report"]).read_text(encoding="utf-8"))
+                  rows = report.get("rows", [])
+                  applied = [r for r in rows if r.get("applies")]
+                  if ref["checked"] is True:
+                      passed.append(label)
+                      verdict = f"passed, {len(applied)} row{'s' * (len(applied) != 1)}"
+                      skipped = len(rows) - len(applied)
+                      if skipped:
+                          verdict += f" ({skipped} {'does' if skipped == 1 else 'do'} not apply)"
+                  elif ref["checked"] is False:
+                      failed.append(label)
+                      bad = [r["row"] for r in applied if not (r["make_check"]["ok"] and r["build"]["ok"])]
+                      verdict = "**failed**: " + ", ".join(bad)
+                  else:
+                      unchecked.append(label)
+                      verdict = "not checked: " + report.get("note", "")
+                  table.append(f"| {name} | {ref['id']} | `{ref['describe']}` | {verdict.replace('|', '/')} |")
+          print("\n".join(table))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n".join(table) + "\n\n")
+          counts = [(len(passed), "passed"), (len(failed), "failed"), (len(unchecked), "not checked")]
+          total = len(passed) + len(failed) + len(unchecked)
+          print(f"::notice title=Snapshot gate::{total} refs: " + ", ".join(f"{n} {what}" for n, what in counts if n))
+          if failed:
+              print(f"::warning title=Snapshot gate::checked: false, offered with a warning: {', '.join(failed)}")
+          if unchecked:
+              print(f"::warning title=Snapshot gate::checked: null, nothing vouches for them: {', '.join(unchecked)}")
+          PY
+
       - name: Report the size
         run: |
           # GitHub Pages publishes sites of up to 1 GB. A part that does not
