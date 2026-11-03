@@ -8,7 +8,7 @@
 //   ?mock=picoboot   an RP2040 BOOTSEL device
 //   ?mock=can        a candleLight adapter with one Katapult and one Klipper node
 //   ?mock=uf2        a BOOTSEL drive
-//   &fail=claim|verify|mcu|rdp|timeout|cancel|busy   one failure to show its explanation
+//   &fail=claim|hang|verify|mcu|rdp|timeout|cancel|busy   one failure to show its explanation (hang: open() never settles, as Chrome on Windows without a WinUSB driver)
 //   &os=windows|linux|mac|android  &browser=firefox   pretend to be elsewhere
 //
 // The firmware is a small generated image at the method's usual address,
@@ -58,7 +58,7 @@ export async function installMocks(params) {
     usb.add(dev);
     firmware = { name: "klipper.bin", bytes: sampleBin(5000), address: 0x08000000 };
   } else if (kind === "picoboot") {
-    for (let i = 0; i < 20; i++) usb.willPick(() => (fail === "cancel" ? null : new PicobootMockDevice({ claimError, corruptReadAt: fail === "verify" ? 0x10000123 : null, rebootDelayCap: 300 })));
+    for (let i = 0; i < 20; i++) usb.willPick(() => (fail === "cancel" ? null : new PicobootMockDevice({ claimError, openHang: fail === "hang", corruptReadAt: fail === "verify" ? 0x10000123 : null, rebootDelayCap: 300 })));
     firmware = { name: "klipper.uf2", bytes: toUf2(fromBin(sampleBin(9000), 0x10000000), "rp2040") };
   } else if (kind === "can") {
     const nodes = [

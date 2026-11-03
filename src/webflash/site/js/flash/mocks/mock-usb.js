@@ -49,7 +49,7 @@ export function makeConfiguration({ value = 1, interfaces }) {
 }
 
 export class MockUsbDevice {
-  constructor({ vendorId, productId, productName = "", manufacturerName = "", serialNumber = "", configurations = [], claimError = null, openError = null }, handlers = {}) {
+  constructor({ vendorId, productId, productName = "", manufacturerName = "", serialNumber = "", configurations = [], claimError = null, openError = null, openHang = false }, handlers = {}) {
     this.vendorId = vendorId;
     this.productId = productId;
     this.productName = productName;
@@ -61,6 +61,7 @@ export class MockUsbDevice {
     this.lost = false;
     this.claimError = claimError;   // a DOMException to throw from claimInterface (driver, permissions)
     this.openError = openError;
+    this.openHang = openHang;       // open() never settles, as Chrome on Windows does without a WinUSB driver
     this.handlers = handlers;
     this.navigator = null;
     this.halted = new Set();        // "in:1" / "out:2"
@@ -74,6 +75,7 @@ export class MockUsbDevice {
   async open() {
     this._check();
     if (this.openError) throw this.openError;
+    if (this.openHang) { this.log.push(["open", "hang"]); return new Promise(() => {}); }
     if (this.opened) return;
     this.opened = true;
     this.log.push(["open"]);

@@ -1,8 +1,10 @@
 // A scripted RP2040 / RP2350 BOOTSEL ROM: the PICOBOOT interface of
 // pico-sdk's boot/picoboot.h on a mock USB device, with a flash array, the
 // mass-storage interface beside it, the status codes and the stalls a real
-// ROM produces. Knobs: the model, a refused claim, a sector whose erase
-// fails, a byte corrupted on read-back, and whether REBOOT is refused.
+// ROM produces. Knobs: the model, a refused claim, an open that never
+// settles (openHang, Chrome on Windows without a WinUSB driver), a sector
+// whose erase fails, a byte corrupted on read-back, and whether REBOOT is
+// refused.
 
 import { MockUsbDevice, makeConfiguration, ByteQueue, domError } from "./mock-usb.js";
 
@@ -12,7 +14,7 @@ const STATUS = { OK: 0, UNKNOWN_CMD: 1, INVALID_CMD_LENGTH: 2, INVALID_TRANSFER_
 const FLASH_START = 0x10000000;
 
 export class PicobootMockDevice extends MockUsbDevice {
-  constructor({ model = "rp2040", flashSize = 2 * 1024 * 1024, claimError = null, failEraseAt = null, corruptReadAt = null,
+  constructor({ model = "rp2040", flashSize = 2 * 1024 * 1024, claimError = null, openHang = false, failEraseAt = null, corruptReadAt = null,
                 rejectReboot = false, rebootDelayCap = 5, serialNumber = "E0C9125B0D9B" } = {}) {
     const rp2350 = model === "rp2350";
     super({
@@ -22,7 +24,7 @@ export class PicobootMockDevice extends MockUsbDevice {
         { number: 0, classCode: 0x08, subclassCode: 0x06, protocolCode: 0x50, endpoints: [{ number: 1, direction: "in" }, { number: 2, direction: "out" }] },
         { number: 1, classCode: 0xff, subclassCode: 0, protocolCode: 0, endpoints: [{ number: 3, direction: "out" }, { number: 4, direction: "in" }] },
       ] })],
-      claimError,
+      claimError, openHang,
     });
     this.model = model;
     this.flash = new Uint8Array(flashSize).fill(0xff);

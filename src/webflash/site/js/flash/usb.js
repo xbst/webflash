@@ -17,6 +17,7 @@
 import { FlashError, fail, isCancel } from "./errors.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const OPEN_TIMEOUT_MS = 10000;    // open, selectConfiguration, claimInterface, selectAlternateInterface
 
 /** Whether this browser has WebUSB at all. */
 export function hasWebUsb(nav = typeof navigator !== "undefined" ? navigator : null) {
@@ -89,6 +90,24 @@ export class UsbDevice {
     this.interfaceNumber = null;
     this.opened = false;
     this.claimed = [];
+    this.openTimeoutMs = OPEN_TIMEOUT_MS;
+  }
+
+  /**
+   * Opening, configuring and claiming have no timeout in WebUSB, and on
+   * Windows Chrome can sit forever on a device whose interface has no
+   * WinUSB driver (STOP 3 found the connect step stuck on an RP2040 in
+   * BOOTSEL). A bounded wait turns that into the driver steps.
+   */
+  async _bounded(promise, what) {
+    try {
+      return await withTimeout(promise, this.openTimeoutMs, "the device");
+    } catch (e) {
+      if (e instanceof FlashError && e.code === "timeout") {
+        throw new FlashError(`The browser did not finish ${what} within ${Math.round(this.openTimeoutMs / 1000)} s. The device is listed but cannot be used, which on Windows means its interface has no WinUSB driver.`, { code: "claim-failed", cause: e });
+      }
+      throw e;
+    }
   }
 
   get vendorId() { return this.raw.vendorId; }
@@ -118,7 +137,7 @@ export class UsbDevice {
   async open() {
     if (this.opened) return;
     try {
-      await this.raw.open();
+      await this._bounded(this.raw.open(), "opening the device");
     } catch (e) {
       throw mapOpenError(e);
     }
@@ -133,7 +152,7 @@ export class UsbDevice {
     const current = this.configuration;
     if (!current || current.configurationValue !== wanted) {
       try {
-        await this.raw.selectConfiguration(wanted);
+        await this._bounded(this.raw.selectConfiguration(wanted), "selecting the device's configuration");
       } catch (e) {
         throw mapClaimError(e);
       }
@@ -180,7 +199,7 @@ export class UsbDevice {
       // The connect step may have claimed it already, to surface driver and
       // permission problems before the confirmation.
       try {
-        await this.raw.claimInterface(found.interfaceNumber);
+        await this._bounded(this.raw.claimInterface(found.interfaceNumber), "claiming the device's interface");
       } catch (e) {
         throw mapClaimError(e);
       }
@@ -192,7 +211,7 @@ export class UsbDevice {
 
   async selectAlternate(alternateSetting, interfaceNumber = this.interfaceNumber) {
     try {
-      await this.raw.selectAlternateInterface(interfaceNumber, alternateSetting);
+      await this._bounded(this.raw.selectAlternateInterface(interfaceNumber, alternateSetting), "selecting the interface's alternate");
     } catch (e) {
       // A redundant SET_INTERFACE on a device with one alternate is refused
       // by some stacks; the interface is already what we asked for.
