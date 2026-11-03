@@ -2,29 +2,28 @@
 //
 // Build downloads what it needs the first time (the compiler release and the
 // library bundles the Makefiles name; on a first visit the list and the sizes
-// are shown before anything heavy downloads), starts the toolchain workers
-// (toolchain-pool.js), gives them and the engine the sources, and runs the
-// engine's build: the project's own Makefiles under Pyodide, every compiler
-// command sent to the workers. While it runs the Configure panel is locked,
-// the steps appear as the Makefiles echo them, the log fills, and Cancel stops
-// it (the workers are terminated and started again for the next build).
-// Afterwards the card shows the memory table and the files, and the result
-// goes to session.build, which the Flash card reads. A configuration changed
-// after the build turns the button into Rebuild.
+// are shown before anything heavy downloads), starts the toolchain workers,
+// gives them and the engine the sources, and runs the engine's build: the
+// project's own Makefiles under Pyodide, every compiler command sent to the
+// workers (builder.js does all of that; this is its view on the site). While
+// it runs the Configure panel is locked, the steps appear as the Makefiles
+// echo them, the log fills, and Cancel stops it (the workers are terminated
+// and started again for the next build). Afterwards the card shows the memory
+// table and the files, and the result goes to session.build, which the Flash
+// card reads. A configuration changed after the build turns the button into
+// Rebuild.
 //
 // The engine holds one tree, so the build runs in the configurator's queue:
 // nothing else touches the engine while it runs.
 
 import * as runtime from "../runtime.js";
 import { esc } from "../dialogs.js";
-import { blobSize, blobUrl, formatBytes, projectTitle } from "../configure/sources.js";
+import { formatBytes, projectTitle } from "../configure/sources.js";
 import { copyText } from "../configure/config-tab.js";
-import {
-  ToolchainPool, chosenWorkerCount, defaultWorkerCount, discoverToolchain, loadToolchainFiles,
-  setChosenWorkerCount, summarizeStats, workerCount,
-} from "./toolchain-pool.js";
-import { cachedFlags, clearCache, isCached, storageEstimate } from "./cache.js";
+import { chosenWorkerCount, defaultWorkerCount, setChosenWorkerCount, workerCount } from "./toolchain-pool.js";
+import { cachedFlags, clearCache, storageEstimate } from "./cache.js";
 import { buildRecord, renderArtifacts, renderMemory } from "./artifacts.js";
+import { BuildCancelled, Builder, treePath } from "./builder.js";
 
 const AUTO_KEY = "webflash.build.auto";
 // Run every job of a worker on one long-lived instance (toolchain.js's
@@ -43,10 +42,7 @@ function remember(key, value) {
   } catch (e) { /* storage can be blocked */ }
 }
 
-/** Where the engine extracts a ref's sources (bridge.load_sources). */
-export function treePath(project, ref) {
-  return `/webflash/src/${project}/${ref && ref.sha ? ref.sha : "local"}`;
-}
+export { treePath };
 
 /** The CONFIG_ lines of a .config, for telling whether two configurations differ. */
 export function configKey(text) {
@@ -70,6 +66,11 @@ function seconds(ms) {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
 }
 
+// Short times in milliseconds, longer ones in seconds.
+function duration(ms) {
+  return ms < 1000 ? `${Math.round(ms)} ms` : seconds(ms);
+}
+
 // formatBytes, with gigabytes for a browser's storage quota.
 function bigBytes(n) {
   return n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : formatBytes(n);
@@ -77,10 +78,6 @@ function bigBytes(n) {
 
 function now() {
   return performance.now();
-}
-
-class Cancelled extends Error {
-  constructor() { super("the build was cancelled"); }
 }
 
 export class BuildPanel {
@@ -93,18 +90,14 @@ export class BuildPanel {
     this.configurator = configurator;
     this.els = els;
     this.showError = showError;
-    this.toolchain = null;         // discoverToolchain's result
+    this.builder = new Builder({
+      workers: workerCount,
+      reuse: remembered(REUSE_KEY) === "1",
+      onCrash: () => this.renderPill(),
+    });
     this.toolchainError = "";
-    this.toolchainCached = false;
-    this._discovering = null;
-    this.files = null;             // the release files, once downloaded ({name: bytes})
-    this.pool = null;
-    this.generation = 0;           // bumped whenever the pool's workers start
-    this.attached = -1;            // the generation the engine has ports to
     this.running = false;
-    this.phase = "";               // what the pill says the toolchain is doing
     this.cancelled = false;
-    this.ctrl = null;
     this.last = null;              // {config, project, ref} of the last build that worked
     this.follow = true;            // the log scrolls with new lines
     this.logBuffer = [];
@@ -176,73 +169,47 @@ export class BuildPanel {
 
   // ── The toolchain ─────────────────────────────────────────────────
 
-  /** The published release (toolchain/current.json and its manifest), once per page. */
-  discover() {
-    if (!this._discovering) {
-      this._discovering = discoverToolchain(runtime.assetsBase()).then(async (tc) => {
-        this.toolchain = tc;
-        this.toolchainError = "";
-        this.toolchainCached = (await cachedFlags(tc.files)).every(Boolean);
-        this.renderPill();
-        return tc;
-      }).catch((e) => {
-        this._discovering = null;
-        this.toolchainError = e.message;
-        this.renderPill();
-        throw e;
-      });
+  /** The published release, once per page (the pill shows it). */
+  async discover() {
+    try {
+      const tc = await this.builder.discover();
+      this.toolchainError = "";
+      return tc;
+    } catch (e) {
+      this.toolchainError = e.message;
+      throw e;
+    } finally {
+      this.renderPill();
     }
-    return this._discovering;
-  }
-
-  toolchainSize(tc = this.toolchain) {
-    return tc ? tc.files.reduce((n, f) => n + (f.size || 0), 0) : 0;
   }
 
   renderPill(state = null) {
     const pill = this.els.pill;
     if (!pill) return;
-    const tc = this.toolchain;
+    const b = this.builder;
+    const tc = b.toolchain;
     const set = (cls, text, title, badge = "") => {
       pill.className = `pill${cls ? ` ${cls}` : ""}`;
       pill.innerHTML = `${esc(text)}${badge ? `<span class="pill-badge">${esc(badge)}</span>` : ""}`;
       pill.title = title;
     };
-    const size = formatBytes(this.toolchainSize());
+    const size = formatBytes(Builder.size(tc));
     const what = tc ? `The compiler ${tc.id} (LLVM ${tc.manifest.llvm}, Arm Toolchain for Embedded ${tc.manifest.atfe})` : "The compiler";
     if (state && state.busy) {
       set("busy", state.text, `${what}: ${state.title || state.text}`);
-    } else if (this.pool && this.pool.ready) {
-      set("ready", "Toolchain", `${what}: ${this.pool.size} worker${this.pool.size === 1 ? "" : "s"} running, ${size}` +
-        `${this.toolchainCached ? ", from this browser's cache" : ""}.`, this.toolchainCached ? "cached" : "");
+    } else if (b.ready) {
+      set("ready", "Toolchain", `${what}: ${b.pool.size} worker${b.pool.size === 1 ? "" : "s"} running, ${size}` +
+        `${b.cached ? ", from this browser's cache" : ""}.`, b.cached ? "cached" : "");
     } else if (this.toolchainError) {
       set("error", "Toolchain: none", this.toolchainError);
     } else if (tc) {
-      set(this.toolchainCached ? "" : "off", "Toolchain",
-        this.toolchainCached ? `${what}: ${size}, in this browser's cache; it starts with the first build.`
+      set(b.cached ? "" : "off", "Toolchain",
+        b.cached ? `${what}: ${size}, in this browser's cache; it starts with the first build.`
           : `${what}: ${size}, downloaded with the first build and kept in this browser's cache.`,
-        this.toolchainCached ? "cached" : "");
+        b.cached ? "cached" : "");
     } else {
       set("off", "Toolchain", "The compiler (clang and lld for Arm, in WebAssembly), downloaded with the first build.");
     }
-  }
-
-  /** What the first build downloads: [{label, size, cached}]. */
-  async downloadList(tc) {
-    const s = this.session;
-    const items = [];
-    if (!this.files) {
-      items.push({
-        label: `The compiler: clang and lld ${tc.manifest.llvm} for Arm, with the libraries of Arm Toolchain for Embedded ${tc.manifest.atfe}`,
-        size: this.toolchainSize(tc), cached: (await cachedFlags(tc.files)).every(Boolean),
-      });
-    }
-    const tree = treePath(s.project, s.ref);
-    for (const lib of (s.plan && s.plan.libs) || []) {
-      if (this.pool && this.pool.has(tree, [lib.dir])) continue;
-      items.push({ label: `The ${lib.dir} library bundle`, size: lib.size, cached: await isCached(blobUrl(lib.blob)) });
-    }
-    return items;
   }
 
   // ── Building ──────────────────────────────────────────────────────
@@ -257,12 +224,11 @@ export class BuildPanel {
       this.showFailure("No compiler", e.message);
       return;
     }
-    let list;
+    const s = this.session;
+    let list = [];
     try {
-      list = await this.downloadList(tc);
-    } catch (e) {
-      list = [];
-    }
+      list = await this.builder.downloads(tc, { project: s.project, ref: s.ref, libs: (s.plan && s.plan.libs) || [] });
+    } catch (e) { /* the build lists what it loads anyway */ }
     if (list.some((d) => !d.cached) && remembered(AUTO_KEY) !== "1") {
       this.showStart(tc, list);
       return;
@@ -294,27 +260,56 @@ export class BuildPanel {
     el.querySelector("#build-start-go").focus();
   }
 
+  // A row of the list for something the build does, as builder.js draws it.
+  step(text) {
+    const row = this.addRow(text);
+    if (/^Starting \d+ compiler worker/.test(text)) {
+      this.renderPill({ busy: true, text: "Toolchain: starting", title: text.toLowerCase() });
+    }
+    return {
+      progress: (done, total) => this.rowProgress(row, done, total),
+      finish: (note = null) => this.finishRow(row, note),
+    };
+  }
+
   async run(tc) {
     const s = this.session;
     if (this.running || !this.check().ok) return;
     this.running = true;
     this.cancelled = false;
-    this.crash = "";
-    this.ctrl = new AbortController();
-    const signal = this.ctrl.signal;
     const job = { project: s.project, ref: s.ref, configText: s.configText, defconfigText: s.defconfigText, failed: null };
     this.els.start.hidden = true;
     this.resetView();
     s.setLocked("A build is running.");
     this.startClock();
     this.render();
+    const step = (text) => this.step(text);
     try {
-      await this.ensurePool(tc, signal);
-      const { result, outputs } = await this.configurator.exclusive(() => this.engineBuild(tc, job, signal));
-      this.finishOk(result, outputs, job);
+      this.builder.begin();
+      await this.builder.prepare(tc, {
+        step,
+        onDownload: (done, total) => this.renderPill({
+          busy: true, text: `Toolchain: ${Math.round((100 * done) / (total || 1))}%`,
+          title: `downloading, ${formatBytes(done)} of ${formatBytes(total)}`,
+        }),
+      });
+      remember(AUTO_KEY, "1");
+      this.renderPill();
+      const out = await this.configurator.exclusive(() => {
+        if (!s.ref || s.ref.id !== job.ref.id || s.project !== job.project) {
+          throw new Error("The version changed before the build started.");
+        }
+        return this.builder.run({
+          project: job.project, ref: job.ref, index: s.index, configText: job.configText, defconfigText: job.defconfigText,
+          step, onProgress: (phase, detail, info) => this.onEngineProgress(phase, detail, info, job),
+        });
+      });
+      this.flushLog();
+      this.finishOk(out, job);
     } catch (e) {
-      if (this.cancelled && !this.crash) this.finishCancelled();
-      else this.finishFailed(job.failed, this.crash ? new Error(this.crash) : e);
+      this.flushLog();
+      if (e instanceof BuildCancelled) this.finishCancelled();
+      else this.finishFailed(job.failed, e);
     } finally {
       this.running = false;
       this.stopClock();
@@ -322,105 +317,6 @@ export class BuildPanel {
       this.render();
       this.renderPill();
     }
-  }
-
-  _check(signal) {
-    if (signal.aborted) throw new Cancelled();
-  }
-
-  /** The workers running the release: download it (or read the cache) and start them. */
-  async ensurePool(tc, signal) {
-    const n = workerCount();
-    if (this.pool && this.pool.ready && this.pool.size === n && this.pool.toolchain.id === tc.id) return;
-    if (!this.files || this.filesId !== tc.id) {
-      const size = this.toolchainSize(tc);
-      const row = this.addRow("Loading the compiler");
-      const got = await loadToolchainFiles(tc, {
-        onProgress: ({ done, total }) => {
-          this.rowProgress(row, done, total);
-          this.renderPill({ busy: true, text: `Toolchain: ${Math.round((100 * done) / (total || 1))}%`, title: `downloading, ${formatBytes(done)} of ${formatBytes(total)}` });
-        },
-      });
-      this.files = got.files;
-      this.filesId = tc.id;
-      this.toolchainCached = true;
-      this.finishRow(row, got.cached ? "from this browser's cache" : formatBytes(size));
-      this._check(signal);
-    }
-    if (!this.pool || this.pool.size !== n) {
-      if (this.pool) this.pool.terminate();
-      this.pool = new ToolchainPool({ size: n, onCrash: (m) => this.onCrash(m), reuse: remembered(REUSE_KEY) === "1" });
-    }
-    const row = this.addRow(`Starting ${n} compiler worker${n === 1 ? "" : "s"}`);
-    this.renderPill({ busy: true, text: "Toolchain: starting", title: `starting ${n} worker${n === 1 ? "" : "s"}` });
-    const started = now();
-    await this.pool.init(tc, this.files, { onProgress: ({ done, total }) => this.rowProgress(row, done, total) });
-    this.generation++;
-    this.finishRow(row, seconds(now() - started));
-    remember(AUTO_KEY, "1");
-    this.renderPill();
-    this._check(signal);
-  }
-
-  /** Inside the configurator's queue: the sources, then the engine's build. */
-  async engineBuild(tc, job, signal) {
-    const s = this.session;
-    const { project, ref } = job;
-    this._check(signal);
-    if (!s.ref || s.ref.id !== ref.id || s.project !== project) throw new Error("The version changed before the build started.");
-    const tree = treePath(project, ref);
-    // What the build needs, from the engine: every lib/ folder the Makefiles
-    // name, and the ones its tree lacks.
-    const plan = await runtime.plan(job.defconfigText);
-    const inCore = new Set(ref.core_libs || []);
-    const libs = (plan.libs || []).filter((dir) => !inCore.has(dir));
-    const absent = libs.filter((dir) => !(ref.libs || {})[dir]);
-    if (absent.length) throw new Error(`This snapshot does not include ${absent.join(", ")}, which the build needs.`);
-    const bundles = [
-      { key: "core", url: blobUrl(ref.core), size: blobSize(s.index, ref.core), label: "the sources" },
-      ...libs.map((dir) => ({ key: dir, url: blobUrl(ref.libs[dir]), size: blobSize(s.index, ref.libs[dir]), label: dir })),
-    ];
-    const engineLacks = new Set(plan.missing || []);
-    const forPool = bundles.filter((b) => !this.pool.has(tree, [b.key]));
-    for (const b of bundles) {
-      if (!forPool.includes(b) && !engineLacks.has(b.key)) continue;
-      this._check(signal);
-      const row = this.addRow(b.key === "core" ? "Reading the sources" : `Loading ${b.label}`);
-      const got = await runtime.fetchBlob(b.url, {
-        size: b.size, phase: "lib", detail: b.key, onProgress: ({ done, total }) => this.rowProgress(row, done, total),
-      });
-      b.bytes = got.bytes;
-      if (engineLacks.has(b.key)) await runtime.addLib(b.key, got.bytes);
-      this.finishRow(row, got.cached ? "from this browser's cache" : formatBytes(got.size));
-    }
-    if (forPool.length) {
-      this._check(signal);
-      const row = this.addRow(`Giving the sources to the compiler workers`);
-      await this.pool.mount(tree, forPool.map((b) => ({ key: b.key, bytes: b.bytes })));
-      this.finishRow(row);
-    }
-    if (this.attached !== this.generation) {
-      await runtime.attachToolchain(this.pool.ports());
-      this.attached = this.generation;
-    }
-    await runtime.setToolchain(tc.manifest);
-    // Jobs a failed build left running must not land in this one's out/.
-    await runtime.toolchainIdle();
-    await this.pool.stats({ reset: true });
-    this._check(signal);
-    const off = runtime.onProgress((phase, detail, info) => this.onEngineProgress(phase, detail, info, job));
-    let result;
-    try {
-      result = await runtime.build(job.configText, "", this.pool.size, { signal });
-    } finally {
-      off();
-      this.flushLog();
-    }
-    this.workerStats = await this.pool.stats({ reset: true }).catch(() => null);
-    if (this.pool.reuse) await this.pool.dispose();
-    const outputs = new Map();
-    for (const name of Object.keys(result.outputs || {})) outputs.set(name, await runtime.buildOutput(name));
-    return { result, outputs };
   }
 
   onEngineProgress(phase, detail, info, job) {
@@ -453,7 +349,7 @@ export class BuildPanel {
 
   // ── Endings ──────────────────────────────────────────────────────
 
-  finishOk(result, outputs, job) {
+  finishOk({ result, outputs, stats }, job) {
     const s = this.session;
     const total = now() - this.clockStart;
     this.finishOpen(null);
@@ -463,16 +359,13 @@ export class BuildPanel {
     renderMemory(this.els.memory, build.memory);
     const engine = Number(result.duration) * 1000;
     this.setStatus("ok", `Built in ${seconds(engine)}`, `The build took ${seconds(engine)}; ${seconds(total)} with the downloads and starting the compiler.`);
-    build.timing = { engine, total, workers: this.pool ? this.pool.size : 0, summary: null };
-    if (this.workerStats && this.workerStats.length) {
-      const sum = summarizeStats(this.workerStats);
-      build.timing.summary = sum;
-      const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : seconds(n));
-      this.appendLog(`WebFlash: ${sum.jobs} tool runs on ${sum.workers.length} compiler worker${sum.workers.length === 1 ? "" : "s"}, ` +
-        `up to ${sum.overlap} at once; ${sum.compiles.count} compiles, median ${ms(sum.compiles.median)}, ` +
-        `slowest ${ms(sum.compiles.max)} (${sum.compiles.slowest})` +
-        `${sum.links.length ? `; ${sum.links.map((l) => `link ${l.out} ${ms(l.ms)}`).join(", ")}` : ""}.`);
-      this.appendLog(`WebFlash: ${sum.workers.map((w, i) => `worker ${i + 1}: ${w.jobs} runs, ${ms(w.busy)} busy` +
+    build.timing = { engine, total, workers: this.builder.pool ? this.builder.pool.size : 0, summary: stats };
+    if (stats) {
+      this.appendLog(`WebFlash: ${stats.jobs} tool runs on ${stats.workers.length} compiler worker${stats.workers.length === 1 ? "" : "s"}, ` +
+        `up to ${stats.overlap} at once; ${stats.compiles.count} compiles, median ${duration(stats.compiles.median)}, ` +
+        `slowest ${duration(stats.compiles.max)} (${stats.compiles.slowest})` +
+        `${stats.links.length ? `; ${stats.links.map((l) => `link ${l.out} ${duration(l.ms)}`).join(", ")}` : ""}.`);
+      this.appendLog(`WebFlash: ${stats.workers.map((w, i) => `worker ${i + 1}: ${w.jobs} runs, ${duration(w.busy)} busy` +
         `${w.peakMemory ? `, ${formatBytes(w.peakMemory)} peak memory` : ""}`).join("; ")}.`);
       this.flushLog();
     }
@@ -494,7 +387,6 @@ export class BuildPanel {
     this.setStatus("error", "Failed", message.split("\n")[0]);
     this.showFailure("The build failed", message);
     this.els.logBox.open = true;
-    this.flushLog();
   }
 
   showFailure(title, message) {
@@ -512,28 +404,14 @@ export class BuildPanel {
     this.els.error.replaceChildren();
   }
 
-  /** A compiler worker died (most likely out of memory): the build cannot go on. */
-  onCrash(message) {
-    this.attached = -1;
-    this.renderPill();
-    if (!this.running) return;
-    this.crash = `${message}. It may have run out of memory: fewer compiler workers (About) use less.`;
-    this.cancelled = true;
-    if (this.ctrl) this.ctrl.abort();
-    runtime.detachToolchain(message).catch(() => {});
-  }
-
   async cancel() {
     if (!this.running || this.cancelled) return;
     this.cancelled = true;
     this.render();
     this.setStatus("", "Cancelling…", "Stopping the compiler workers and the build");
-    this.ctrl.abort();
     // The engine stops at its next step; compiles in flight stop with their
     // workers, which start again with the next build.
-    try { await runtime.detachToolchain("the build was cancelled"); } catch (e) { /* the engine is gone */ }
-    if (this.pool) this.pool.terminate("the build was cancelled");
-    this.attached = -1;
+    await this.builder.cancel("the build was cancelled");
     this.renderPill();
   }
 
@@ -553,7 +431,6 @@ export class BuildPanel {
     this.follow = true;
     logCount.textContent = "";
     logCopy.disabled = true;
-    this.workerStats = null;
   }
 
   addRow(text, { target = false } = {}) {
@@ -641,11 +518,12 @@ export class BuildPanel {
 
   /** The Toolchain row of About. */
   aboutText() {
-    const tc = this.toolchain;
+    const b = this.builder;
+    const tc = b.toolchain;
     if (!tc) return this.toolchainError ? esc(this.toolchainError) : "loads with the first build";
     return `${esc(tc.id)}: LLVM ${esc(tc.manifest.llvm)}, Arm Toolchain for Embedded ${esc(tc.manifest.atfe)}, ` +
-      `${esc(formatBytes(this.toolchainSize()))}${this.toolchainCached ? ", in this browser's cache" : ", not downloaded yet"}` +
-      `${this.pool && this.pool.ready ? `; ${this.pool.size} worker${this.pool.size === 1 ? "" : "s"} running` : ""}`;
+      `${esc(formatBytes(Builder.size(tc)))}${b.cached ? ", in this browser's cache" : ", not downloaded yet"}` +
+      `${b.ready ? `; ${b.pool.size} worker${b.pool.size === 1 ? "" : "s"} running` : ""}`;
   }
 
   /** About's build section: the worker count, what the cache holds, the toolchain's licenses. */
@@ -657,7 +535,7 @@ export class BuildPanel {
     for (let n = 1; n <= Math.max(4, Math.min(8, cores || 4)); n++) {
       options.push(`<option value="${n}"${chosen === n ? " selected" : ""}>${n}</option>`);
     }
-    const tc = this.toolchain;
+    const tc = this.builder.toolchain;
     const licenses = tc && tc.manifest.licenses ? Object.entries(tc.manifest.licenses) : [];
     const machine = [cores ? `${cores} cores` : "", navigator.deviceMemory ? `at least ${navigator.deviceMemory} GB of memory` : ""]
       .filter(Boolean).join(", ");
@@ -698,7 +576,8 @@ export class BuildPanel {
   async cacheCleared() {
     this.clearedAt = Date.now();
     remember(AUTO_KEY, null);
-    if (this.toolchain) this.toolchainCached = (await cachedFlags(this.toolchain.files)).every(Boolean);
+    const tc = this.builder.toolchain;
+    if (tc) this.builder.cached = (await cachedFlags(tc.files)).every(Boolean);
     this.renderPill();
   }
 }
