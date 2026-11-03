@@ -24,7 +24,7 @@ import { flashKatapult, SerialKatapultLink, queryNodes, assignNode, clearNodeIds
 import { GsUsbAdapter } from "./gsusb.js";
 import { flashDfu } from "./dfu.js";
 import { flashPicoboot } from "./picoboot.js";
-import { flashUf2, pickBootselDrive } from "./uf2.js";
+import { flashUf2, pickBootselDrive, checkBootselDrive, describeDrive } from "./uf2.js";
 
 export const TRANSPORTS = { dfu: "usb", picoboot: "usb", "katapult-can": "usb", katapult: "serial", uf2: "filesystem", download: "none" };
 
@@ -87,17 +87,27 @@ export function connectionFor(method, raw) {
     const device = raw instanceof SerialLink ? raw : new SerialLink(raw);
     return { kind: "serial", method, device, describe: () => device.describe() };
   }
-  return { kind: "filesystem", method, device: raw, describe: () => `drive "${raw.name || "?"}"` };
+  return { kind: "filesystem", method, device: raw, info: null, describe: () => describeDrive(null, raw.name) };
 }
 
 /**
  * Open and claim a USB connection's interface right after the picker, so a
  * missing driver or a busy device shows before the confirmation rather
  * than after Flash. The interface stays claimed for the flash; the protocol
- * modules' own claim() is then a no-op. Serial ports and drives are left
- * alone (opening a port needs the baud rate of the method).
+ * modules' own claim() is then a no-op. A picked drive is read for its
+ * INFO_UF2.TXT, so the confirmation names the board the drive belongs to
+ * rather than the folder's name, which Chrome on Windows gives as "\" for
+ * a drive root (STOP 3), and a folder that is no BOOTSEL drive is refused
+ * before anything is written. Serial ports are left alone (opening a port
+ * needs the baud rate of the method).
  */
 export async function probeConnection(connection) {
+  if (connection && connection.kind === "filesystem") {
+    const info = await checkBootselDrive(connection.device, {});
+    connection.info = info;
+    connection.describe = () => describeDrive(info, connection.device.name);
+    return connection;
+  }
   if (!connection || connection.kind !== "usb") return connection;
   const usb = connection.device;
   await usb.open();

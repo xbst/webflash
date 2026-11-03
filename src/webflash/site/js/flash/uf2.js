@@ -70,7 +70,8 @@ export async function readInfoUf2(handle) {
 export async function checkBootselDrive(handle, { family = null } = {}) {
   const info = await readInfoUf2(handle);
   if (!info) {
-    fail("drive", `The folder "${handle.name || ""}" has no ${INFO_FILE}, so it is not a BOOTSEL drive. Hold BOOTSEL while plugging the board in and pick the drive named RPI-RP2 (or RP2350).`);
+    const n = meaningfulDriveName(handle.name);
+    fail("drive", `${n ? `The folder "${n}"` : "The picked folder"} has no ${INFO_FILE}, so it is not a BOOTSEL drive. Hold BOOTSEL while plugging the board in and pick the drive named RPI-RP2 (or RP2350).`);
   }
   if (!info.chip) {
     fail("drive", `The drive's ${INFO_FILE} names a board WebFlash does not know ("${info.boardId || info.model}"); only the RP2040 and RP2350 BOOTSEL drives are supported.`);
@@ -80,6 +81,26 @@ export async function checkBootselDrive(handle, { family = null } = {}) {
     fail("wrong-family", `This firmware is for the ${wanted.toUpperCase()}, but the drive belongs to an ${info.chip.toUpperCase()} (${info.boardId}).`);
   }
   return info;
+}
+
+/** A folder handle's name when it says something: Chrome on Windows names a drive root "\" (STOP 3 saw `drive "\"` in the confirmation). */
+export function meaningfulDriveName(name) {
+  const n = String(name || "").trim();
+  return n && n !== "\\" && n !== "/" ? n : null;
+}
+
+/**
+ * One line for the log and the confirmation: the board the drive belongs
+ * to, from its INFO_UF2.TXT, plus the picked name when it adds something.
+ * Without info (before the drive was read) only the name, or "the picked
+ * drive".
+ */
+export function describeDrive(info, name = null) {
+  const n = meaningfulDriveName(name);
+  if (!info) return n ? `drive "${n}"` : "the picked drive";
+  const board = info.boardId || info.model || "BOOTSEL";
+  const details = [info.model && info.model !== info.boardId ? info.model : null, info.bootloader || null].filter(Boolean).join(", ");
+  return `${board} BOOTSEL drive${details ? ` (${details})` : ""}${n && n !== board ? `, picked as "${n}"` : ""}`;
 }
 
 /** The family to encode a non-UF2 image with, from the drive's chip. */

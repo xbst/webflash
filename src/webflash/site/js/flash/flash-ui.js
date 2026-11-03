@@ -312,15 +312,18 @@ export function createFlashPanel(root, options = {}) {
   async function adoptConnection(connection) {
     state.connection = connection;
     log(`Connected: ${connection.describe()}`);
-    if (connection.kind === "usb") {
+    if (connection.kind === "usb" || connection.kind === "filesystem") {
       // Opening and claiming now surfaces driver and permission problems
-      // (and a device that is not in its bootloader) before the confirmation.
+      // (and a device that is not in its bootloader) before the confirmation;
+      // a drive is read for its INFO_UF2.TXT, so the confirmation names the
+      // board, not a folder name (Chrome on Windows calls a drive root "\").
       try {
         await probeConnection(connection);
+        if (connection.kind === "filesystem") log(`Drive: ${connection.describe()}`);
       } catch (e) {
         state.connection = null;
         state.phase = "ready";
-        try { await connection.device.close(); } catch (e2) { /* fine */ }
+        try { if (connection.device && typeof connection.device.close === "function") await connection.device.close(); } catch (e2) { /* fine */ }
         renderStep();
         throw e;
       }
