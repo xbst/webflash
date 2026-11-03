@@ -687,7 +687,8 @@ button.artifact.primary .artifact-size { color: inherit; opacity: 0.75; }
   font-size: 10px;
   color: var(--ok);
 }
-.about-note { font-size: 11px; color: var(--text-dim); margin-left: 6px; }
+.about-note { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+.about-licenses { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
 
 .log-box summary, .help-box summary {
   display: flex;

@@ -407,7 +407,10 @@ function setupPlan() {
   };
   session.on("change", ({ what }) => { if (["plan", "sources", "ref", "build"].includes(what)) render(); });
   render();
+  return render;
 }
+
+let renderPlanNote = () => {};
 
 // ── Toolbar ──────────────────────────────────────────────────────────
 
@@ -470,7 +473,10 @@ function setupToolbar() {
         ? `${st.detail} (${st.ref.describe}), ${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ""}` : "",
       toolchain: buildPanel ? buildPanel.aboutText() : "",
       extend: buildPanel ? (el) => buildPanel.extendAbout(el) : null,
-      onClearCache: buildPanel ? () => buildPanel.cacheCleared() : null,
+      onClearCache: async () => {
+        if (buildPanel) await buildPanel.cacheCleared();
+        renderPlanNote();
+      },
     });
   });
 }
@@ -697,7 +703,7 @@ async function init() {
     textarea: $("config-text"), minimal: $("config-minimal"), copy: $("config-copy"),
     download: $("config-download"), note: $("config-note"),
   }, session);
-  setupPlan();
+  renderPlanNote = setupPlan();
   buildPanel = new BuildPanel(session, configurator, {
     button: $("build-btn"), cancel: $("build-cancel"), status: $("build-status"), start: $("build-start"),
     bar: $("build-bar"), list: $("build-progress"), error: $("build-error"), memory: $("build-memory"),

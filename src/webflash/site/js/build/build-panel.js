@@ -70,6 +70,11 @@ function seconds(ms) {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
 }
 
+// formatBytes, with gigabytes for a browser's storage quota.
+function bigBytes(n) {
+  return n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : formatBytes(n);
+}
+
 function now() {
   return performance.now();
 }
@@ -654,15 +659,17 @@ export class BuildPanel {
     }
     const tc = this.toolchain;
     const licenses = tc && tc.manifest.licenses ? Object.entries(tc.manifest.licenses) : [];
+    const machine = [cores ? `${cores} cores` : "", navigator.deviceMemory ? `at least ${navigator.deviceMemory} GB of memory` : ""]
+      .filter(Boolean).join(", ");
     el.innerHTML =
       `<h3>Build</h3><table class="about-table">` +
-      `<tr><td>Compiler workers</td><td><select id="about-workers" title="How many compiles run at once. Each worker holds its own compiler, about 100 to 300 MB.">${options.join("")}</select>` +
-      ` <span class="about-note">${cores ? `${cores} cores` : ""}${navigator.deviceMemory ? `, at least ${navigator.deviceMemory} GB` : ""}</span></td></tr>` +
+      `<tr><td>Compiler workers</td><td><select id="about-workers" title="How many compiles run at once. Each worker holds its own compiler and a copy of the sources.">${options.join("")}</select>` +
+      `${machine ? `<div class="about-note">${esc(machine)}</div>` : ""}</td></tr>` +
       `<tr><td>Kept in this browser</td><td id="about-storage">…</td></tr>` +
       `</table>` +
-      (licenses.length ? `<h3>Compiler licenses</h3><table class="about-table">` + licenses.map(([what, file]) =>
-        `<tr><td>${esc(what)}</td><td><a href="${esc(new URL(file, tc.base).href)}" target="_blank" rel="noopener">${esc(file.split("/").pop())}</a></td></tr>`).join("") +
-        `</table>` : "");
+      (licenses.length ? `<h3>Compiler licenses</h3><ul class="about-licenses">` + licenses.map(([what, file]) =>
+        `<li><a href="${esc(new URL(file, tc.base).href)}" target="_blank" rel="noopener" title="${esc(file)}">${esc(what)}</a></li>`).join("") +
+        `</ul>` : "");
     el.querySelector("#about-workers").addEventListener("change", (e) => {
       setChosenWorkerCount(e.target.value === "auto" ? null : Number(e.target.value));
       this.renderPill();
@@ -671,18 +678,25 @@ export class BuildPanel {
   }
 
   async renderStorage(cell) {
+    // The browser updates its estimate in its own time: right after Clear
+    // cache it would still count what was just removed.
+    if (this.clearedAt && Date.now() - this.clearedAt < 10000) {
+      cell.textContent = "nothing: the cache was just emptied";
+      return;
+    }
     const e = await storageEstimate();
     if (!cell.isConnected) return;
     if (!e || e.usage === null) {
       cell.textContent = "this browser does not say";
       return;
     }
-    cell.textContent = `${formatBytes(e.caches !== null ? e.caches : e.usage)}` +
-      `${e.caches !== null ? " in the download cache" : " in all"}${e.quota ? ` (room for ${formatBytes(e.quota)})` : ""}`;
+    cell.textContent = `${bigBytes(e.caches !== null ? e.caches : e.usage)}` +
+      `${e.caches !== null ? " in the download cache" : " in all"}${e.quota ? ` (room for ${bigBytes(e.quota)})` : ""}`;
   }
 
   /** After About's Clear cache: the next build asks before downloading again. */
   async cacheCleared() {
+    this.clearedAt = Date.now();
     remember(AUTO_KEY, null);
     if (this.toolchain) this.toolchainCached = (await cachedFlags(this.toolchain.files)).every(Boolean);
     this.renderPill();
