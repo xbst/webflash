@@ -82,11 +82,13 @@ def render_text(text: str) -> str:
     ``[label](url)`` a link (http, https and relative URLs only) and a single
     newline a line break. Nothing else, and never raw HTML.
 
-    The same rules as 3DStep's ``renderText``, which the embed runtime uses for
-    ``description``, ``help``, ``labels`` and ``instructions``: change both or
-    neither.
+    The same rules as 3DStep's ``renderText``, and as ``renderInline`` in the
+    site's ``js/flash/flash-ui.js``, which the embed runtime and the flash
+    panel use for ``description``, ``help``, ``labels`` and ``instructions``:
+    change both or neither. A NUL character (a TOML ``\\u0000``) is dropped,
+    since the code spans are set aside behind NUL markers.
     """
-    clean = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+    clean = str(text).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not clean:
         return ""
     paragraphs = (p.strip() for p in re.split(r"\n[ \t]*\n+", clean))
@@ -353,7 +355,8 @@ _NOTICE_SENTENCE = "Flashing from the browser needs Chrome or Edge on a computer
 def _render_fallback(config: BoardConfig, inline: dict[str, str]) -> str:
     """The card as it reads with no script: the title, the description, the
     photo and where to get the firmware. The embed runtime replaces it with
-    the card's controls."""
+    the card's controls, keeping the photo's element (with ``-i`` its only
+    copy)."""
     esc = html.escape
     b = config.board
     lines = ['<div class="wf-static">', f'<h1 class="wf-title">{esc(b.title)}</h1>']
@@ -419,6 +422,22 @@ _HTML_TEMPLATE = """\
 """
 
 
+def page_config(config: BoardConfig, inline: dict[str, str] | None = None) -> dict:
+    """What the page's ``#webflash-config`` holds (schema 1): the board TOML's
+    tables (``board_data``), ``schema``, ``toml`` (the TOML text, which "Open
+    in WebFlash" carries to the site), and with ``-i`` on a ``[prebuilt]``
+    board ``inline: {"prebuilt": <data URL>}``. An inlined image is only in
+    the fallback's ``<img>``, which the runtime keeps: a photo would otherwise
+    weigh twice."""
+    data = board_data(config)
+    data["schema"] = CONFIG_SCHEMA
+    data["toml"] = config.text
+    prebuilt = (inline or {}).get("prebuilt")
+    if prebuilt:
+        data["inline"] = {"prebuilt": prebuilt}
+    return data
+
+
 def generate_html(config: BoardConfig, theme: Theme | None = None, *,
                   inline: dict[str, str] | None = None) -> str:
     """The page for a board (SPEC 13). ``inline`` maps ``image`` and
@@ -428,10 +447,7 @@ def generate_html(config: BoardConfig, theme: Theme | None = None, *,
         theme = Theme()
     inline = {k: v for k, v in (inline or {}).items() if v}
 
-    data = board_data(config)
-    data["schema"] = CONFIG_SCHEMA
-    if inline:
-        data["inline"] = dict(inline)
+    data = page_config(config, inline)
 
     head = _render_font_head(theme)
     values = {
