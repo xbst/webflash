@@ -14,7 +14,7 @@
 
 import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin } from "./firmware-file.js";
-import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, imageAddressFor, configValue } from "./devices.js";
+import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, imageAddressFor, configValue, configFitsImage, imageFamily } from "./devices.js";
 import { explainError } from "./errors.js";
 
 /**
@@ -119,30 +119,35 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const cfg = configText();
     const project = session.project || "klipper";
     const pre = prebuiltTable();
+    // The configuration's methods apply to the file only when it was built
+    // for the configuration's chip: an RP2040 UF2 uploaded while the page
+    // holds an STM32 configuration gets the file's own methods (STOP 3).
+    const fits = !cfg || configFitsImage(cfg, u.image);
+    const cfgMcu = cfg ? mcuOf(cfg) : null;
     let methods;
     let warnings = [];
-    if (cfg && !pre) {
+    if (cfg && !pre && fits) {
       // The uploaded file stands in for the build of this configuration.
       ({ methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), tomlFlash().methods));
-      const cfgMcu = mcuOf(cfg);
       if (cfgMcu && u.image.mcu && cfgMcu.toLowerCase() !== u.image.mcu.toLowerCase()) {
         warnings = [...warnings, `The file says it is for the ${u.image.mcu}, but the configuration is for the ${cfgMcu}; the file's MCU is used.`];
       }
     } else {
-      ({ methods, warnings } = methodsForPrebuilt({ mcu: (pre && pre.mcu) || u.image.mcu || null, image: u.image, tomlMethods: tomlFlash().methods }));
+      // A [prebuilt] TOML's methods narrow the list; another board's TOML does not.
+      ({ methods, warnings } = methodsForPrebuilt({ mcu: (pre && pre.mcu) || u.image.mcu || null, image: u.image, tomlMethods: cfg && !fits ? null : tomlFlash().methods }));
+      if (cfg && !pre && !fits) {
+        const chip = u.image.mcu || u.image.family || `a chip at ${describeImage(u.image).rangeText.split(" ")[0]}`;
+        warnings = [...warnings, `The file is for ${chip}, not for the ${cfgMcu || familyOf(cfg)} this configuration describes, so the methods come from the file.`];
+      }
     }
-    // A UF2 names its chip; the configuration's MCU only stands in when it is the same family.
-    const imageChip = u.image.family ? (u.image.family.startsWith("rp2350") ? "rp2350" : u.image.family === "rp2040" ? "rp2040" : null) : null;
-    const cfgMcu = cfg ? mcuOf(cfg) : null;
-    const cfgFits = !imageChip || familyOf(cfg) === imageChip;
-    const mcu = u.image.mcu || (pre && pre.mcu) || (cfgFits ? cfgMcu : imageChip);
+    const mcu = u.image.mcu || (pre && pre.mcu) || (fits ? cfgMcu : imageFamily(u.image));
     if (u.preferredMethod && !methods.some((m) => m.id === u.preferredMethod)) {
       // The mock mode asks for a method the configuration would not offer.
       methods = [{ id: u.preferredMethod, reason: "the mock mode asked for it" }, ...methods];
     }
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
-      family: cfg ? familyOf(cfg) : null, artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
+      family: cfg && fits ? familyOf(cfg) : imageFamily(u.image), artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
       label: u.name, bitrate: canBitrate(cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };
   }

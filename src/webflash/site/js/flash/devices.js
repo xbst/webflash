@@ -414,29 +414,40 @@ export function applyTomlMethods(inferred, tomlMethods) {
  */
 export function methodsForPrebuilt({ mcu = null, image = null, tomlMethods = null } = {}) {
   let family = familyFromMcu(mcu);
+  let why = mcu ? `the board TOML names the ${mcu}` : null;
   if (!family && image) {
     const chip = image.family ? chipOf(image.family) : null;
-    if (chip) family = chip;
-    else if (image.start >= 0x08000000 && image.start < 0x09000000) family = "stm32";
-    else if (image.start >= 0x10000000 && image.start < 0x11000000) family = "rp2040";
+    const fromMcu = image.mcu ? familyFromMcu(image.mcu) : null;
+    if (chip) { family = chip; why = `the UF2 is for the ${image.family}`; }
+    else if (fromMcu) { family = fromMcu; why = `the file was built for the ${image.mcu}`; }
+    else if (image.start >= 0x08000000 && image.start < 0x09000000) { family = "stm32"; why = `the file's address ${hex(image.start)} says so`; }
+    else if (image.start >= 0x10000000 && image.start < 0x11000000) { family = "rp2040"; why = `the file's address ${hex(image.start)} says so`; }
   }
-  const why = mcu ? `the board TOML names the ${mcu}` : image && image.family ? `the UF2 is for the ${image.family}` : image ? `the file's address ${hex(image.start)} says so` : null;
+  // A file that starts at the flash base is the whole firmware, for the
+  // chip's ROM bootloader; one that starts after a bootloader's space is
+  // for Katapult. The first method is the default the page picks.
+  const atBase = !!image && (image.start === 0x08000000 || image.start === 0x10000000);
+  const base = `${why}; the file starts at the flash base, so it is the whole firmware`;
   let inferred;
   if (family === "stm32") {
-    inferred = [
-      { id: "katapult", reason: `${why}: Katapult over USB when the board has it` },
+    const katapult = [
+      { id: "katapult", reason: `${why}: Katapult over USB when the board has it${atBase ? " (the file would then have to start after it)" : ""}` },
       { id: "katapult-can", reason: `${why}: Katapult over CAN when the board is on a bus` },
-      { id: "dfu", reason: `${why}: the STM32 ROM bootloader (BOOT0) when there is no Katapult` },
-      { id: "download", reason: "the file for any other tool" },
     ];
+    const rom = [{ id: "dfu", reason: atBase ? `${base}, for the STM32 ROM bootloader (BOOT0)` : `${why}: the STM32 ROM bootloader (BOOT0) when there is no Katapult` }];
+    inferred = [...(atBase ? [...rom, ...katapult] : [...katapult, ...rom]), { id: "download", reason: "the file for any other tool" }];
   } else if (family === "rp2040" || family === "rp2350") {
-    inferred = [
-      { id: "katapult", reason: `${why}: Katapult over USB when the board has it` },
-      { id: "picoboot", reason: `${why}: the BOOTSEL ROM over USB` },
-      { id: "uf2", reason: `${why}: the BOOTSEL drive` },
+    const katapult = [
+      { id: "katapult", reason: `${why}: Katapult over USB when the board has it${atBase ? " (the file would then have to start after it)" : ""}` },
       { id: "katapult-can", reason: `${why}: Katapult over CAN when the board is on a bus` },
-      { id: "download", reason: "the file for any other tool" },
     ];
+    const rom = [
+      { id: "picoboot", reason: atBase ? `${base}, for the BOOTSEL ROM over USB` : `${why}: the BOOTSEL ROM over USB` },
+      { id: "uf2", reason: `${why}: the BOOTSEL drive` },
+    ];
+    inferred = atBase
+      ? [...rom, ...katapult, { id: "download", reason: "the file for any other tool" }]
+      : [katapult[0], ...rom, katapult[1], { id: "download", reason: "the file for any other tool" }];
   } else if (family === "lpc176x") {
     inferred = [
       { id: "download", reason: `${why}: LPC176x boards load firmware.bin from the SD card` },
@@ -456,6 +467,39 @@ function chipOf(family) {
   if (family === "rp2040") return "rp2040";
   if (typeof family === "string" && family.startsWith("rp2350")) return "rp2350";
   return null;
+}
+
+/**
+ * The chip family a firmware file says it is for: its UF2 family id or the
+ * MCU in its Klipper dictionary. Null when the file says nothing (a bare
+ * .bin or .hex); its address range is then only a hint, see
+ * configFitsImage.
+ */
+export function imageFamily(image) {
+  if (!image) return null;
+  const chip = image.family ? chipOf(image.family) : null;
+  if (chip) return chip;
+  return image.mcu ? familyFromMcu(image.mcu) : null;
+}
+
+/**
+ * Whether a configuration describes the chip a firmware file was built
+ * for, so its inferred methods apply to the file. A file that names its
+ * chip (UF2 family, Klipper dictionary) must match the configuration's
+ * family; a bare file must at least sit in the family's flash range (the
+ * RP2040 and RP2350 share theirs); a file or configuration that says
+ * nothing fits. STOP 3 found an RP2040 UF2 offered the STM32
+ * configuration's methods, with no PICOBOOT among them.
+ */
+export function configFitsImage(cfg, image) {
+  const family = familyOf(cfg);
+  if (!family || !image) return true;
+  const named = imageFamily(image);
+  if (named) return named === family;
+  if (!Number.isInteger(image.start)) return true;
+  if (image.start >= 0x08000000 && image.start < 0x09000000) return family === "stm32";
+  if (image.start >= 0x10000000 && image.start < 0x11000000) return family === "rp2040" || family === "rp2350";
+  return true;
 }
 
 // ── Instructions and hints ──────────────────────────────────────────
