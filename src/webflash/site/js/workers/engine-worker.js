@@ -24,8 +24,19 @@
 // Python code reports progress through the "webflash_js" module this worker
 // registers: webflash_js.progress(phase, detail, done=None, total=None) and
 // webflash_js.cancelled().
+//
+// The build's compiler commands go through webflash_js.run_tool(spec_json,
+// files), the hook the engine's JsToolchain calls: spec_json is {argv, cwd,
+// env, symlinks}, files the generated inputs ({absolute path: bytes}), and
+// the promise resolves to {code, stdout, stderr, outputs, time, memory}. The
+// jobs go straight to the toolchain workers, over the MessagePorts the page
+// hands this worker with attachToolchain (js/build/toolchain-pool.js starts
+// the workers); detachToolchain fails every job still running or waiting,
+// which is how a cancelled build stops waiting for workers that were
+// terminated.
 
 import { fetchBlob, gunzip } from "./blob-cache.js";
+import { Dispatcher } from "../build/toolchain-pool.js";
 
 export const PYODIDE_VERSION = "v314.0.6";   // keep in step with runtime.js and PinConnect
 
@@ -50,6 +61,36 @@ function progress(phase, detail = "", done = null, total = null, call = currentC
   if (Number.isFinite(total)) p.total = total;
   if (call !== null && call !== undefined) p.call = call;
   postMessage({ progress: p });
+}
+
+// The toolchain workers' job queue, once the page attached them.
+const toolchain = new Dispatcher();
+
+// files from Python: a plain object of path -> Uint8Array (JsToolchain
+// converts its dict with to_js), or a dict proxy, or a Map.
+function jobFiles(files) {
+  if (!files) return {};
+  if (typeof files.toJs === "function") return files.toJs({ dict_converter: Object.fromEntries });
+  if (files instanceof Map) return Object.fromEntries(files);
+  return files;
+}
+
+/**
+ * webflash_js.run_tool(spec_json, files): one tool invocation on the next
+ * free toolchain worker. Resolves to {code, stdout, stderr, outputs: {path:
+ * Uint8Array}, time, memory}; rejects when no toolchain is attached or the
+ * workers were stopped.
+ */
+function runTool(specJson, files) {
+  let spec;
+  try {
+    spec = JSON.parse(String(specJson));
+  } catch (e) {
+    return Promise.reject(new Error(`run_tool: the spec is not JSON (${e.message})`));
+  }
+  return toolchain.run({
+    argv: spec.argv, cwd: spec.cwd, env: spec.env || {}, symlinks: spec.symlinks || {}, files: jobFiles(files),
+  });
 }
 
 // webflash_js.progress from Python: positional (phase, detail, done, total),
@@ -93,6 +134,7 @@ async function boot({ payloadUrl, assetsOrigin = "", pyodideBase = DEFAULT_PYODI
   py.registerJsModule("webflash_js", {
     progress: pyProgress,
     cancelled: () => longCall !== null && cancelled.has(longCall),
+    run_tool: runTool,
   });
   py.runPython(`
 import sys, zipfile
@@ -182,6 +224,34 @@ const OWN = {
     await booting;
     const out = JSON.parse(await callBridge("load_sources", [project, JSON.stringify(ref), tar]));
     return JSON.stringify({ ...out, size: blob.size, cached: blob.cached });
+  },
+
+  /**
+   * Take the toolchain workers' MessagePorts (transferred with the call):
+   * run_tool's jobs go to them from now on. Resolves to {workers}.
+   */
+  attachToolchain(id, [ports = []]) {
+    toolchain.attach(ports);
+    return { workers: toolchain.size };
+  },
+
+  /** Let go of the toolchain workers: every job running or waiting fails with reason. */
+  detachToolchain(id, [reason = "the build was cancelled"]) {
+    toolchain.detach(reason);
+    return true;
+  },
+
+  /** Resolves once no toolchain job is running or waiting (a failed build's stragglers). */
+  async toolchainIdle() {
+    await toolchain.whenIdle();
+    return true;
+  },
+
+  /** Per worker: {jobs, busy, main, peakMemory} as seen from here; reset clears them. */
+  toolchainStats(id, [reset = false]) {
+    const stats = toolchain.stats.map((s) => ({ ...s }));
+    if (reset) toolchain.stats = toolchain.stats.map(() => ({ jobs: 0, busy: 0, main: 0, peakMemory: 0 }));
+    return stats;
   },
 };
 

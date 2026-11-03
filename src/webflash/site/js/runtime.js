@@ -94,7 +94,7 @@ function spawn() {
   });
 }
 
-function post(method, params, { onProgress = null, signal = null, long = false } = {}) {
+function post(method, params, { onProgress = null, signal = null, long = false, transfer = [] } = {}) {
   return new Promise((resolve, reject) => {
     const id = _nextId++;
     const worker = _worker;
@@ -104,7 +104,7 @@ function post(method, params, { onProgress = null, signal = null, long = false }
       fn(value);
     };
     _pending.set(id, { resolve: done(resolve), reject: done(reject), onProgress });
-    worker.postMessage(long ? { id, method, params, long: true } : { id, method, params });
+    worker.postMessage(long ? { id, method, params, long: true } : { id, method, params }, transfer);
     if (signal) {
       onAbort = () => worker.postMessage({ cancel: id });
       if (signal.aborted) onAbort();
@@ -184,14 +184,15 @@ export function pythonMessage(e) {
  * Options: onProgress({phase, detail, done, total}) for this call's own
  * progress; long and signal for a call that can be cancelled; early to send
  * the call as soon as the boot has started rather than once it finished (the
- * worker's own downloads overlap the Python download that way).
+ * worker's own downloads overlap the Python download that way); transfer,
+ * the objects in params to move rather than copy (MessagePorts must move).
  */
-export async function call(method, params = [], { onProgress = null, signal = null, long = false, early = false } = {}) {
+export async function call(method, params = [], { onProgress = null, signal = null, long = false, early = false, transfer = [] } = {}) {
   const booted = ready();
   if (!early) await booted;
   else booted.catch(() => {});   // the call itself reports the failure
   try {
-    return await post(method, params, { onProgress, signal, long });
+    return await post(method, params, { onProgress, signal, long, transfer });
   } catch (e) {
     throw new Error(pythonMessage(e));
   }
@@ -282,4 +283,49 @@ export async function plan(configText) {
  */
 export function fetchBlob(url, { onProgress = null, phase = "download", detail = "", size = null } = {}) {
   return call("fetchBlob", [url, { phase, detail, size }], { onProgress, early: true });
+}
+
+// ── The build (chunk 06) ────────────────────────────────────────────
+
+/** Extract one lib/<dir> bundle (gzipped or not) into the engine's tree: {name, files}. */
+export async function addLib(name, bytes) {
+  return JSON.parse(await call("add_lib", [name, bytes]));
+}
+
+/** Tell the engine which toolchain release the workers run (its manifest): {id, llvm}. */
+export async function setToolchain(manifest) {
+  return JSON.parse(await call("set_toolchain", [JSON.stringify(manifest)]));
+}
+
+/**
+ * Hand the toolchain workers' MessagePorts (ToolchainPool.ports()) to the
+ * engine worker, which sends the build's compiler jobs to them directly.
+ */
+export function attachToolchain(ports) {
+  return call("attachToolchain", [ports], { transfer: ports });
+}
+
+/** Fail every toolchain job running or waiting (the workers are being stopped). */
+export function detachToolchain(reason) {
+  return call("detachToolchain", [reason]);
+}
+
+/** Resolves once no toolchain job is running or waiting. */
+export function toolchainIdle() {
+  return call("toolchainIdle");
+}
+
+/**
+ * Build the configuration with the attached toolchain workers. Resolves to
+ * the bridge's result ({outputs: {name: size}, memory, log, duration,
+ * version, config, defconfig, project, mcu, app_address, ...}); progress
+ * goes to onProgress; aborting signal stops the build at its next step.
+ */
+export async function build(configText, version, jobs, { onProgress = null, signal = null } = {}) {
+  return JSON.parse(await call("build", [configText, version || "", jobs], { onProgress, signal, long: true }));
+}
+
+/** One output file of the last build, as a Uint8Array (transferred, not copied). */
+export function buildOutput(name) {
+  return call("build_output", [name]);
 }
