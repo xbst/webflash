@@ -9,7 +9,7 @@
 //   ?mock=can        a candleLight adapter with one Katapult and one Klipper node
 //   ?mock=uf2        a BOOTSEL drive
 //   &fail=claim|hang|verify|mcu|rdp|timeout|cancel|busy   one failure to show its explanation (hang: open() never settles, as Chrome on Windows without a WinUSB driver)
-//   &os=windows|linux|mac|android  &browser=firefox   pretend to be elsewhere
+//   &os=windows|linux|mac|android  &browser=firefox|safari|brave   pretend to be elsewhere
 //
 // The firmware is a small generated image at the method's usual address,
 // so the flow runs from the URL alone; Upload firmware replaces it.
@@ -89,9 +89,10 @@ export async function installMocks(params) {
       : navigator.userAgent,
     platform: os === "linux" ? "Linux x86_64" : os === "mac" ? "MacIntel" : os === "windows" ? "Win32" : os === "android" ? "Linux armv8l" : navigator.platform,
     userAgentData: undefined,
+    brave: browser === "brave" ? { isBrave: async () => true } : undefined,   // Brave: Chrome's user agent, WebUSB and Web Serial, no folder picker
   };
-  if (kind === "uf2" && browser !== "firefox" && browser !== "safari") win.showDirectoryPicker = win.showDirectoryPicker || (async () => drive);
-  if (browser === "firefox" || browser === "safari") win.showDirectoryPicker = undefined;
+  if (kind === "uf2" && browser !== "firefox" && browser !== "safari" && browser !== "brave") win.showDirectoryPicker = win.showDirectoryPicker || (async () => drive);
+  if (browser === "firefox" || browser === "safari" || browser === "brave") win.showDirectoryPicker = undefined;
   console.info(`WebFlash mock mode: ${kind}${fail ? ` (fail=${fail})` : ""}`);
   const method = { katapult: "katapult", dfu: "dfu", picoboot: "picoboot", can: "katapult-can", uf2: "uf2" }[kind] || null;
   return { nav, win, firmware, usb, serial, drive, method };

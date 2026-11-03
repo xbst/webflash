@@ -59,6 +59,9 @@ export function detectBrowser(nav = typeof navigator !== "undefined" ? navigator
   const ua = nav.userAgent || "";
   if (/Edg\//.test(ua)) return "edge";
   if (/Firefox\//.test(ua)) return "firefox";
+  // Brave's user agent is Chrome's; navigator.brave gives it away. It has
+  // WebUSB and Web Serial but ships with the File System Access API off.
+  if (nav.brave && typeof nav.brave.isBrave === "function") return "brave";
   if (/Chrome\//.test(ua) || /Chromium\//.test(ua)) return "chrome";
   if (/Safari\//.test(ua)) return "safari";
   return "other";
@@ -243,6 +246,8 @@ function apiFixes(os, browser, transport) {
     fixes.push("Flashing from the browser needs WebUSB and Web Serial, which Firefox and Safari do not have. Download the firmware here and flash it with Chrome or Edge, or with the usual tools (dfu-util, picotool, Katapult's flashtool.py).");
   } else if (transport === "serial" && os === "android") {
     fixes.push("Android Chrome has WebUSB but no Web Serial, so Katapult over USB cannot run here. Use DFU or PICOBOOT if the board has that bootloader, or a computer with Chrome or Edge.");
+  } else if (transport === "filesystem" && browser === "brave") {
+    fixes.push("Brave turns the File System Access API off by default. Open brave://flags/#file-system-access-api, enable it and restart Brave, or use Chrome or Edge; or download the .uf2 and copy it onto the BOOTSEL drive yourself.");
   } else if (transport === "filesystem") {
     fixes.push("This browser cannot write to a drive from a web page. Download the .uf2 and copy it onto the BOOTSEL drive yourself.");
   } else {

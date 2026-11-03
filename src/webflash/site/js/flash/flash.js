@@ -50,6 +50,7 @@ export function methodAvailable(method, caps = capabilities()) {
     const why = caps.secure === false ? "needs an https or localhost page: the browser hides the File System Access API elsewhere"
       : caps.os === "android" ? "needs the File System Access API, which Android Chrome does not have"
       : caps.browser === "firefox" || caps.browser === "safari" ? "needs the File System Access API, which this browser does not have (Chrome or Edge on a computer do)"
+      : caps.browser === "brave" ? "needs the File System Access API, which Brave turns off by default (enable brave://flags/#file-system-access-api and restart Brave, or use Chrome or Edge)"
       : "needs the File System Access API, but this browser exposes no window.showDirectoryPicker on this page (Chrome and Edge on a computer have it unless a policy, a flag or an extension removes it)";
     return { ok: false, reason: `${why}; download the .uf2 and copy it onto the drive instead` };
   }
