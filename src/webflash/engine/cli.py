@@ -533,7 +533,8 @@ def parity_table(rows: list[dict], builds: dict[tuple[str, str], dict], variants
             if b["dict"] is None:
                 dict_ok = "none"
             else:
-                dict_ok = "same" if (base is None or base is b or dicts_equivalent(base["dict"], b["dict"])) else "DIFFERS"
+                dict_ok = "same" if (base is None or "error" in base or base is b
+                                     or dicts_equivalent(base["dict"], b["dict"])) else "DIFFERS"
             vt = b["vector_table"] or {}
             vt_text = f"0x{vt['stack']:08x} / 0x{vt['reset']:08x}" if vt else ""
             lines.append(f"| {name} | {variant} | {s.get('text', 0):,} | {s.get('data', 0):,} | {s.get('bss', 0):,} | "
