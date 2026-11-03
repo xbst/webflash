@@ -15,12 +15,21 @@
 // total in steps or bytes), and every listener of onProgress sees all of it.
 // A call made with {long: true, signal} can be cancelled through the
 // AbortSignal; the engine stops at its next check between steps.
+//
+// A generated page runs this module from /engine/v1/ on another site, so it
+// names its own assets and payload with configure() before the first call,
+// and the worker starts through toolchain-pool.js's startWorker, which takes
+// a script from another origin.
+
+import { startWorker } from "./build/toolchain-pool.js";
 
 export const PYODIDE_VERSION = "v314.0.6";   // keep in step with engine-worker.js and PinConnect
 export const PAYLOAD_NAME = "webflash.zip";
 
 const WORKER_URL = new URL("./workers/engine-worker.js", import.meta.url);
 
+// What configure() set: {assetsBase, payloadUrl}, each null for the site's own.
+let _settings = { assetsBase: null, payloadUrl: null };
 let _worker = null;
 let _boot = null;
 let _failure = null;
@@ -50,14 +59,27 @@ function emit(phase, detail = "", info = {}) {
 }
 
 /**
+ * For a page that is not the site (a generated page's embed runtime): where
+ * toolchain/ and sources/ are, and the URL of webflash.zip, both absolute.
+ * Call it before anything else; null keeps the site's own.
+ */
+export function configure({ assetsBase = null, payloadUrl = null } = {}) {
+  _settings = { assetsBase, payloadUrl };
+}
+
+/**
  * Where the toolchain and the source snapshots come from, as an absolute URL
  * ending in "/". The local server names it in a <meta name="webflash-assets">
- * (empty: the server itself); the hosted site has no tag and serves them.
+ * (empty: the server itself); the hosted site has no tag and serves them. A
+ * generated page names it with configure().
  */
 export function assetsBase() {
-  const meta = document.querySelector('meta[name="webflash-assets"]');
-  const named = meta ? meta.getAttribute("content").trim() : "";
-  const base = named || new URL("./", document.baseURI).href;
+  let base = _settings.assetsBase;
+  if (!base) {
+    const meta = document.querySelector('meta[name="webflash-assets"]');
+    const named = meta ? meta.getAttribute("content").trim() : "";
+    base = named || new URL("./", document.baseURI).href;
+  }
   return base.endsWith("/") ? base : `${base}/`;
 }
 
@@ -67,7 +89,7 @@ function rejectAll(error) {
 }
 
 function spawn() {
-  _worker = new Worker(WORKER_URL, { type: "module" });
+  _worker = startWorker(WORKER_URL);
   _worker.addEventListener("message", (e) => {
     const msg = e.data || {};
     if (msg.progress) {
@@ -120,7 +142,7 @@ export function ready() {
     if (!_worker) spawn();
     emit("runtime");
     const params = {
-      payloadUrl: new URL(PAYLOAD_NAME, document.baseURI).href,
+      payloadUrl: _settings.payloadUrl || new URL(PAYLOAD_NAME, document.baseURI).href,
       assetsOrigin: assetsBase(),
     };
     _boot = post("boot", [params]).then((about) => {
