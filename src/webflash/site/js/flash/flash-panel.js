@@ -14,7 +14,7 @@
 
 import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin } from "./firmware-file.js";
-import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, imageAddressFor, configValue, configFitsImage, imageFamily } from "./devices.js";
+import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict } from "./devices.js";
 import { explainError } from "./errors.js";
 
 /**
@@ -124,9 +124,24 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     // holds an STM32 configuration gets the file's own methods (STOP 3).
     const fits = !cfg || configFitsImage(cfg, u.image);
     const cfgMcu = cfg ? mcuOf(cfg) : null;
+    // A Klipper file carries its dictionary: MCU, interface, CAN bitrate.
+    // That beats the page's configuration, which may be for another
+    // interface entirely (STOP 4: a CAN build over the USB starter config).
+    const dictCfg = configFromImage(u.image);
     let methods;
     let warnings = [];
-    if (cfg && !pre && fits) {
+    if (dictCfg) {
+      ({ methods, warnings } = applyTomlMethods(inferMethods(dictCfg, { project }), pre || fits ? tomlFlash().methods : null));
+      const fileIface = interfaceOf(dictCfg);
+      if (cfg && fits && interfaceOf(cfg) !== fileIface) {
+        const d = interfaceFromDict(u.image.dict.config);
+        const where = d.pins ? ` (${d.pins}${d.bitrate ? ` at ${d.bitrate} bit/s` : ""})` : "";
+        warnings = [...warnings, `The file was built for ${IFACE_TEXT[fileIface] || fileIface}${where}, not for ${IFACE_TEXT[interfaceOf(cfg)] || "the interface"} as this configuration is; the file's own settings decide the methods.`];
+      }
+      if (cfg && fits && cfgMcu && u.image.mcu && cfgMcu.toLowerCase() !== u.image.mcu.toLowerCase()) {
+        warnings = [...warnings, `The file says it is for the ${u.image.mcu}, but the configuration is for the ${cfgMcu}; the file's MCU is used.`];
+      }
+    } else if (cfg && !pre && fits) {
       // The uploaded file stands in for the build of this configuration.
       ({ methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), tomlFlash().methods));
       if (cfgMcu && u.image.mcu && cfgMcu.toLowerCase() !== u.image.mcu.toLowerCase()) {
@@ -147,10 +162,12 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     }
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
-      family: cfg && fits ? familyOf(cfg) : imageFamily(u.image), artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
-      label: u.name, bitrate: canBitrate(cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
+      family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : imageFamily(u.image), artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
+      label: u.name, bitrate: canBitrate(dictCfg || cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };
   }
+
+  const IFACE_TEXT = { usb: "USB", can: "CAN bus", usbcan: "a USB to CAN bridge", serial: "a serial port" };
 
   function canBitrate(cfg) {
     const v = cfg ? configValue(cfg, "CANBUS_FREQUENCY") : null;

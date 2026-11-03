@@ -177,6 +177,64 @@ const MCU_NAMES = {
   RP2040: "rp2040", RP2350: "rp2350", LPC1768: "lpc1768", LPC1769: "lpc1769",
 };
 
+// The chip's MACH_ symbol by its CONFIG_MCU name (the first of the few that share one).
+const MACH_BY_MCU = {};
+for (const [sym, name] of Object.entries(MCU_NAMES)) if (!(name in MACH_BY_MCU)) MACH_BY_MCU[name] = sym;
+
+/**
+ * What a Klipper dictionary's config says about the communication
+ * interface: canserial.c, usbserial.c, serial.c and usb_canbus.c reserve
+ * their pins by name, and the CAN code exports its bitrate. Returns
+ * {kind: "usb"|"can"|"usbcan"|"serial"|null, pins, bitrate}.
+ */
+export function interfaceFromDict(d) {
+  if (!d || typeof d !== "object") return { kind: null, pins: null, bitrate: null };
+  const rate = d.CANBUS_FREQUENCY !== undefined ? parseInt(d.CANBUS_FREQUENCY, 10) : NaN;
+  const bitrate = Number.isInteger(rate) && rate > 0 ? rate : null;
+  const can = d.RESERVE_PINS_CAN !== undefined || bitrate !== null;
+  const usb = d.RESERVE_PINS_USB !== undefined;
+  if (d.CANBUS_BRIDGE || (can && usb)) return { kind: "usbcan", pins: d.RESERVE_PINS_CAN || null, bitrate };
+  if (can) return { kind: "can", pins: d.RESERVE_PINS_CAN || null, bitrate };
+  if (usb) return { kind: "usb", pins: d.RESERVE_PINS_USB || null, bitrate: null };
+  if (d.RESERVE_PINS_serial !== undefined) return { kind: "serial", pins: d.RESERVE_PINS_serial || null, bitrate: null };
+  return { kind: null, pins: null, bitrate: null };
+}
+
+/**
+ * A .config-shaped text from what an uploaded Klipper file says about
+ * itself: its dictionary's MCU and chip, the interface its pins reserve,
+ * the CAN bitrate, and the address it starts at. inferMethods reads it
+ * like a configuration, so an uploaded CAN build gets Katapult over CAN
+ * whatever the page's own configuration says (STOP 4 found it offered
+ * Katapult over USB). Null for a file without a dictionary.
+ */
+export function configFromImage(image) {
+  const d = image && image.dict && image.dict.config && typeof image.dict.config === "object" ? image.dict.config : null;
+  if (!d) return null;
+  const lines = [];
+  const mcu = typeof d.MCU === "string" && d.MCU ? d.MCU : null;
+  const family = (image.family ? chipOf(image.family) : null) || familyFromMcu(mcu);
+  if (mcu) lines.push(`CONFIG_MCU="${mcu}"`);
+  const mach = {
+    stm32: ["CONFIG_MACH_STM32=y"], rp2040: ["CONFIG_MACH_RPXXXX=y", "CONFIG_MACH_RP2040=y"], rp2350: ["CONFIG_MACH_RPXXXX=y", "CONFIG_MACH_RP2350=y"],
+    lpc176x: ["CONFIG_MACH_LPC176X=y"], atsam: ["CONFIG_MACH_ATSAM=y"], atsamd: ["CONFIG_MACH_ATSAMD=y"], hc32f460: ["CONFIG_MACH_HC32F460=y"], avr: ["CONFIG_MACH_AVR=y"],
+  };
+  if (family && mach[family]) lines.push(...mach[family]);
+  if (mcu && MACH_BY_MCU[mcu.toLowerCase()]) lines.push(`CONFIG_MACH_${MACH_BY_MCU[mcu.toLowerCase()]}=y`);
+  const iface = interfaceFromDict(d);
+  if (iface.kind === "usbcan") lines.push("CONFIG_USBCANBUS=y");
+  else if (iface.kind === "can") lines.push("CONFIG_CANSERIAL=y");
+  else if (iface.kind === "serial") lines.push("CONFIG_SERIAL=y");
+  else if (iface.kind === "usb") lines.push("CONFIG_USBSERIAL=y");
+  if (iface.bitrate) lines.push(`CONFIG_CANBUS_FREQUENCY=${iface.bitrate}`);
+  if (Number.isInteger(image.start)) {
+    // An RP2040 image at the flash base carries the 256-byte stage-2 boot block; Klipper's application starts after it.
+    const app = family === "rp2040" && image.start === 0x10000000 ? 0x10000100 : image.start;
+    lines.push(`CONFIG_FLASH_APPLICATION_ADDRESS=0x${app.toString(16)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 /** The family a Katapult-reported or TOML mcu string belongs to. */
 export function familyFromMcu(mcu) {
   const m = String(mcu || "").toLowerCase();
