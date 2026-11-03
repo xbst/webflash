@@ -13,10 +13,13 @@ and the browser agree.
 ``buildcommands.py``'s ``check_output`` (``<tool> --version``, ``git
 describe``, ``cat klippy/.version``), so :class:`PyRunner` installs a
 ``subprocess.Popen`` shim for the duration of a run that answers those three
-shapes and refuses anything else.
+shapes and refuses anything else. It also installs an ``open`` that writes
+text files with LF, as Linux and Pyodide do, where CPython on Windows would
+write CRLF.
 """
 from __future__ import annotations
 
+import builtins
 import contextlib
 import io
 import os
@@ -42,6 +45,18 @@ class ScriptResult:
 # The real Popen, for the toolchain backends to run processes while a
 # script runs with the shim installed.
 _REAL_POPEN = subprocess.Popen
+_REAL_OPEN = io.open
+
+
+def _lf_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+    """``open`` while a script runs: a text file it writes without naming a
+    ``newline`` gets LF. CPython on Windows would write CRLF, and the
+    generated sources reach the firmware (the ELF's line table holds each
+    source's MD5), so a Windows build would differ from Linux's and the
+    browser's."""
+    if newline is None and "b" not in mode and any(c in mode for c in "wax"):
+        newline = "\n"
+    return _REAL_OPEN(file, mode, buffering, encoding, errors, newline, closefd, opener)
 
 
 def real_output(argv: list[str], timeout: float = 60) -> str:
@@ -185,6 +200,7 @@ class PyRunner:
         old_cwd = os.getcwd()
         old_environ = dict(os.environ)
         old_popen = subprocess.Popen
+        old_open = builtins.open, io.open
         old_main = sys.modules.get("__main__")
         modules_before = set(sys.modules)
         code = 0
@@ -195,6 +211,7 @@ class PyRunner:
             sys.argv = [script, *argv]
             sys.path.insert(0, script_dir)
             subprocess.Popen = lambda args, *a, **kw: _FakePopen(runner, args, *a, **kw)  # type: ignore[assignment]
+            builtins.open = io.open = _lf_open
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
                     # The relative name, so sys.argv[0] reads as the Makefile wrote it.
@@ -208,6 +225,7 @@ class PyRunner:
                     code = 1
         finally:
             subprocess.Popen = old_popen  # type: ignore[assignment]
+            builtins.open, io.open = old_open
             sys.argv = old_argv
             sys.path[:] = old_path
             os.chdir(old_cwd)
