@@ -66,21 +66,35 @@ function parentOf(path) {
  * The folders a command's outputs go to, which must exist before it runs:
  * the parent of the -o argument, and of every path under the tree's out/
  * that the command names (an output given positionally, as llvm-objcopy
- * takes it). An input's folder is created anyway, so naming one is harmless.
+ * takes it). MEMFS resolves ".." from the folder it has reached rather than
+ * by the text, so the folder before every ".." is made too: Klipper writes
+ * lib sources to out/src/../lib/<dir>/x.o, which needs out/src as well as
+ * out/lib/<dir>. An input's folder exists anyway, so naming one is harmless.
  */
 export function outputDirs(argv, cwd) {
   const dirs = new Set();
   const outRoot = absolute("out", cwd);
   const add = (p) => {
     if (!p || p.startsWith("-")) return;
-    const parent = parentOf(absolute(p, cwd));
-    if (parent !== "/" && parent !== cwd) dirs.add(parent);
+    const parts = String(p).replace(/\\/g, "/").split("/");
+    let cur = parts[0] === "" ? "/" : cwd;
+    for (const part of parts.slice(0, -1)) {
+      if (part === "" || part === ".") continue;
+      if (part === "..") {
+        if (cur !== "/" && cur !== cwd) dirs.add(cur);
+        cur = parentOf(cur);
+      } else {
+        cur = cur === "/" ? `/${part}` : `${cur}/${part}`;
+      }
+    }
+    if (cur !== "/" && cur !== cwd) dirs.add(cur);
   };
   const underOut = (p) => {
     if (!p || p.startsWith("-")) return false;
     const abs = absolute(p, cwd);
     return abs === outRoot || abs.startsWith(`${outRoot}/`);
   };
+  const stepsOut = (p) => Boolean(p) && !p.startsWith("-") && p.replace(/\\/g, "/").split("/").includes("..");
   for (let i = 1; i < argv.length; i++) {
     const a = String(argv[i]);
     if (a === "-o" || a === "-MF") {
@@ -90,7 +104,7 @@ export function outputDirs(argv, cwd) {
     }
     // A path inside an option: --script=out/x.ld, -Wl,-Map=out/x.map, -Iout/.
     const candidates = [a, ...a.split(","), a.slice(a.indexOf("=") + 1)];
-    for (const c of candidates) if (underOut(c)) add(c);
+    for (const c of candidates) if (underOut(c) || stepsOut(c)) add(c);
   }
   return [...dirs].sort();
 }
