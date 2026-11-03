@@ -19,7 +19,7 @@
 // talks to the engine (the site: inside the configurator's queue).
 
 import * as runtime from "../runtime.js";
-import { blobSize, blobUrl, formatBytes } from "../configure/sources.js";
+import { blobSize, formatBytes } from "../configure/sources.js";
 import { ToolchainPool, discoverToolchain, loadToolchainFiles, summarizeStats, workerCount } from "./toolchain-pool.js";
 import { cachedFlags, isCached } from "./cache.js";
 
@@ -42,7 +42,8 @@ function now() {
 export class Builder {
   /**
    * assetsBase: where toolchain/ and sources/ are (default: the page's, as
-   * runtime.assetsBase() says); workers(): how many toolchain workers
+   * runtime.assetsBase() says; a generated page passes its own, such as the
+   * origin of its engine_url); workers(): how many toolchain workers
    * (default: toolchain-pool.js's workerCount()); reuse: one long-lived
    * instance per worker (a measurement knob); onCrash(message): a worker
    * died while nothing was running.
@@ -64,11 +65,20 @@ export class Builder {
     this._abort = null;
   }
 
+  /** Where toolchain/ and sources/ are: the base given, else the page's. */
+  get base() {
+    return this.assetsBase || runtime.assetsBase();
+  }
+
+  /** The URL of a bundle the sources index names ("blobs/<sha256>.tar.gz"). */
+  blobUrl(path) {
+    return new URL(path, new URL("sources/", this.base)).href;
+  }
+
   /** The published release: toolchain/current.json and its manifest, once. */
   discover() {
     if (!this._discovering) {
-      const base = this.assetsBase || runtime.assetsBase();
-      this._discovering = discoverToolchain(base).then(async (tc) => {
+      this._discovering = discoverToolchain(this.base).then(async (tc) => {
         this.toolchain = tc;
         this.cached = (await cachedFlags(tc.files)).every(Boolean);
         return tc;
@@ -111,7 +121,7 @@ export class Builder {
     const tree = treePath(project, ref);
     for (const lib of libs) {
       if (this.has(tree, [lib.dir])) continue;
-      items.push({ label: `The ${lib.dir} library bundle`, size: lib.size, cached: await isCached(blobUrl(lib.blob)) });
+      items.push({ label: `The ${lib.dir} library bundle`, size: lib.size, cached: await isCached(this.blobUrl(lib.blob)) });
     }
     return items;
   }
@@ -214,8 +224,8 @@ export class Builder {
     const absent = libs.filter((dir) => !(ref.libs || {})[dir]);
     if (absent.length) throw new Error(`This snapshot does not include ${absent.join(", ")}, which the build needs.`);
     const bundles = [
-      { key: "core", url: blobUrl(ref.core), size: blobSize(index, ref.core), label: "the sources" },
-      ...libs.map((dir) => ({ key: dir, url: blobUrl(ref.libs[dir]), size: blobSize(index, ref.libs[dir]), label: dir })),
+      { key: "core", url: this.blobUrl(ref.core), size: blobSize(index, ref.core), label: "the sources" },
+      ...libs.map((dir) => ({ key: dir, url: this.blobUrl(ref.libs[dir]), size: blobSize(index, ref.libs[dir]), label: dir })),
     ];
     const engineLacks = new Set(plan.missing || []);
     const forPool = bundles.filter((b) => !this.pool.has(tree, [b.key]));
