@@ -86,7 +86,6 @@
 .wf-option-help:empty { display: none; }
 .wf-option-help p { margin: 0 0 .3em; }
 .wf-option-help p:last-child { margin-bottom: 0; }
-.wf-more summary { cursor: pointer; }
 .wf-more p { margin-top: .3em; }
 
 /* --- Build: the button, the progress, the result --- */
@@ -102,12 +101,12 @@
 .wf-app .memory caption { text-align: left; color: var(--text-muted); padding-bottom: .25em; }
 .wf-app .memory th { text-align: left; font-weight: 500; padding: .1em .8em .1em 0; white-space: nowrap; width: 1%; }
 .wf-app .memory td { padding: .1em 0; }
-.wf-app .mem-bar { position: relative; width: 100%; padding-right: .8em !important; }
+.wf-app .mem-bar { position: relative; width: 100%; }
 .wf-app .mem-bar::before { content: ""; display: block; height: .45em; border-radius: .25em; background: var(--control-bg); border: 1px solid var(--control-border); }
 .wf-app .mem-fill { position: absolute; left: 0; top: 50%; height: .45em; margin-top: -.225em; border-radius: .25em; background: var(--accent); }
 .wf-app .mem-fill.full { background: var(--error); }
 .wf-app .mem-fill.ram { background: var(--text-muted); }
-.wf-app .mem-num { white-space: nowrap; font-family: var(--mono-font); color: var(--text-muted); padding-right: .6em !important; }
+.wf-app .mem-num { white-space: nowrap; font-family: var(--mono-font); color: var(--text-muted); padding: .1em .6em .1em .8em !important; }
 .wf-app .mem-pct { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 
 .wf-app .artifacts:empty { display: none; }
@@ -120,12 +119,13 @@
 
 /* --- Logs --- */
 
-.wf-app .log-box summary {
+.wf-app .log-box summary, .wf-app .help-box summary, .wf-app .wf-more summary {
   display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-size: .88em; list-style: none;
 }
-.wf-app .log-box summary::-webkit-details-marker { display: none; }
-.wf-app .log-box summary::before { content: "\25B8"; font-size: .8em; }
-.wf-app .log-box[open] summary::before { content: "\25BE"; }
+.wf-app .log-box summary::-webkit-details-marker, .wf-app .help-box summary::-webkit-details-marker,
+.wf-app .wf-more summary::-webkit-details-marker { display: none; }
+.wf-app .log-box summary::before, .wf-app .help-box summary::before, .wf-app .wf-more summary::before { content: "\25B8"; font-size: .8em; }
+.wf-app .log-box[open] summary::before, .wf-app .help-box[open] summary::before, .wf-app .wf-more[open] summary::before { content: "\25BE"; }
 .wf-app .log {
   margin: .4em 0 0; min-height: 4em; max-height: 18em; overflow: auto; padding: .55em .7em;
   background: var(--log-bg); color: var(--log-text); border-radius: 6px;
@@ -173,7 +173,6 @@
   margin: 0 0 .45em; padding: .45em .6em; background: var(--log-bg); color: var(--log-text); border-radius: 4px;
   font-family: var(--mono-font); font-size: .85em; white-space: pre-wrap; word-break: break-word;
 }
-.wf-app .help-box summary { cursor: pointer; color: var(--text-muted); font-size: .88em; }
 .wf-app .flash-help-body p { margin-top: .4em; color: var(--text-muted); line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes { margin: .4em 0 0 1.2em; padding: 0; line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes li { margin-bottom: .4em; }

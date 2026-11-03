@@ -380,7 +380,8 @@ export class FirmwareSection {
       if (model.range) input.dataset.range = JSON.stringify(model.range);
       else delete input.dataset.range;
       input.placeholder = model.range ? `${model.range[0]} to ${model.range[1]}` : "";
-      if (document.activeElement !== input) input.value = model.current || "";
+      // A refused value stays, beside the reason, to be corrected.
+      if (document.activeElement !== input && !error) input.value = model.current || "";
       input.disabled = busy || !enabled;
     } else if (model.kind === "free") {
       // Only the Kconfig says what may go here: change it once the configuration loads.
