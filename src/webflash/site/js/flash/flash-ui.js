@@ -15,16 +15,43 @@ import { uf2Download } from "./uf2.js";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** 3DStep's inline markup for the TOML's texts: paragraphs, **bold**, `code`, [links](url). */
+// What Python's str.strip() and \s take for white space, so the text markup
+// splits and trims exactly as webflash's renderer.render_text does.
+const PY_SPACE = "\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const STRIP_RE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "g");
+const CODE_RE = /`([^`\n]+)`/g;
+const BOLD_RE = /\*\*([^*\n]+?)\*\*/g;
+const LINK_RE = new RegExp(`\\[([^\\]\\n]+)\\]\\(((?:[^()${PY_SPACE}]|\\([^()${PY_SPACE}]*\\))+)\\)`, "g");
+const SLOT_RE = /\u0000(\d+)\u0000/g;
+
+const strip = (s) => s.replace(STRIP_RE, "");
+const escapeText = (s) => esc(s).replace(/'/g, "&#39;");
+// http(s) and relative links only: no javascript:, data: or other schemes.
+const safeUrl = (url) => /^https?:\/\//i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url);
+
+function renderSpans(text) {
+  const codes = [];
+  let s = text.replace(CODE_RE, (m, code) => {
+    codes.push(`<code>${code}</code>`);
+    return `\u0000${codes.length - 1}\u0000`;
+  });
+  s = s.replace(BOLD_RE, "<strong>$1</strong>");
+  s = s.replace(LINK_RE, (m, label, url) => (safeUrl(url) ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : label));
+  s = s.replace(/\n/g, "<br>");
+  return s.replace(SLOT_RE, (m, i) => codes[Number(i)]);
+}
+
+/**
+ * The board TOML's text markup as safe HTML (description, help, labels,
+ * instructions), with renderer.render_text's rules: the text is escaped
+ * first, then blank lines split paragraphs, **x** is bold, `x` is code,
+ * [label](url) a link (http, https and relative URLs only) and a single
+ * newline a line break. Change both or neither.
+ */
 export function renderInline(text) {
-  const paragraphs = String(text || "").trim().split(/\n\s*\n/);
-  return paragraphs.map((p) => {
-    let html = esc(p.replace(/\s*\n\s*/g, " "));
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-    html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    return `<p>${html}</p>`;
-  }).join("");
+  const clean = strip(String(text ?? "").replace(/\u0000/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+  if (!clean) return "";
+  return clean.split(/\n[ \t]*\n+/).map(strip).filter(Boolean).map((p) => `<p>${renderSpans(escapeText(p))}</p>`).join("");
 }
 
 function el(tag, attrs = {}, children = []) {
