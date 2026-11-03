@@ -71,7 +71,7 @@ export async function connectDevice(method, { nav = typeof navigator !== "undefi
   }
   if (transport === "filesystem") {
     const device = await pickBootselDrive({ win });
-    return { kind: "filesystem", method, device, describe: () => `drive "${device.name || "?"}"` };
+    return connectionFor(method, device);   // one description for a drive, wherever it was picked
   }
   fail("unsupported", `"${method}" has nothing to connect to.`);
 }
