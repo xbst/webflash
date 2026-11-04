@@ -16,7 +16,7 @@
 // that changed the other slot's tree carries it, so both stay current here.
 
 import * as runtime from "../runtime.js";
-import { blobUrl, blobSize, formatBytes, loadIndex, projectTitle, resolveVersion } from "./sources.js";
+import { blobUrl, blobSize, formatBytes, loadIndex, projectTitle, resolveVersion, resolveVersionAsync } from "./sources.js";
 import { normalizeTree, symbolNames } from "./kconfig-tree.js";
 
 const AUTO_KEY = "webflash.configure.auto";
@@ -373,7 +373,8 @@ export class Configurator {
           view.setSources("error", e.message);
           return false;
         }
-        const { ref, error, note } = resolveVersion(index, project, version);
+        // An older commit (a history id) waits for its project's history file.
+        const { ref, error, note } = await resolveVersionAsync(index, project, version);
         if (!ref) {
           view.setSources("error", error);
           this._setNotice({ kind: "error", title: `This ${view.title(index)} version is not available`, lines: [error] }, slot);
