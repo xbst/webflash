@@ -85,6 +85,9 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   // Why the builds cannot be flashed together (pair.js's refusal), or "".
   let refusal = "";
+  // What went wrong reading the firmware this refresh: logged once, when the
+  // panel's firmware changes, not on every session change that leaves it.
+  let notes = [];
 
   /**
    * The build's firmware (session.builds), as a panel firmware, or null. A
@@ -100,7 +103,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
         return firmwareFromPair(session.builds, tomlFlash());
       } catch (e) {
         refusal = e.message;
-        panel.log(e.message);
+        notes.push(e.message);
         return null;
       }
     }
@@ -123,7 +126,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       else if (uf2Name) image = parseFirmware(uf2Name, outputs.get(uf2Name), { source: "build" });
       else if (hexName) image = parseFirmware(hexName, outputs.get(hexName), { source: "build" });
     } catch (e) {
-      panel.log(`The build's output could not be read: ${e.message}`);
+      notes.push(`The build's output could not be read: ${e.message}`);
       return null;
     }
     if (!image) return null;
@@ -147,7 +150,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     try {
       image = parseFirmware(pre.file, bytes, { address: typeof pre.address === "number" ? pre.address : null, source: "upload" });
     } catch (e) {
-      panel.log(aboutFile(pre.file, e.message));
+      notes.push(aboutFile(pre.file, e.message));
       return null;
     }
     const { methods, warnings } = methodsForPrebuilt({ mcu: pre.mcu || null, image, tomlMethods: tomlFlash().methods });
@@ -242,7 +245,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   let shown = null;
 
   function firmwareKey(firmware) {
-    if (!firmware) return { origin: null, text: `null ${refusal}` };
+    if (!firmware) return { origin: null, text: `null ${refusal}\n${notes.join("\n")}` };
     const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? (firmware.pair ? session.builds : session.build) : (firmware.artifacts[0] || {}).bytes;
     const skip = new Set(["image", "artifacts", "onClear"]);
     const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "");
@@ -252,11 +255,13 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   // While a flash runs, the panel holds a new firmware back until it ends
   // (flash-ui.js's setFirmware), so a refresh never interrupts one.
   function refresh() {
+    notes = [];
     // A [prebuilt] board TOML flashes its own file, never a build.
     const firmware = fromUpload() || (prebuiltTable() ? fromPrebuilt() : fromBuild());
     const key = firmwareKey(firmware);
     if (shown && shown.origin === key.origin && shown.text === key.text) return;
     shown = key;
+    for (const note of notes) panel.log(note);
     panel.setFirmware(firmware, { empty: refusal });
   }
 
