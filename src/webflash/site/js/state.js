@@ -16,9 +16,11 @@
 // Every change is announced as a "change" event whose detail names what
 // changed ({what, origin}); what is one of board, firmware, project,
 // version, config, options, flash, prebuilt, toml, files, index, ref, tree,
-// plan, sources, lock, undo, open. Undo and redo cover the tables (and the
-// TOML's name and files); a "restore" event tells the configure code to load
-// the restored defconfig into the engine.
+// plan, sources, lock, undo, open, katapult (Katapult ticked, unticked or its
+// version changed) and katapult-<part> (its engine side: ref, tree, config,
+// plan, sources, link). Undo and redo cover the tables (and the TOML's name
+// and files), Katapult's version and defconfig among them; a "restore" event
+// tells the configure code to load the restored defconfigs into the engine.
 
 import { parseToml, writeBoardToml, CONFIG_SETUP_ID, DEFAULT_ENGINE_URL } from "./toml-io.js";
 
@@ -32,8 +34,20 @@ export const METHODS = ["dfu", "picoboot", "uf2", "katapult", "katapult-can", "d
 const UNDO_LIMIT = 100;
 
 // What a fresh session configures: Klipper's latest version for an STM32G0B1,
-// the shape of the boards WebFlash was written for.
-export const STARTER_DEFCONFIG = "CONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n";
+// the shape of the boards WebFlash was written for, with the low-level
+// options shown (the clock, the USB ids, the CAN bus speed).
+export const STARTER_DEFCONFIG = "CONFIG_LOW_LEVEL_OPTIONS=y\nCONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n";
+
+// The engine's side of Katapult beside the firmware (session.katapult), before
+// the engine has loaded it.
+function freshKatapultEngine() {
+  return {
+    ref: null, configText: "", tree: null, plan: null,
+    sources: { state: "idle", detail: "" },
+    link: null,     // the offset link (bridge pair answers' offset), while paired
+    notes: [],      // what the last paired change could not copy into the other tree
+  };
+}
 
 export function defaultTables() {
   return {
@@ -172,6 +186,8 @@ export class Session {
     this.sources = { state: "idle", detail: "" };   // idle, loading, ready, error
     this.locked = "";           // why configuring is locked (a build running), "" when not
     this.build = null;          // the last build (build/artifacts.js's buildRecord), until a TOML is opened
+    // The engine's side of Katapult beside the firmware (see the katapult getter).
+    this._katapultEngine = freshKatapultEngine();
 
     this._listeners = new Map();
     this._undo = [];
@@ -213,6 +229,25 @@ export class Session {
   get project() { return this._t.firmware ? this._t.firmware.project : null; }
   get version() { return this._t.firmware ? this._t.firmware.version : null; }
   get defconfigText() { return this._t.setups.length ? this._t.setups[0].defconfig : ""; }
+
+  /**
+   * Katapult configured beside the firmware, or null when not picked: {on,
+   * version, defconfigText, ref, configText, tree, plan, sources, link,
+   * notes}, the configure session's side of the engine's "katapult" slot.
+   * on, version and defconfigText are the tables' ([katapult] version and
+   * the configured setup's katapult defconfig), so undo and Save TOML cover
+   * them; the rest is the engine's. Null while the project is Katapult itself.
+   */
+  get katapult() {
+    if (!this._t.katapult || !this._t.firmware || this._t.firmware.project === "katapult") return null;
+    const setup = this._t.setups[0];
+    return {
+      on: true, version: this._t.katapult.version,
+      defconfigText: setup && setup.katapult ? setup.katapult : "",
+      ...this._katapultEngine,
+    };
+  }
+
   get theme() { return this._t.board.theme || "default"; }
   get exposed() { return this._t.options.map((o) => o.symbol); }
 
@@ -249,6 +284,18 @@ export class Session {
     return { tables: clone(this._t), tomlName: this.tomlName, files: this.files };
   }
 
+  // After the tables were replaced (undo, redo, open): announce a Katapult
+  // ticked, unticked or at another version, and forget the engine's side of
+  // one that is gone. Returns whether it changed.
+  _katapultReplaced(before, origin) {
+    const was = before && before.version;
+    const now = this.katapult && this.katapult.version;
+    if (was === now) return false;
+    if (!now) this._katapultEngine = freshKatapultEngine();
+    this._changed("katapult", origin);
+    return true;
+  }
+
   /** Record the state before an undoable change (the configure code calls it before a Kconfig edit). */
   checkpoint() {
     this._undo.push(this._snapshot());
@@ -259,10 +306,13 @@ export class Session {
 
   _restore(snap, origin) {
     const before = this._t;
+    const katapultBefore = this.katapult;
     this._t = snap.tables;
     this.tomlName = snap.tomlName;
     this.files = snap.files;
     for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    this._katapultReplaced(katapultBefore, origin);
+    this._changed("katapult-config", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
       this._changed("project", origin);
     }
@@ -300,11 +350,15 @@ export class Session {
   openTables(tables, { name = null, files = null, origin = "open" } = {}) {
     this.checkpoint();
     const before = this._t;
+    const katapultBefore = this.katapult;
     this._t = normalizeTables(tables);
     this.build = null;
+    // An opened TOML's Katapult starts over in the engine.
+    this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
     if (files !== null) this.files = files;
     for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    if (katapultBefore || this.katapult) this._changed("katapult", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
       this._changed("project", origin);
     }
@@ -367,13 +421,84 @@ export class Session {
     if (version) next.version = version;
     this._t.firmware = next;
     // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
-    if (project === "katapult" && this._t.katapult) {
+    const dropKatapult = project === "katapult" && Boolean(this._t.katapult);
+    if (dropKatapult) {
       this._t.katapult = null;
       this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+      this._katapultEngine = freshKatapultEngine();
     }
     this._changed("project", origin);
     this._changed("firmware", origin);
+    if (dropKatapult) this._changed("katapult", origin);
     if (version && version !== f.version) this._changed("version", origin);
+    this._sync(origin);
+  }
+
+  // ── Katapult beside the firmware ─────────────────────────────────
+
+  /**
+   * Tick or untick Katapult beside the firmware, or change its version: {on,
+   * version} (one undo step). Ticking it adds [katapult] (version "latest"
+   * unless named) and an empty Katapult defconfig to the configured setup
+   * (the configure code loads it with the firmware's chip); unticking drops
+   * [katapult] and every setup's Katapult defconfig (the loader refuses one
+   * without the other). Refused while the project is Katapult itself.
+   * Announced as a "katapult" change.
+   */
+  setKatapult({ on, version } = {}, { origin = "visual", undoable = true } = {}) {
+    if (!this._t.firmware || this.project === "katapult") return;
+    const k = this._t.katapult;
+    const turnOn = on === undefined ? Boolean(k) : Boolean(on);
+    if (!turnOn) {
+      if (!k) return;
+      if (undoable) this.checkpoint();
+      this._t.katapult = null;
+      this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+      this._katapultEngine = freshKatapultEngine();
+    } else if (!k) {
+      if (undoable) this.checkpoint();
+      this._t.katapult = { version: version || "latest", versions: "all", default: true };
+      this._t.setups = this._t.setups.map((s, i) => (i === 0 && s.katapult === null ? { ...s, katapult: "" } : s));
+      this._katapultEngine = freshKatapultEngine();
+    } else {
+      if (!version || version === k.version) return;
+      if (undoable) this.checkpoint();
+      const next = { ...k, version };
+      // A pinned version must be one of the versions the reader picks from.
+      if (Array.isArray(next.versions) && !PINLESS.includes(version) && !next.versions.includes(version)) {
+        next.versions = [...next.versions, version];
+      }
+      this._t.katapult = next;
+    }
+    this._changed("katapult", origin);
+    this._sync(origin);
+  }
+
+  /**
+   * The engine's side of session.katapult (ref, configText, tree, plan,
+   * sources, link, notes), as the configure code reports it: not undoable.
+   * Announced as a "katapult-<part>" change.
+   */
+  setKatapultState(fields, part = "engine", { origin = "engine" } = {}) {
+    if (!this.katapult) return;
+    const engine = { ...this._katapultEngine };
+    for (const key of Object.keys(freshKatapultEngine())) if (key in fields) engine[key] = fields[key];
+    this._katapultEngine = engine;
+    this._changed(`katapult-${part}`, origin);
+  }
+
+  /**
+   * Katapult's .config and defconfig after a change; the defconfig becomes
+   * the configured setup's katapult defconfig. The undo point was taken
+   * before the change (checkpoint).
+   */
+  setKatapultConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
+    const k = this.katapult;
+    if (!k || (k.configText === configText && k.defconfigText === defconfigText)) return;
+    this._katapultEngine = { ...this._katapultEngine, configText };
+    const setup = this._t.setups[0];
+    if (setup) this._t.setups[0] = { ...setup, katapult: defconfigText };
+    this._changed("katapult-config", origin);
     this._sync(origin);
   }
 
