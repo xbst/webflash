@@ -485,7 +485,8 @@ export class Session {
    * firmware's side is kept aside, so going back to a firmware brings back
    * its projects, versions and defconfigs, and the Katapult it had, as
    * configured alone. Without a version, leaving Katapult alone keeps an
-   * alias and takes "latest" for a Katapult ref.
+   * alias, or the firmware's own ref back to that firmware, and takes
+   * "latest" for a ref of another project.
    */
   setProject(project, { version = null, origin = "visual", undoable = true } = {}) {
     if (!PROJECTS.includes(project) || !this._t.firmware || project === this._t.firmware.project) return;
@@ -506,8 +507,11 @@ export class Session {
     const next = { ...base, project, projects };
     if (alone) next.versions = k ? k.versions : "all";
     if (version) next.version = version;
-    else if (back) next.version = aside.firmware.version;
-    else if (f.project === "katapult" && !PINLESS.includes(f.version)) next.version = "latest";
+    // Leaving Katapult alone, an alias stays, and an exact ref only for its
+    // own project (the firmware's, back to it): "latest" otherwise.
+    else if (f.project === "katapult" && !PINLESS.includes(next.version) && !(back && base.project === project)) {
+      next.version = "latest";
+    }
     // A pinned version must be one of the versions the reader picks from.
     if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
       next.versions = [...next.versions, next.version];
