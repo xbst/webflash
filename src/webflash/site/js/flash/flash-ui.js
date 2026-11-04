@@ -122,6 +122,7 @@ export function createFlashPanel(root, options = {}) {
     pending: null,        // {firmware}: what setFirmware gave while a device was picked or written
     empty: "",            // why there is no firmware, when setFirmware said
     written: null,        // {phase, done, total} of the running flash, for the write list
+    flashed: null,        // the firmware the last flash wrote, while its result is shown
   };
   root.innerHTML = "";
   root.classList.add("flash-panel");
@@ -357,7 +358,10 @@ export function createFlashPanel(root, options = {}) {
     const w = state.written;
     // How far the flash is, as a fraction of the bytes: rows are written in
     // address order and read back in the same order.
-    const at = state.phase === "done" ? 1 : state.phase === "flashing" && w && w.total ? w.done / w.total : 0;
+    // A firmware that arrived during the flash keeps its result box, but none
+    // of its rows was written.
+    const doneHere = state.phase === "done" && state.flashed === fw;
+    const at = doneHere ? 1 : state.phase === "flashing" && w && w.total ? w.done / w.total : 0;
     let before = 0;
     const items = [];
     const m = currentMethod();
@@ -373,7 +377,7 @@ export function createFlashPanel(root, options = {}) {
       // A row is checked once its bytes are written (the read-back that
       // follows covers them all); the row being erased or written spins.
       const written = w && w.phase === "write" ? at : w && w.phase === "verify" ? 1 : 0;
-      if (state.phase === "done") { icon = "✓"; cls = "ok"; }
+      if (doneHere) { icon = "✓"; cls = "ok"; }
       else if (state.phase === "flashing" && w) {
         if (written >= end - 1e-9) { icon = "✓"; cls = "ok"; }
         else if (w.phase === "erase" ? i === 0 : written >= start - 1e-9) cls = "run";
@@ -608,6 +612,7 @@ export function createFlashPanel(root, options = {}) {
     state.phase = "flashing";
     state.error = null;
     state.written = null;
+    state.flashed = null;
     result.hidden = true;
     confirmBox.hidden = true;
     renderMethods();
@@ -628,6 +633,7 @@ export function createFlashPanel(root, options = {}) {
       }, { log, progress: setProgress, status: setStatus, pickNode });
       state.result = r;
       state.phase = "done";
+      state.flashed = fw;
       state.connection = null;
       progressWrap.hidden = true;
       showSuccess(r);
@@ -697,6 +703,7 @@ export function createFlashPanel(root, options = {}) {
       result.hidden = true;
       state.error = null;
       state.written = null;
+      state.flashed = null;
     }
     if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
     renderAll();
