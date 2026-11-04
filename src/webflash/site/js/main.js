@@ -28,7 +28,7 @@ import { buildsMatch } from "./build/artifacts.js";
 import { Wizard } from "./wizard/wizard.js";
 import { mountStatusChip } from "./wizard/status-chip.js";
 import { FirmwarePage } from "./wizard/firmware-page.js";
-import { askConfigProject, configTables, sortConfigs } from "./configure/open-config.js";
+import { configTables, placeConfigs, sortConfigs } from "./configure/open-config.js";
 
 const session = new Session();
 const configurator = new Configurator(session);
@@ -556,16 +556,13 @@ async function openConfigs(fileList) {
   }
   let { firmware, katapult } = sorted;
   if (sorted.ask.length) {
-    const [first, second] = sorted.ask;
-    const project = await askConfigProject(first.name);
-    if (!project) return false;
-    if (project === "katapult") {
-      katapult = first;
-      if (second) firmware = { ...second, project: null };
-    } else {
-      firmware = { ...first, project };
-      if (second) katapult = second;
+    const placed = await placeConfigs(sorted);
+    if (!placed) return false;
+    if (placed.error) {
+      showError("Could not open the .config", placed.error);
+      return false;
     }
+    ({ firmware, katapult } = placed);
   }
   // Klipper or Kalico: what the file says, else page 1's pick.
   const project = firmware && (firmware.project || (["klipper", "kalico"].includes(session.project) ? session.project : "klipper"));

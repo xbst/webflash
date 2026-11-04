@@ -119,19 +119,59 @@ export function configTables({ project, firmwareText = null, katapultText = null
   return t;
 }
 
+// The firmware a file's name names: "klipper", "kalico" or null.
+function namedFirmware(name) {
+  const n = String(name || "").toLowerCase();
+  return /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
+}
+
 /**
- * Ask which project a .config is for, when neither its symbols nor its name
- * say. Resolves to "klipper", "kalico", "katapult", or null when cancelled.
+ * The files sortConfigs left to the reader, placed by asking: one file is
+ * asked which project it is for; of two, the reader picks Katapult's, and
+ * the other (the firmware's) is asked Klipper or Kalico unless its name
+ * says. Resolves to {firmware, katapult}, {error}, or null when cancelled.
+ * asks: the questions ({project, katapult}), replaceable for tests.
  */
-export function askConfigProject(name) {
+export async function placeConfigs(sorted, { project: askProject = askConfigProject, katapult: askKatapult = askKatapultFile } = {}) {
+  let { firmware, katapult } = sorted;
+  const [first, second] = sorted.ask;
+  if (second) {
+    const which = await askKatapult(first.name, second.name);
+    if (which === null) return null;
+    if (which === "neither") {
+      return { error: `${first.name}, ${second.name}: both are firmware configurations; open one, or a firmware's with Katapult's.` };
+    }
+    katapult = { ...sorted.ask[which] };
+    const fw = sorted.ask[1 - which];
+    const project = namedFirmware(fw.name) || await askProject(fw.name, { katapult: false });
+    if (!project) return null;
+    firmware = { ...fw, project };
+  } else if (first) {
+    const project = await askProject(first.name);
+    if (!project) return null;
+    if (project === "katapult") katapult = { ...first };
+    else firmware = { ...first, project };
+  }
+  return { firmware, katapult };
+}
+
+/**
+ * Ask which project a .config is for, when its symbols do not say (katapult:
+ * false offers Klipper and Kalico only, for the firmware's file of a pair).
+ * Resolves to "klipper", "kalico", "katapult", or null when cancelled.
+ */
+export function askConfigProject(name, { katapult = true } = {}) {
   return new Promise((resolve) => {
-    const { body, close, onClose } = openModal("Which firmware is this .config for?");
+    const { body, close, onClose } = openModal(katapult ? "Which firmware is this .config for?" : "Klipper or Kalico?");
     let answer = null;
     onClose(() => resolve(answer));
     body.innerHTML =
-      `<p><code>${esc(name)}</code> sets nothing that only Klipper or only Katapult has. Pick the project it was made with.</p>` +
+      (katapult
+        ? `<p><code>${esc(name)}</code> sets nothing that only Klipper or only Katapult has. Pick the project it was made with.</p>`
+        : `<p>Pick the firmware <code>${esc(name)}</code> was made for.</p>`) +
       `<div class="modal-actions"><button data-project="klipper">Klipper</button><button data-project="kalico">Kalico</button>` +
-      `<button data-project="katapult">Katapult</button><span class="gen-spacer"></span><button data-project="">Cancel</button></div>`;
+      (katapult ? `<button data-project="katapult">Katapult</button>` : "") +
+      `<span class="gen-spacer"></span><button data-project="">Cancel</button></div>`;
     for (const b of body.querySelectorAll("[data-project]")) {
       b.addEventListener("click", () => {
         answer = b.dataset.project || null;
@@ -139,5 +179,29 @@ export function askConfigProject(name) {
       });
     }
     body.querySelector("[data-project=klipper]").focus();
+  });
+}
+
+/**
+ * Ask which of two .configs is Katapult's, when neither one's symbols say.
+ * Resolves to 0 or 1 (a file), "neither", or null when cancelled.
+ */
+export function askKatapultFile(a, b) {
+  return new Promise((resolve) => {
+    const { body, close, onClose } = openModal("Which is Katapult's?");
+    let answer = null;
+    onClose(() => resolve(answer));
+    body.innerHTML =
+      `<p>Neither <code>${esc(a)}</code> nor <code>${esc(b)}</code> sets anything that only Klipper or only Katapult has. Pick Katapult's; the other is the firmware's.</p>` +
+      `<div class="modal-actions"><button data-file="0">${esc(a)}</button><button data-file="1">${esc(b)}</button>` +
+      `<button data-file="neither">Neither</button><span class="gen-spacer"></span><button data-file="">Cancel</button></div>`;
+    for (const btn of body.querySelectorAll("[data-file]")) {
+      btn.addEventListener("click", () => {
+        const f = btn.dataset.file;
+        answer = f === "" ? null : f === "neither" ? f : Number(f);
+        close();
+      });
+    }
+    body.querySelector("[data-file='0']").focus();
   });
 }
