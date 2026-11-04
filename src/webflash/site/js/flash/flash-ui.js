@@ -632,8 +632,16 @@ export function createFlashPanel(root, options = {}) {
     set method(id) { if (busy()) return; state.method = id; renderAll(); },
     get state() { return state; },
     capabilities: caps,
-    /** Ask for a flash address for a .bin: an inline form; resolves with a number or null. */
+    /**
+     * Ask for a flash address for a .bin: an inline form; resolves with a
+     * number or null. While a device is being picked or written it refuses
+     * instead: the form would take the place of the CAN node list, which the
+     * running flash waits on.
+     */
     askAddress(defaultAddress, { name = "the file" } = {}) {
+      if (busy()) {
+        return Promise.reject(new FlashError("A flash is running; upload the file again once it has ended.", { code: "busy", fix: "Wait for the flash to end, then upload the file again." }));
+      }
       return new Promise((resolve) => {
         prompt.hidden = false;
         prompt.innerHTML = "";
