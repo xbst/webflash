@@ -169,9 +169,9 @@ export function mcuOf(cfg) {
   return null;
 }
 
-// Klipper's `config MCU` defaults, by the chip's MACH_ symbol (src/*/Kconfig).
+// Klipper's and Kalico's `config MCU` defaults, by the chip's MACH_ symbol (src/*/Kconfig).
 const MCU_NAMES = {
-  STM32F031: "stm32f031x6", STM32F042: "stm32f042x6", STM32F070: "stm32f070xb", STM32F072: "stm32f072xb", STM32F103: "stm32f103xe",
+  STM32F031: "stm32f031x6", STM32F042: "stm32f042x6", STM32F070: "stm32f070xb", STM32F072: "stm32f072xb", STM32F103: "stm32f103xe", AT32F403: "stm32f103xe",
   STM32F207: "stm32f207xx", STM32F401: "stm32f401xc", STM32F405: "stm32f405xx", STM32F407: "stm32f407xx", STM32F429: "stm32f429xx",
   STM32F446: "stm32f446xx", STM32F765: "stm32f765xx", STM32G070: "stm32g070xx", STM32G071: "stm32g071xx", STM32G0B0: "stm32g0b0xx",
   STM32G0B1: "stm32g0b1xx", STM32G431: "stm32g431xx", STM32G474: "stm32g474xx", STM32H723: "stm32h723xx", STM32H743: "stm32h743xx",
@@ -319,7 +319,8 @@ export function applicationAddress(cfg) {
 /** The first visible member of Klipper's STM32 "Bootloader offset" choice, by chip. */
 function defaultStm32Offset(map) {
   const is = (sym) => map.get(`CONFIG_${sym}`) === true;
-  const F1 = is("MACH_STM32F1") || is("MACH_STM32F103") || is("MACH_N32G452") || is("MACH_N32G455");
+  // Kalico's AT32F403 selects MACH_STM32F1, which a bare defconfig does not carry.
+  const F1 = is("MACH_STM32F1") || is("MACH_STM32F103") || is("MACH_N32G452") || is("MACH_N32G455") || is("MACH_AT32F403");
   const F0x2 = is("MACH_STM32F0x2") || is("MACH_STM32F042") || is("MACH_STM32F072");
   const F0 = is("MACH_STM32F0") || F0x2 || is("MACH_STM32F031") || is("MACH_STM32F070");
   const G0 = is("MACH_STM32G0") || /^CONFIG_MACH_STM32G0/.test([...map.keys()].find((k) => /^CONFIG_MACH_STM32G0\w+$/.test(k) && map.get(k) === true) || "");
