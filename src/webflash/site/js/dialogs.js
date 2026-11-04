@@ -18,6 +18,20 @@ export function esc(s) {
                   .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// The open dialogs, the topmost last. Everything else on the page (the app
+// and any dialog under the top one) is inert, so Tab cannot reach it, until
+// the last dialog closes.
+const openModals = [];
+let inertNow = new Set();
+
+function updateInert() {
+  const top = openModals[openModals.length - 1];
+  const want = new Set(top ? [...document.body.children].filter((el) => el !== top) : []);
+  for (const el of inertNow) if (!want.has(el)) el.removeAttribute("inert");
+  for (const el of want) el.setAttribute("inert", "");
+  inertNow = want;
+}
+
 /** A modal shell. Returns the body element plus a close function. */
 export function openModal(title, { wide = false } = {}) {
   const backdrop = document.createElement("div");
@@ -36,7 +50,10 @@ export function openModal(title, { wide = false } = {}) {
     closed = true;
     for (const fn of cleanups) { try { fn(); } catch (e) { /* keep closing */ } }
     document.removeEventListener("keydown", onKey);
+    const i = openModals.indexOf(backdrop);
+    if (i >= 0) openModals.splice(i, 1);
     backdrop.remove();
+    updateInert();
     if (opener && opener.isConnected && typeof opener.focus === "function") opener.focus();
   };
   const onKey = (e) => { if (e.key === "Escape") close(); };
@@ -44,7 +61,9 @@ export function openModal(title, { wide = false } = {}) {
   backdrop.querySelector(".modal-close").addEventListener("click", close);
   backdrop.addEventListener("mousedown", (e) => { if (e.target === backdrop) close(); });
   document.addEventListener("keydown", onKey);
+  openModals.push(backdrop);
   document.body.appendChild(backdrop);
+  updateInert();
   backdrop.querySelector(".modal-close").focus();
 
   return { body: backdrop.querySelector(".modal-body"), close, onClose: (fn) => cleanups.push(fn) };
