@@ -207,6 +207,9 @@ export class Session {
     // The setups (ids) whose firmware starts from Katapult's shared options:
     // the next pair sync copies Katapult's into the firmware (katapultLeads).
     this._katapultLeads = new Set();
+    // Setup ids a retitle replaced (old -> new; setSetups), so an engine
+    // answer asked for under the old id still lands.
+    this._renamed = new Map();
 
     this._listeners = new Map();
     this._undo = [];
@@ -260,10 +263,12 @@ export class Session {
   // The index of the setup an engine answer was asked for (the setup's id
   // when the request was made; null: the one edited now), or -1 when it is
   // gone. The lone setup of a [config] table, which Add and a title rename,
-  // is still the first.
+  // is still the first; a setup a retitle gave another id is found by it.
   _setupIndexFor(id) {
     if (id === null || id === undefined) return this.setupIndex;
-    const i = this._t.setups.findIndex((s) => s.id === id);
+    const find = (x) => this._t.setups.findIndex((s) => s.id === x);
+    let i = find(id);
+    for (let x = id, n = 0; i < 0 && this._renamed.has(x) && n < 100; n++) i = find(x = this._renamed.get(x));
     return i >= 0 ? i : id === CONFIG_SETUP_ID && this._t.setups.length ? 0 : -1;
   }
 
@@ -443,6 +448,7 @@ export class Session {
     this._setupIndex = 0;
     this._firmwareAside = null;
     this._katapultLeads = new Set();
+    this._renamed = new Map();
     // An opened TOML's Katapult starts over in the engine.
     this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
@@ -704,6 +710,15 @@ export class Session {
     if (same(next.setups, this._t.setups) && !optionsChanged && same(next.katapult, this._t.katapult) &&
       index === this.setupIndex) return { reload: false };
     if (undoable) this.checkpoint();
+    // A retitle that gave a setup another id (one made here follows its title).
+    if (next.setups.length === this._t.setups.length) {
+      const was = new Set(this._t.setups.map((x) => x.id));
+      const now = new Set(next.setups.map((x) => x.id));
+      next.setups.forEach((x, i) => {
+        const old = this._t.setups[i].id;
+        if (old !== x.id && !now.has(old) && !was.has(x.id)) this._renamed.set(old, x.id);
+      });
+    }
     this._t.setups = next.setups;
     this._t.options = next.options;
     this._t.katapult = next.katapult;
