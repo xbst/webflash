@@ -119,6 +119,11 @@ const BUSY_GENERIC = "Close any other program that is talking to the board: a Kl
 
 const PICKER_NOTE = "Make sure the board is in the right mode and is plugged straight into this computer (a USB hub can hide it); the picker only lists devices in that mode.";
 
+const DISCONNECTED_FIXES = [
+  "The board disconnected before the step finished. If it just restarted after a successful write, that is expected: check that it enumerates as Klipper (or Katapult) now.",
+  "Otherwise put it back in its bootloader and click Connect again, with a different USB cable or port if it keeps dropping out.",
+];
+
 function deviceLabel(method) {
   switch (method) {
     case "dfu": return "\"DFU in FS Mode\" or \"STM32 BOOTLOADER\"";
@@ -177,6 +182,10 @@ export function explainError(err, context = {}) {
       case "reenumeration":
         if (!fixes.length) fixes.push("Put the board in its bootloader by hand (hold BOOT0 or BOOTSEL and tap RESET, or double-tap RESET for Katapult), then click Connect and pick it.");
         break;
+      case "disconnected":
+        // The serial and USB wrappers' own error for a board unplugged mid-step.
+        if (!fixes.length) fixes.push(...DISCONNECTED_FIXES);
+        break;
       default:
         break;
     }
@@ -212,10 +221,7 @@ export function explainError(err, context = {}) {
       code: "disconnected",
       title: "The device went away",
       message: raw,
-      fixes: [
-        "The board disconnected before the step finished. If it just restarted after a successful write, that is expected: check that it enumerates as Klipper (or Katapult) now.",
-        "Otherwise put it back in its bootloader and click Connect again, with a different USB cable or port if it keeps dropping out.",
-      ],
+      fixes: DISCONNECTED_FIXES.slice(),
     };
   }
   if (name === "AbortError") {
