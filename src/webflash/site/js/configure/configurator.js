@@ -639,6 +639,7 @@ export class Configurator {
     return this._enqueue(async () => {
       if (!this.readySlot(which) || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       s.checkpoint();
+      s.takeKatapultLead();   // an edit: the firmware's values win from now on
       try {
         const out = await runtime.kconfigSet(name, value, { slot: which });
         await this._refresh(which, out, { at });
@@ -665,6 +666,7 @@ export class Configurator {
     return this._enqueue(async () => {
       if (!this.readySlot(slot) || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       if (checkpoint) s.checkpoint();
+      s.takeKatapultLead();
       const loaded = await runtime.kconfigLoad(text, { slot });
       await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null, { at });
       await this._afterPairing(slot, loaded && loaded.pair, { sync: slot, at });

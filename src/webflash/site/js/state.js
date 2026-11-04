@@ -348,7 +348,7 @@ export class Session {
   _snapshot() {
     return {
       tables: clone(this._t), tomlName: this.tomlName, files: this.files, setupId: this.setup ? this.setup.id : null,
-      aside: clone(this._firmwareAside),
+      aside: clone(this._firmwareAside), leads: [...this._katapultLeads],
     };
   }
 
@@ -382,8 +382,6 @@ export class Session {
 
   /** Record the state before an undoable change (the configure code calls it before a Kconfig edit). */
   checkpoint() {
-    // A change made since: the firmware's own values win again.
-    this._katapultLeads.delete(this.setup ? this.setup.id : null);
     this._undo.push(this._snapshot());
     if (this._undo.length > UNDO_LIMIT) this._undo.shift();
     this._redo = [];
@@ -399,7 +397,7 @@ export class Session {
     this.tomlName = snap.tomlName;
     this.files = snap.files;
     this._firmwareAside = snap.aside || null;
-    this._katapultLeads = new Set();
+    this._katapultLeads = new Set(snap.leads || []);
     this._setupIndex = this._setupIndexAfter(before, wasId, snap.setupId);
     for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
     if (this.setupIndex !== indexBefore) this._changed("setup", origin);
@@ -519,7 +517,6 @@ export class Session {
    */
   setProject(project, { version = null, origin = "visual", undoable = true } = {}) {
     if (!PROJECTS.includes(project) || !this._t.firmware || project === this._t.firmware.project) return;
-    const leads = new Set(this._katapultLeads);
     if (undoable) this.checkpoint();
     const f = this._t.firmware;
     const k = this._t.katapult;
@@ -550,8 +547,8 @@ export class Session {
     }
     this._t.firmware = next;
     const katapultChanged = (alone && Boolean(k)) || (back && Boolean(aside.katapult)) || fresh;
-    // Klipper to Kalico before the pair synced: the firmware still starts from Katapult's options.
-    this._katapultLeads = alone || back ? new Set() : leads;
+    // Klipper to Kalico before the pair synced keeps a lead.
+    if (alone || back) this._katapultLeads = new Set();
     if (alone) {
       // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
       this._firmwareAside = { firmware: clone(f), katapult: k ? clone(k) : null, setups: clone(setups) };
@@ -595,8 +592,8 @@ export class Session {
    * Whether the configured setup's firmware starts from Katapult's shared
    * options (setProject from Katapult alone with nothing put aside): the
    * next pair sync copies Katapult's into the firmware, not the other way.
-   * Any undoable change to the setup ends it; takeKatapultLead ends it once
-   * that sync ran.
+   * A Kconfig edit or unticking Katapult ends it (takeKatapultLead), and so
+   * does that sync; the undo snapshots keep it.
    */
   get katapultLeads() {
     return Boolean(this.katapult) && this._katapultLeads.has(this.setup.id);
@@ -630,6 +627,7 @@ export class Session {
     if (!turnOn) {
       if (!mine) return;
       if (undoable) this.checkpoint();
+      this.takeKatapultLead();   // ticked again, Katapult starts from the firmware
       const setups = this._t.setups.map((s, i) => (i === at ? { ...s, katapult: null } : s));
       const others = setups.some((s) => typeof s.katapult === "string");
       this._t.setups = others ? setups : setups.map((s) => ({ ...s, katapult: null }));
@@ -716,7 +714,10 @@ export class Session {
       const now = new Set(next.setups.map((x) => x.id));
       next.setups.forEach((x, i) => {
         const old = this._t.setups[i].id;
-        if (old !== x.id && !now.has(old) && !was.has(x.id)) this._renamed.set(old, x.id);
+        if (old !== x.id && !now.has(old) && !was.has(x.id)) {
+          this._renamed.set(old, x.id);
+          if (this._katapultLeads.delete(old)) this._katapultLeads.add(x.id);
+        }
       });
     }
     this._t.setups = next.setups;
