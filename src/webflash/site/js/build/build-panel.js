@@ -345,7 +345,7 @@ export class BuildPanel {
       this.finishOk(out, job);
     } catch (e) {
       this.flushLog();
-      if (e instanceof BuildCancelled) this.finishCancelled();
+      if (e instanceof BuildCancelled || this.cancelled) this.finishCancelled();
       else this.finishFailed(job.failed, e);
     } finally {
       this.running = false;

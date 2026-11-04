@@ -178,6 +178,14 @@ export class Builder {
     throw new BuildCancelled();
   }
 
+  // What an error means once the build was stopped: the worker's crash, or
+  // the cancel. Terminating the workers rejects whatever waits on them (their
+  // start, a mount) with a plain Error, which is a cancel here, not a failure.
+  _stopped(e) {
+    if (!this._abort || !this._abort.signal.aborted) return e;
+    return this.crash ? new Error(this.crash) : new BuildCancelled();
+  }
+
   /**
    * Make the compiler ready: the release's files (downloaded or read from
    * the cache) and the workers started with them. step(text) draws a row.
@@ -189,8 +197,9 @@ export class Builder {
     try {
       await this._prepare(tc, options);
     } catch (e) {
+      const error = this._stopped(e);
       if (this._abort.signal.aborted) this._abort = null;
-      throw e;
+      throw error;
     }
   }
 
@@ -238,6 +247,8 @@ export class Builder {
     if (!this._abort) this.begin();
     try {
       return await this._run(options);
+    } catch (e) {
+      throw this._stopped(e);
     } finally {
       this._abort = null;
     }
