@@ -23,14 +23,29 @@ export const OLDER_SHOWN = 50;
 
 const describeOf = (ref) => ref.describe || ref.id;
 
+const pinned = (v) => Boolean(v) && v !== "latest" && v !== "release";
+
 /**
- * Whether the TOML's versions setting ("all", "releases" or a list of ids)
- * offers a value; the value the control holds is always offered.
+ * What the TOML's versions setting ("all", "releases" or a list of ids)
+ * offers, by ref: {current, offered(id)}. current is the ref the value held
+ * pins (null for "latest" and "release"), offered(id) whether an option's
+ * value is offered; the value the control holds is always offered. A value
+ * or list entry naming a ref by another spelling (another abbreviation of a
+ * commit's hash) names that ref, as resolveVersion reads it.
  */
-function offered(versions, tags, value, current) {
-  if (value === current || !versions || versions === "all") return true;
-  if (versions === "releases") return value === "release" || tags.has(value);
-  return Array.isArray(versions) && versions.includes(value);
+function offerer(index, project, versions, value) {
+  const refOf = (v) => (pinned(v) && resolveVersion(index, project, v).ref) || null;
+  const current = refOf(value);
+  const list = Array.isArray(versions)
+    ? new Set(versions.flatMap((v) => { const r = refOf(v); return r ? [v, r.id] : [v]; })) : null;
+  const g = versions === "releases" ? groupRefs(index, project) : null;
+  const tags = new Set(g ? g.releases.map((r) => r.id) : []);
+  const offered = (id) => {
+    if (id === value || (current && id === current.id) || !versions || versions === "all") return true;
+    if (versions === "releases") return id === "release" || tags.has(id);
+    return Boolean(list) && list.has(id);
+  };
+  return { current, offered };
 }
 
 /** Whether a versions setting narrows what the reader picks from. */
@@ -47,8 +62,8 @@ export function mayOfferOlder(index, project, versions, value) {
     const r = resolveVersion(index, project, v);
     return Boolean(r.pending || (r.ref && r.ref.kind === "commit"));
   };
-  if (value && value !== "latest" && value !== "release" && older(value)) return true;
-  return Array.isArray(versions) && versions.some((v) => v !== "latest" && v !== "release" && older(v));
+  if (pinned(value) && older(value)) return true;
+  return Array.isArray(versions) && versions.some((v) => pinned(v) && older(v));
 }
 
 /**
@@ -62,9 +77,8 @@ export function matchVersion(index, project, text, { value = "latest", versions 
   let found;
   if (!restricts(versions)) found = findVersion(index, project, text);
   else {
-    const g = groupRefs(index, project);
-    const tags = new Set(g ? g.releases.map((r) => r.id) : []);
-    found = findVersion(index, project, text, (ref) => offered(versions, tags, ref.id, value));
+    const { offered } = offerer(index, project, versions, value);
+    found = findVersion(index, project, text, (ref) => offered(ref.id));
   }
   if (found && !found.exact && historyInfo(index, project) && !historyRefs(index, project) &&
       mayOfferOlder(index, project, versions, value)) {
@@ -76,7 +90,7 @@ export function matchVersion(index, project, text, { value = "latest", versions 
 
 /**
  * The combobox's list for a query, pure, for tests: {groups: [{label,
- * options: [{value, label, detail, unchecked, title, ref?}]}], match,
+ * options: [{value, label, detail, unchecked, title, ref?, selected}]}], match,
  * more, older}. The groups are "Latest", "Releases" and "Branches"
  * (narrowed by versions), then "Older commits" (the loaded history, OLDER_SHOWN at most; more says
  * how many matched beyond). A query filters by label, id, describe string
@@ -86,7 +100,7 @@ export function matchVersion(index, project, text, { value = "latest", versions 
 export function pickerList(index, project, { value = "latest", versions = "all", query = "" } = {}) {
   const g = groupRefs(index, project);
   if (!g) return { groups: [], match: null, more: 0, older: false };
-  const tags = new Set(g.releases.map((r) => r.id));
+  const { current, offered } = offerer(index, project, versions, value);
   const q = String(query || "").trim().toLowerCase();
   const hits = (o) => !q || [o.label, o.value, o.detail, o.ref && o.ref.describe, o.ref && o.ref.sha && o.ref.sha.slice(0, 12)]
     .some((s) => s && String(s).toLowerCase().includes(q));
@@ -94,13 +108,14 @@ export function pickerList(index, project, { value = "latest", versions = "all",
     const text = uncheckedText(ref);
     return `${text[0].toUpperCase()}${text.slice(1)}: it may not build.`;
   };
+  // The value held, by its own spelling or by the ref it pins.
   const opt = (v, label, ref, detail, title) => ({
     value: v, label, detail: detail.filter(Boolean).join(" · "), ref, unchecked: !isChecked(ref),
-    title: title || (isChecked(ref) ? "" : caution(ref)),
+    title: title || (isChecked(ref) ? "" : caution(ref)), selected: v === value || (Boolean(current) && v === current.id),
   });
   const groups = [];
   const push = (label, options) => {
-    const shown = options.filter((o) => offered(versions, tags, o.value, value) && hits(o));
+    const shown = options.filter((o) => offered(o.value) && hits(o));
     if (shown.length) groups.push({ label, options: shown });
   };
   const latest = resolveVersion(index, project, "latest");
@@ -119,14 +134,14 @@ export function pickerList(index, project, { value = "latest", versions = "all",
   }
   const branches = [...g.branches];
   // A board TOML may name the default branch itself; list it so it can show as selected.
-  if (g.defaultBranch && value === g.defaultBranch.id) branches.unshift(g.defaultBranch);
+  if (g.defaultBranch && current === g.defaultBranch) branches.unshift(g.defaultBranch);
   push("Branches", branches.map((r) => opt(r.id, r.id, r, [r.describe, r.date])));
   const older = historyRefs(index, project);
   let more = 0;
   if (older) {
     const options = [];
     for (const ref of older) {
-      if (!offered(versions, tags, ref.id, value)) continue;
+      if (!offered(ref.id)) continue;
       const o = opt(ref.id, describeOf(ref), ref, [ref.date]);
       if (!hits(o)) continue;
       if (options.length < OLDER_SHOWN) options.push(o);
@@ -142,7 +157,7 @@ export function pickerList(index, project, { value = "latest", versions = "all",
       label: "Match",
       options: [{ value: ref.id, label: describeOf(ref),
         detail: match.exact ? "this commit" : restricts(versions) ? "closest offered" : "closest kept",
-        unchecked: !isChecked(ref), ref, note: match.note, title: match.note || "" }],
+        unchecked: !isChecked(ref), ref, note: match.note, title: match.note || "", selected: false }],
     });
   }
   return { groups, match, more, older: older !== null };
@@ -446,7 +461,7 @@ class VersionCombobox {
   }
 
   _selectedIndex() {
-    return this.flat.findIndex((o) => o.value === this.opts.value);
+    return this.flat.findIndex((o) => o.selected);
   }
 
   _scrollToActive() {
@@ -505,7 +520,7 @@ class VersionCombobox {
         const row = make(doc, "div", {
           role: "option", id: `${this.id}-o${i}`, "data-i": String(i), "aria-label": name,
           class: `wf-vp-option${o.unchecked ? " unchecked" : ""}${i === this.active ? " active" : ""}`,
-          "aria-selected": String(o.value === value && g.label !== "Match"),
+          "aria-selected": String(Boolean(o.selected)),
         });
         if (o.title) row.title = o.title;
         row.append(make(doc, "span", { class: "wf-vp-label" }, o.label),
