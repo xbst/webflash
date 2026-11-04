@@ -29,10 +29,13 @@ export function classifyConfig(text, name = "") {
   const katapult = KATAPULT_SYMBOL.test(t);
   const firmware = FIRMWARE_SYMBOL.test(t);
   const n = String(name || "").toLowerCase();
-  const named = /katapult|canboot|deployer/.test(n) ? "katapult"
-    : /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
+  // A name that mentions a firmware and Katapult ("klipper_for_canboot") is
+  // as often a firmware's file named after its bootloader: it decides nothing.
+  const namedKatapult = /katapult|canboot|deployer/.test(n);
+  const namedFirmware = /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
+  const named = namedKatapult && namedFirmware ? null : namedKatapult ? "katapult" : namedFirmware;
   if (katapult && !firmware) return "katapult";
-  if (firmware && !katapult) return named === "kalico" || named === "klipper" ? named : "firmware";
+  if (firmware && !katapult) return namedFirmware || "firmware";
   return katapult && firmware ? null : named;
 }
 
