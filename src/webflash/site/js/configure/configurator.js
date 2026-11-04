@@ -78,6 +78,16 @@ export function loadReport(result, carriedText, tree) {
   return { missing, warnings: rest };
 }
 
+/** The symbols of a tree that have a prompt now, and every choice's members: what a user sets. */
+export function promptedNames(tree) {
+  const names = new Set();
+  for (const n of Object.values((tree && tree.nodes) || {})) {
+    if (n.kind === "symbol" && n.name && n.prompt) names.add(n.name);
+    for (const m of n.members || []) names.add(m.name);
+  }
+  return names;
+}
+
 /** An assignment as a sentence reads it: NAME, NAME (off), or NAME=value. */
 export function describeAssignment(name, value) {
   if (value === "y") return name;
@@ -336,7 +346,7 @@ export class Configurator {
    * tree shown so far has picked, see carryText; a fresh Katapult, with no
    * defconfig yet, takes the firmware's chip). reason is "start", "switch"
    * (project or version changed: report what did not carry over), "open" (a
-   * board TOML) or "restore" (undo). slot is "fw" (the session's project) or
+   * board TOML), "config" (Open .config) or "restore" (undo). slot is "fw" (the session's project) or
    * "katapult" (session.katapult). Once both slots are loaded, the
    * firmware's shared options are copied into Katapult (pairSync). Resolves
    * to true when it loaded, false when a newer load of the slot replaced it
@@ -471,7 +481,13 @@ export class Configurator {
     const s = this.session;
     const view = this._view(slot);
     const missing = result.missing || [];
-    const lost = notApplied(carry, configText, missing);
+    let lost = notApplied(carry, configText, missing);
+    // An opened .config also holds what its tree worked out (the MCU's name,
+    // its clock, a feature the chip has): only what has a prompt is a setting.
+    if (reason === "config") {
+      const settable = promptedNames(view.tree);
+      lost = lost.filter((l) => settable.has(l.name));
+    }
     const warnings = result.warnings || [];
     const lines = [];
     if (note) lines.push(note);
@@ -497,7 +513,8 @@ export class Configurator {
     const from = previous ? `${projectTitle(s.index, previous.project)} ${previous.ref.id}` : "";
     const to = `${view.title(s.index, view.project)} ${ref.id}`;
     const switched = reason === "switch" && from;
-    const verb = switched ? "Carried the configuration over to" : reason === "open" ? "Opened the board TOML with" : "Loaded";
+    const verb = switched ? "Carried the configuration over to" : reason === "open" ? "Opened the board TOML with"
+      : reason === "config" ? "Opened the .config with" : "Loaded";
     this._setNotice({
       kind: missing.length || lost.length || exposedGone.length ? "warn" : "info",
       title: switched ? `Carried the configuration from ${from} to ${to}` : `${verb} ${to}`,

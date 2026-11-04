@@ -8,8 +8,8 @@
 // the generated page may change, the .config, the TOML, Save TOML and
 // Generate). The session's tables are the board TOML (the TOML tab shows
 // what Save writes); the configure session behind them runs in the engine
-// worker. The top bar holds the status chip, Open TOML, Upload firmware and
-// About.
+// worker. The top bar holds the status chip, Open TOML, Open .config, Upload
+// firmware and About.
 
 import { Session, PROJECTS, fetchBoardToml } from "./state.js";
 import * as runtime from "./runtime.js";
@@ -28,6 +28,7 @@ import { buildsMatch } from "./build/artifacts.js";
 import { Wizard } from "./wizard/wizard.js";
 import { mountStatusChip } from "./wizard/status-chip.js";
 import { FirmwarePage } from "./wizard/firmware-page.js";
+import { askConfigProject, configTables, sortConfigs } from "./configure/open-config.js";
 
 const session = new Session();
 const configurator = new Configurator(session);
@@ -198,7 +199,7 @@ async function startConfigure(reason) {
   const clean = !hasUnsavedChanges();
   let ok = await configurator.load({ reason });
   if (ok && session.katapult && !configurator.slots.katapult) ok = await configurator.loadKatapult({ reason });
-  if (ok && clean && (reason === "start" || reason === "open")) markSaved(session.tomlText);
+  if (ok && clean && ["start", "open", "config"].includes(reason)) markSaved(session.tomlText);
   return ok;
 }
 
@@ -425,6 +426,7 @@ function setupFirmwarePage() {
     },
   });
   $("fw-open-toml").addEventListener("click", () => $("open-toml").click());
+  $("fw-open-config").addEventListener("click", () => $("open-config").click());
   $("fw-upload").addEventListener("click", () => uploadFirmware());
 }
 
@@ -506,6 +508,55 @@ async function openFiles(fileList) {
   }
 }
 
+/**
+ * Open .config: a new board configured by a Klipper, Kalico or Katapult
+ * .config (or defconfig), or a firmware's and Katapult's together, at page
+ * 1's versions. It loads on the Configure step as an opened TOML does, then
+ * again from the defconfig the engine made of it, so the .config's values
+ * stay values rather than pinning every option the way a .config does.
+ */
+async function openConfigs(fileList) {
+  const files = [];
+  for (const f of fileList) files.push({ name: f.name, text: await readFile(f, "text") });
+  const sorted = sortConfigs(files);
+  if (sorted.error) {
+    showError("Could not open the .config", sorted.error);
+    return false;
+  }
+  let { firmware, katapult } = sorted;
+  if (sorted.ask.length) {
+    const [first, second] = sorted.ask;
+    const project = await askConfigProject(first.name);
+    if (!project) return false;
+    if (project === "katapult") {
+      katapult = first;
+      if (second) firmware = { ...second, project: null };
+    } else {
+      firmware = { ...first, project };
+      if (second) katapult = second;
+    }
+  }
+  // Klipper or Kalico: what the file says, else page 1's pick.
+  const project = firmware && (firmware.project || (["klipper", "kalico"].includes(session.project) ? session.project : "klipper"));
+  const keep = (p) => (session.firmware && (session.project === p || ["latest", "release"].includes(session.version))
+    ? session.version : "latest");
+  const tables = configTables({
+    project,
+    firmwareText: firmware ? firmware.text : null,
+    katapultText: katapult ? katapult.text : null,
+    version: firmware ? keep(project) : "latest",
+    katapultVersion: firmwarePage ? firmwarePage.katapultVersion : "latest",
+  });
+  session.openTables(tables, { name: "board.toml", files: new Map() });
+  markSaved(session.tomlText);
+  const names = [firmware, katapult].filter(Boolean).map((f) => f.name).join(" and ");
+  setTomlStatus("ok", `Made from ${names}; Save TOML writes it as a board TOML.`);
+  wizard.go("configure");
+  const ok = await startConfigure("config");
+  if (ok) await configurator.reapply();
+  return ok;
+}
+
 // A message about a file with its name in front, unless it starts with it
 // already (the flash panel's own rule).
 function aboutFile(name, message) {
@@ -549,6 +600,16 @@ function setupFileIO() {
       showError("Could not open the file", err.message || String(err));
     }
     input.value = "";
+  });
+  $("open-config").addEventListener("change", async (e) => {
+    const input = e.target;
+    const files = [...input.files];
+    input.value = "";
+    try {
+      await openConfigs(files);
+    } catch (err) {
+      showError("Could not open the .config", err.message || String(err));
+    }
   });
 
   $("save-toml").addEventListener("click", async () => {

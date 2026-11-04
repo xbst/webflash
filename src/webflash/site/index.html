@@ -54,6 +54,10 @@
       Open<span class="wide-only">&nbsp;TOML</span>
       <input type="file" id="open-toml" accept=".toml,image/*,.bin,.hex,.uf2,.elf" multiple>
     </label>
+    <label class="file-btn ghost" id="open-config-label" title="Start from a Klipper, Kalico or Katapult .config; pick Katapult's with the firmware's to set up both">
+      <span class="wide-only">Open&nbsp;</span>.config
+      <input type="file" id="open-config" multiple>
+    </label>
     <button type="button" class="ghost" id="upload-firmware" disabled title="Flash a firmware file you have (.bin, .hex, .uf2 or .elf)">Upload<span class="wide-only">&nbsp;firmware</span></button>
     <button type="button" class="ghost icon-btn" id="about-btn" title="About WebFlash" aria-label="About WebFlash">?</button>
   </header>
@@ -92,6 +96,7 @@
           </div>
           <div class="alts">
             <button type="button" class="link" id="fw-open-toml">Open a board TOML</button>
+            <button type="button" class="link" id="fw-open-config">Open a .config</button>
             <button type="button" class="link" id="fw-upload">Flash a file you have</button>
           </div>
           <details class="spoiler" id="about-fold">
