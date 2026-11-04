@@ -10,7 +10,7 @@
 // user) confirms the result.
 
 import { FlashError, fail } from "./errors.js";
-import { toUf2, chipOfFamily, UF2_FAMILIES, formatSize } from "./firmware-file.js";
+import { toUf2, chipOfFamily, isForeignFamily, UF2_FAMILIES, formatSize } from "./firmware-file.js";
 
 export const INFO_FILE = "INFO_UF2.TXT";
 export const WRITE_CHUNK = 64 * 1024;
@@ -76,11 +76,17 @@ export async function checkBootselDrive(handle, { family = null } = {}) {
   if (!info.chip) {
     fail("drive", `The drive's ${INFO_FILE} names a board WebFlash does not know ("${info.boardId || info.model}"); only the RP2040 and RP2350 BOOTSEL drives are supported.`);
   }
+  if (isForeignFamily(family)) failForeign(family);
   const wanted = chipOfFamily(family) || (family === "rp2040" || family === "rp2350" ? family : null);
   if (wanted && wanted !== info.chip) {
     fail("wrong-family", `This firmware is for the ${wanted.toUpperCase()}, but the drive belongs to an ${info.chip.toUpperCase()} (${info.boardId}).`);
   }
   return info;
+}
+
+/** Refuse a UF2 for another chip family: the BOOTSEL ROM skips its blocks, so it would take nothing. */
+export function failForeign(family) {
+  fail("wrong-family", `This .uf2 is for another chip family (${family}), not the RP2040 or RP2350; the BOOTSEL ROM would ignore its blocks.`);
 }
 
 /** A folder handle's name when it says something: Chrome on Windows names a drive root "\" (STOP 3 saw `drive "\"` in the confirmation). */
@@ -113,6 +119,7 @@ export function familyForChip(chip) {
  * the family (the image's own, else the drive's chip).
  */
 export function uf2Bytes(image, { family = null, chip = null } = {}) {
+  if (isForeignFamily(image.family)) failForeign(image.family);
   if (image.format === "uf2" && image.raw) return image.raw;
   const fam = family || image.family || (chip ? familyForChip(chip) : null);
   if (!fam || !(fam in UF2_FAMILIES)) {

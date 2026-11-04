@@ -13,7 +13,7 @@
 
 import { FlashError, fail } from "./errors.js";
 import { sleep, hex8 } from "./usb.js";
-import { pages, equalBytes, firstDifference, chipOfFamily, formatSize } from "./firmware-file.js";
+import { pages, equalBytes, firstDifference, chipOfFamily, isForeignFamily, formatSize } from "./firmware-file.js";
 
 export const PICOBOOT_MAGIC = 0x431fd10b;
 export const PICOBOOT_IF_RESET = 0x41;
@@ -253,6 +253,9 @@ export async function flashPicoboot(usb, image, { verify = true, reboot = true }
   const dev = new PicobootDevice(usb, { log });
   await dev.open();
   if (image.isEmpty) fail("address", "The firmware image is empty.");
+  if (isForeignFamily(image.family)) {
+    fail("wrong-family", `This .uf2 is for another chip family (${image.family}), not the RP2040 or RP2350, so it does not belong on the connected ${dev.model.toUpperCase()}.`);
+  }
   const chip = chipOfFamily(image.family);
   if (chip && chip !== dev.model) {
     fail("wrong-family", `This firmware is a ${image.family.toUpperCase()} image, but the connected chip is an ${dev.model.toUpperCase()}.`);

@@ -59,6 +59,15 @@ export function chipOfFamily(family) {
   return null;
 }
 
+/**
+ * Whether a UF2 family is one the RP2 boot ROMs do not take: a family id
+ * outside UF2_FAMILIES (a SAMD51 or ESP32 UF2, say), which familyFromId
+ * gives in hex. The ROM skips such blocks, so nothing would be written.
+ */
+export function isForeignFamily(family) {
+  return typeof family === "string" && family !== "" && !(family in UF2_FAMILIES) && !chipOfFamily(family);
+}
+
 export function familyLabel(family) {
   return FAMILY_NAMES[family] || family || "";
 }

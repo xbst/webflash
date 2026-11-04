@@ -7,6 +7,8 @@
 // bridge's infer_methods (engine/methods.py), so the panel can switch to the
 // Python side without changing callers.
 
+import { isForeignFamily } from "./firmware-file.js";
+
 // ── USB ids ─────────────────────────────────────────────────────────
 
 export const IDS = {
@@ -480,6 +482,10 @@ export function applyTomlMethods(inferred, tomlMethods) {
  * everything with the user choosing (SPEC 11.2, last bullet).
  */
 export function methodsForPrebuilt({ mcu = null, image = null, tomlMethods = null } = {}) {
+  if (image && isForeignFamily(image.family)) {
+    // A UF2 for another chip family (SAMD51, ESP32, ...): no RP2 method takes it, whatever the TOML says.
+    return applyTomlMethods([{ id: "download", reason: `the UF2 is for another chip family (${image.family}), which WebFlash does not flash from the browser` }], tomlMethods);
+  }
   let family = familyFromMcu(mcu);
   let why = mcu ? `the board TOML names the ${mcu}` : null;
   if (!family && image) {
@@ -538,12 +544,14 @@ function chipOf(family) {
 
 /**
  * The chip family a firmware file says it is for: its UF2 family id or the
- * MCU in its Klipper dictionary. Null when the file says nothing (a bare
- * .bin or .hex); its address range is then only a hint, see
- * configFitsImage.
+ * MCU in its Klipper dictionary. "other" for a UF2 of a chip family the
+ * RP2 ROMs do not take, which fits no configuration. Null when the file
+ * says nothing (a bare .bin or .hex); its address range is then only a
+ * hint, see configFitsImage.
  */
 export function imageFamily(image) {
   if (!image) return null;
+  if (isForeignFamily(image.family)) return "other";
   const chip = image.family ? chipOf(image.family) : null;
   if (chip) return chip;
   return image.mcu ? familyFromMcu(image.mcu) : null;
@@ -555,10 +563,11 @@ export function imageFamily(image) {
  * chip (UF2 family, Klipper dictionary) must match the configuration's
  * family; a bare file must at least sit in the family's flash range (the
  * RP2040 and RP2350 share theirs); a file or configuration that says
- * nothing fits. STOP 3 found an RP2040 UF2 offered the STM32
+ * nothing fits, and a UF2 of another chip family fits none. STOP 3 found an RP2040 UF2 offered the STM32
  * configuration's methods, with no PICOBOOT among them.
  */
 export function configFitsImage(cfg, image) {
+  if (image && imageFamily(image) === "other") return false;
   const family = familyOf(cfg);
   if (!family || !image) return true;
   const named = imageFamily(image);

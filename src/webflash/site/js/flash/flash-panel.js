@@ -151,18 +151,21 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       // A [prebuilt] TOML's methods narrow the list; another board's TOML does not.
       ({ methods, warnings } = methodsForPrebuilt({ mcu: (pre && pre.mcu) || u.image.mcu || null, image: u.image, tomlMethods: cfg && !fits ? null : tomlFlash().methods }));
       if (cfg && !pre && !fits) {
-        const chip = u.image.mcu || u.image.family || `a chip at ${describeImage(u.image).rangeText.split(" ")[0]}`;
+        const chip = u.image.mcu || (imageFamily(u.image) === "other" ? `another chip family (${u.image.family})` : u.image.family) || `a chip at ${describeImage(u.image).rangeText.split(" ")[0]}`;
         warnings = [...warnings, `The file is for ${chip}, not for the ${cfgMcu || familyOf(cfg)} this configuration describes, so the methods come from the file.`];
       }
     }
-    const mcu = u.image.mcu || (pre && pre.mcu) || (fits ? cfgMcu : imageFamily(u.image));
+    // A UF2 of another chip family ("other") names no family the panel knows.
+    const named = imageFamily(u.image);
+    const fileFamily = named === "other" ? null : named;
+    const mcu = u.image.mcu || (pre && pre.mcu) || (fits ? cfgMcu : fileFamily);
     if (u.preferredMethod && !methods.some((m) => m.id === u.preferredMethod)) {
       // The mock mode asks for a method the configuration would not offer.
       methods = [{ id: u.preferredMethod, reason: "the mock mode asked for it" }, ...methods];
     }
     return {
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
-      family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : imageFamily(u.image), iface: dictCfg ? interfaceOf(dictCfg) : cfg && fits ? interfaceOf(cfg) : null,
+      family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : fileFamily, iface: dictCfg ? interfaceOf(dictCfg) : cfg && fits ? interfaceOf(cfg) : null,
       artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
       label: u.name, bitrate: canBitrate(dictCfg || cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };

@@ -155,7 +155,10 @@ export function createFlashPanel(root, options = {}) {
   function family() {
     const fw = state.firmware;
     if (!fw) return null;
-    return fw.family || familyFromMcu(fw.mcu) || (fw.image && fw.image.family ? (fw.image.family.startsWith("rp2350") ? "rp2350" : "rp2040") : null);
+    const imageFam = fw.image && fw.image.family;
+    // Only the RP2 families name a chip; "absolute", "data" and another chip's family name none.
+    const imageChip = imageFam === "rp2040" ? "rp2040" : imageFam && imageFam.startsWith("rp2350") ? "rp2350" : null;
+    return fw.family || familyFromMcu(fw.mcu) || imageChip;
   }
 
   function button(label, handler, { primary = false, title = "", id = null } = {}) {
