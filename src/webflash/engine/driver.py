@@ -61,6 +61,20 @@ HEADER_FIXES: tuple[tuple[str, str, str], ...] = (
 )
 COMPAT_DIR = "out/webflash-compat"
 
+# The CPUs whose clang target has an FPU by default. arm-none-eabi-gcc builds
+# soft-float unless told otherwise, and the projects never enable the FPU
+# (CPACR), so a VFP instruction would fault: clang must not emit any either.
+FPU_CPUS = ("cortex-m4", "cortex-m7", "cortex-m33", "cortex-m35p", "cortex-m55", "cortex-m85")
+
+
+def float_abi(args: list[str]) -> list[str]:
+    """``-mfloat-abi=soft``, GCC's default, for a clang line whose Makefile
+    command chose no float ABI or FPU itself (clang's default for a Cortex-M4,
+    M7 or M33 is softfp, which uses the FPU); empty when it chose one."""
+    if any(a.startswith(("-mfloat-abi=", "-mfpu=")) for a in args):
+        return []
+    return ["-mfloat-abi=soft"]
+
 
 @dataclass
 class Sysroot:
@@ -337,8 +351,8 @@ class Driver:
         return result
 
     def _translate_cpp(self, argv: list[str]) -> Command:
-        out: list[str] = ["clang", f"--target={self.target}", "-E", "-P", "-x", "assembler-with-cpp"]
         args = argv[1:]
+        out: list[str] = ["clang", f"--target={self.target}", *float_abi(args), "-E", "-P", "-x", "assembler-with-cpp"]
         i = 0
         while i < len(args):
             a = args[i]
@@ -363,7 +377,7 @@ class Driver:
         sources = [a for a in args if a.endswith(_SOURCE_SUFFIXES)]
         cxx = any(a.endswith(_CXX_SUFFIXES) for a in sources) or any(a.startswith("-std=c++") or a.startswith("-std=gnu++") for a in args)
         tool = "clang++" if cxx else "clang"
-        out: list[str] = [tool, f"--target={self.target}"]
+        out: list[str] = [tool, f"--target={self.target}", *float_abi(args)]
         compat: dict[str, str] = {}
         if tree is not None and not cxx:
             for src in sources:
@@ -485,6 +499,10 @@ class Driver:
             # the CPU, the optimization level, and section-per-function code
             # generation so --gc-sections still works after LTO.
             out.extend(["--fat-lto-objects", f"-plugin-opt=mcpu={cpu}", f"-plugin-opt={opt}"])
+            if cpu in FPU_CPUS and float_abi(args):
+                # The objects' bitcode is soft-float already; this keeps the
+                # LTO output's build attributes from claiming the CPU's FPU.
+                out.append("-plugin-opt=-mattr=-fpregs")
             if "-ffunction-sections" in sections:
                 out.append("-plugin-opt=-function-sections=1")
             if "-fdata-sections" in sections:

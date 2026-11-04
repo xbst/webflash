@@ -167,6 +167,71 @@ def vector_table(elf: dict, data: bytes) -> Optional[dict]:
     return None
 
 
+SHT_ARM_ATTRIBUTES = 0x70000003
+TAG_FP_ARCH = 10
+
+
+def _uleb(data: bytes, pos: int, end: int) -> tuple[int, int]:
+    value = shift = 0
+    while pos < end:
+        b = data[pos]
+        pos += 1
+        value |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            return value, pos
+    raise InspectError("truncated build attribute")
+
+
+def arm_attributes(elf: dict, data: bytes) -> dict[int, Union[int, str]]:
+    """The file-wide ``aeabi`` build attributes of ``.ARM.attributes``
+    (``readelf -A``), by tag number: ``Tag_FP_arch`` (10) is there only when
+    the code may use the FPU. Empty without the section."""
+    out: dict[int, Union[int, str]] = {}
+    for s in elf["sections"]:
+        if s["type"] != SHT_ARM_ATTRIBUTES or s["size"] < 1:
+            continue
+        pos, end = s["offset"], s["offset"] + s["size"]
+        if data[pos] != ord("A"):
+            continue
+        pos += 1
+        while pos + 4 <= end:
+            (length,) = struct.unpack_from("<I", data, pos)
+            sub_end = min(pos + length, end)
+            if length < 5:
+                break
+            vendor_end = data.find(b"\0", pos + 4, sub_end)
+            if vendor_end < 0:
+                break
+            vendor = data[pos + 4:vendor_end]
+            p = vendor_end + 1
+            while vendor == b"aeabi" and p < sub_end:
+                kind, q = _uleb(data, p, sub_end)
+                if q + 4 > sub_end:
+                    break
+                (size,) = struct.unpack_from("<I", data, q)
+                block_end = min(p + size, sub_end)
+                q += 4
+                while kind == 1 and q < block_end:   # Tag_File: the attributes of the whole file
+                    tag, q = _uleb(data, q, block_end)
+                    if tag in (4, 5, 67) or (tag > 32 and tag % 2):
+                        stop = data.find(b"\0", q, block_end)
+                        stop = block_end if stop < 0 else stop
+                        out[tag] = data[q:stop].decode("ascii", errors="replace")
+                        q = stop + 1
+                    elif tag == 32:   # Tag_compatibility: a flag, then a vendor name
+                        _flag, q = _uleb(data, q, block_end)
+                        stop = data.find(b"\0", q, block_end)
+                        q = (block_end if stop < 0 else stop) + 1
+                    else:
+                        out[tag], q = _uleb(data, q, block_end)
+                if size < 5:
+                    break
+                p = block_end
+            pos = sub_end
+    return out
+
+
 def app_address(elf: dict, data: bytes) -> Optional[int]:
     segments = elf_segments(elf, data)
     return segments[0]["address"] if segments else None

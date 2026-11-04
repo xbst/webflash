@@ -429,9 +429,47 @@ def dicts_equivalent(base: Optional[dict], other: Optional[dict]) -> bool:
     return a == b and strings_b <= strings_a
 
 
-def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs: int) -> dict:
+_OBJDUMP_INSN = re.compile(r"^\s*[0-9a-f]+:\t[0-9a-f ]+\t([a-z][\w.]*)")
+
+
+def find_objdump(gcc_dir: Optional[Path]) -> Optional[str]:
+    """GNU objdump of the Arm GNU Toolchain (``--gcc-dir``, else PATH), or
+    None. llvm-objdump decodes the LTO ELFs' code as ``<unknown>`` in places
+    and would hide the instructions the float check looks for."""
+    name = "arm-none-eabi-objdump.exe" if sys.platform == "win32" else "arm-none-eabi-objdump"
+    if gcc_dir is not None and (_bindir(gcc_dir) / name).is_file():
+        return str(_bindir(gcc_dir) / name)
+    return shutil.which("arm-none-eabi-objdump")
+
+
+def fpu_instructions(data: bytes, objdump: str) -> Optional[int]:
+    """How many FPU instructions GNU objdump finds in an ELF's code: on a
+    Cortex-M every mnemonic that starts with ``v`` is a VFP (or MVE) one, and
+    each faults while the FPU is off. None when objdump cannot read it."""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".elf")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        proc = subprocess.run([objdump, "-d", path], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        return None
+    return sum(1 for line in proc.stdout.splitlines()
+               if (m := _OBJDUMP_INSN.match(line)) and m.group(1).startswith("v"))
+
+
+def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs: int,
+              objdump: Optional[str] = None) -> dict:
     """Build one row with one toolchain variant and measure the result."""
-    from .inspect import elf_sizes, linker_memory, parse_elf, vector_table
+    from .inspect import TAG_FP_ARCH, arm_attributes, elf_sizes, linker_memory, parse_elf, vector_table
     from .uf2 import uf2_blocks
     backend, lto = VARIANTS[variant]
     build = Build(tree, row["defconfig"], toolchain=toolchain, version=version, jobs=jobs, lto=lto)
@@ -440,12 +478,18 @@ def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs
     elapsed = time.perf_counter() - started
     elf_name = next((n for n in result.outputs if n.endswith(".elf") and not n.startswith("deployer")), None)
     info: dict = {"row": row["name"], "variant": variant, "seconds": elapsed, "outputs": {n: len(b) for n, b in result.outputs.items()},
-                  "memory": result.memory, "dict": None, "sizes": None, "vector_table": None, "regions": {}}
+                  "memory": result.memory, "dict": None, "sizes": None, "vector_table": None, "regions": {},
+                  "fpu": None}
     if elf_name:
         elf = parse_elf(result.outputs[elf_name])
         info["sizes"] = elf_sizes(elf)
         info["vector_table"] = vector_table(elf, result.outputs[elf_name])
         info["elf"] = elf_name
+        # Whether the code may use the FPU: the build attribute, and the
+        # instructions themselves (lld's LTO output takes its attributes from
+        # one input object, so the attribute alone can miss them).
+        info["fpu"] = {"fp_arch": arm_attributes(elf, result.outputs[elf_name]).get(TAG_FP_ARCH),
+                       "instructions": fpu_instructions(result.outputs[elf_name], objdump) if objdump else None}
     # The address range each UF2 writes: elf2uf2 maps the ELF's load
     # segments, so a linker that loaded the ELF headers below the
     # application would put them in the file.
@@ -473,6 +517,25 @@ def build_row(tree: Path, row: dict, variant: str, toolchain, version: str, jobs
         info["dict"] = _dict_core(result.outputs[dict_name])
     info["result"] = result
     return info
+
+
+def fpu_problems(build: dict, gcc: Optional[dict]) -> list[str]:
+    """What a build uses of the FPU that the GCC build of the same row does
+    not (without a GCC build, GCC's soft-float default: nothing). The projects
+    never enable the FPU, so such code faults on the board."""
+    fpu = build.get("fpu") or {}
+    if gcc is None or "error" in gcc:
+        ref: dict = {}
+    elif gcc is build:
+        return []
+    else:
+        ref = gcc.get("fpu") or {}
+    out = []
+    if fpu.get("fp_arch") and not ref.get("fp_arch"):
+        out.append(f"the ELF claims the FPU (Tag_FP_arch {fpu['fp_arch']}) and gcc's does not")
+    if fpu.get("instructions") and not ref.get("instructions"):
+        out.append(f"{fpu['instructions']} FPU instructions, which fault with the FPU off (gcc's build has none)")
+    return out
 
 
 def check_parity(rows: list[dict], builds: dict[tuple[str, str], dict], variants: list[str]) -> list[str]:
@@ -505,6 +568,8 @@ def check_parity(rows: list[dict], builds: dict[tuple[str, str], dict], variants
             for uf2_name, (lo, hi) in (b.get("uf2") or {}).items():
                 if rom and not (rom["origin"] <= lo and hi <= rom["origin"] + rom["length"]):
                     failures.append(f"{name}/{variant}: {uf2_name} writes 0x{lo:08x}..0x{hi:08x}, outside the rom region")
+            for problem in fpu_problems(b, builds.get((name, "gcc")) if "gcc" in variants else None):
+                failures.append(f"{name}/{variant}: {problem}")
             if base is not None and "error" not in base and b is not base:
                 if not dicts_equivalent(base["dict"], b["dict"]):
                     failures.append(f"{name}/{variant}: the dictionary differs from {variants[0]}'s")
@@ -514,15 +579,15 @@ def check_parity(rows: list[dict], builds: dict[tuple[str, str], dict], variants
 
 
 def parity_table(rows: list[dict], builds: dict[tuple[str, str], dict], variants: list[str]) -> str:
-    lines = ["| Row | Toolchain | text | data | bss | flash used / size | vs " + variants[0] + " | dict | stack / reset |",
-             "|---|---|---:|---:|---:|---:|---:|---|---|"]
+    lines = ["| Row | Toolchain | text | data | bss | flash used / size | vs " + variants[0] + " | dict | stack / reset | FPU |",
+             "|---|---|---:|---:|---:|---:|---:|---|---|---|"]
     for row in rows:
         name = row["name"]
         base = builds.get((name, variants[0]))
         for variant in variants:
             b = builds.get((name, variant))
             if b is None or "error" in b:
-                lines.append(f"| {name} | {variant} | | | | | | failed | {b.get('error', '')[:60] if b else ''} |")
+                lines.append(f"| {name} | {variant} | | | | | | failed | {b.get('error', '')[:60] if b else ''} | |")
                 continue
             s = b["sizes"] or {}
             rom = b["regions"].get("rom")
@@ -538,8 +603,15 @@ def parity_table(rows: list[dict], builds: dict[tuple[str, str], dict], variants
                                      or dicts_equivalent(base["dict"], b["dict"])) else "DIFFERS"
             vt = b["vector_table"] or {}
             vt_text = f"0x{vt['stack']:08x} / 0x{vt['reset']:08x}" if vt else ""
+            fpu = b.get("fpu") or {}
+            used = []
+            if fpu.get("fp_arch"):
+                used.append(f"Tag_FP_arch {fpu['fp_arch']}")
+            if fpu.get("instructions"):
+                used.append(f"{fpu['instructions']:,} instructions")
+            fpu_text = ", ".join(used) or ("none" if fpu.get("instructions") == 0 else "no attribute")
             lines.append(f"| {name} | {variant} | {s.get('text', 0):,} | {s.get('data', 0):,} | {s.get('bss', 0):,} | "
-                         f"{flash} | {delta} | {dict_ok} | {vt_text} |")
+                         f"{flash} | {delta} | {dict_ok} | {vt_text} | {fpu_text} |")
     return "\n".join(lines)
 
 
@@ -567,6 +639,10 @@ def cmd_parity(args: argparse.Namespace) -> int:
                 toolchains[backend] = make_toolchain(backend, _variant_dir(v, args), args.jobs, mount=args.wasm_mount)
     except DriverError as e:
         return _error(e)
+    objdump = find_objdump(args.gcc_dir)
+    if objdump is None:
+        print("Warning: no arm-none-eabi-objdump (--gcc-dir or PATH): the float check reads the build "
+              "attributes only", file=sys.stderr)
     builds: dict[tuple[str, str], dict] = {}
     try:
         for row in rows:
@@ -574,7 +650,7 @@ def cmd_parity(args: argparse.Namespace) -> int:
                 backend = VARIANTS[v][0]
                 label = f"{project} {row['name']} {v}"
                 try:
-                    info = build_row(tree, row, v, toolchains[backend], version, args.jobs)
+                    info = build_row(tree, row, v, toolchains[backend], version, args.jobs, objdump)
                 except (BuildError, MakeError, ShellError, DriverError, ValueError, OSError) as e:
                     builds[(row["name"], v)] = {"row": row["name"], "variant": v, "error": str(e)}
                     print(f"{label}: FAILED\n{e}")
