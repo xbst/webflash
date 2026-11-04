@@ -1,12 +1,16 @@
 # WebFlash
 
-Configure, build and flash Klipper, Kalico and Katapult firmware for 3D printer boards from a web browser, with nothing to install. WebFlash runs `make menuconfig` with the project's own Kconfig files, compiles the firmware in the browser with clang and lld built to WebAssembly, and flashes it over USB: the STM32 DFU bootloader, RP2040 PICOBOOT and UF2, and Katapult over USB, UART and CAN. It also turns a board's firmware settings into a themed card you can embed in an MkDocs or Zensical documentation site, so readers build and flash the right firmware for that board in one place.
+Configure, build and flash Klipper, Kalico and Katapult firmware for 3D printer boards from a web browser, with nothing to install. WebFlash shows the project's own `make menuconfig` options, compiles the firmware in the browser with clang and lld built to WebAssembly, and flashes it over USB: the STM32 DFU bootloader, RP2040 and RP2350 PICOBOOT and UF2, and Katapult over USB, UART and CAN. It also turns a board's firmware settings into a themed card for that board's documentation, so readers build and flash the right firmware in one place.
+
+![A WebFlash card for an STM32G0B1 board: Katapult ticked beside Klipper, both built in the browser, then flashed together over DFU, ending with the line for printer.cfg](assets/webflash-demo.gif)
+
+*A card for the [Birds' Nest](https://docs.isiks.tech/birds-nest/usb/manual/) building Katapult and Klipper in the browser and flashing both in one DFU session. [Try live examples](https://doctools.isiks.tech/webflash/examples/usb-board/).*
 
 ## Quick start
 
-Open **<https://webflash.isiks.tech>** in Chrome or Edge, pick Klipper, Kalico or Katapult and a version, set the options as you would in `make menuconfig`, and press **Build**. The firmware is compiled in your browser, so your configuration never leaves it. Then plug the board in and press **Flash**: WebFlash finds it over USB, writes the firmware and reads it back to verify it. Firefox and Safari build the firmware and download it, since only Chromium browsers can talk to USB devices.
+Open **<https://webflash.isiks.tech>** in Chrome or Edge on a computer and follow its five steps. **Firmware**: pick Klipper, Kalico or Katapult alone, a version (a release, a branch, or the version Mainsail shows for your MCU), and whether to flash Katapult with it. **Configure**: set the options as you would in `make menuconfig`; the ones Klipper and Katapult share are set once. **Build**: the firmware is compiled in your browser, so your configuration never leaves it. **Flash**: plug the board in, pick it in the browser's device list, and WebFlash writes the firmware and reads it back to verify it. Firefox builds the firmware and downloads it, since only Chromium browsers can talk to USB devices.
 
-**Save TOML** keeps the configuration as a board TOML, and **Generate** turns it into a page with a flash card for that one board. To regenerate those pages as a board changes, or publish them from CI, install the command line tool (Python 3.9 or later). It renders the same file from a saved board TOML:
+**Embed** keeps the configuration as a board TOML (**Save TOML**) and turns it into a page with a flashing card for that one board (**Generate**). To regenerate those pages as a board changes, or publish them from CI, install the command line tool (Python 3.9 or later). It renders the same file from a saved board TOML:
 
 ```bash
 pip install "git+https://github.com/xbst/webflash.git@master"
@@ -20,15 +24,15 @@ To embed the cards in an MkDocs or Zensical site, use [md-iframe](https://github
 ![Flash Klipper to the board](board.webflash.html){ type=iframe }
 ```
 
-`examples/` holds a board TOML for each way of flashing a board, from `stm32g0b1-usb` (Katapult or DFU) and `can-toolhead` (Katapult over CAN) to `prebuilt` (a firmware file, nothing to build): `webflash examples/stm32g0b1-usb/stm32g0b1-usb.toml`.
+`examples/` holds a board TOML for each way of flashing a board, from `stm32g0b1-usb` (Katapult or DFU) and `can-toolhead` (two setups: CAN with Katapult, or USB) to `prebuilt` (a firmware file, nothing to build): `webflash examples/stm32g0b1-usb/stm32g0b1-usb.toml`.
 
 ## Documentation
 
-Coming at **<https://doctools.isiks.tech/webflash/>**.
+**<https://doctools.isiks.tech/webflash/>**: getting started, the site's steps, flashing methods and drivers, troubleshooting, embedding a card and publishing it from CI, how the build works and how to reproduce it, and the board TOML, theme and generated page references.
 
 ## US-based PCB Assembly
 
-WebFlash was initially created to replace the firmware sections of our product manuals at [Isik's Tech](https://store.isiks.tech/), and we decided to open-source it after realizing others could find it useful too.
+WebFlash was initially created to replace the firmware flashing sections of our product manuals at [Isik's Tech](https://store.isiks.tech/), and we decided to open-source it after realizing others could find it useful too.
 
 We also moved to in-house PCB assembly in early 2025 after struggling to find a reliable and affordable US-based PCB assembler, and we recently launched a new PCB assembly service to help others with PCB assembly as well. We can often match or beat delivered costs from overseas. We have an estimator on our website so you can upload your BOM and get an instant estimate. [For more information, visit IsikPCB.com](https://isikpcb.com/)
 
