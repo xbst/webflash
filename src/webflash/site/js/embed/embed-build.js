@@ -22,7 +22,7 @@ import { Configurator } from "./configure/configurator.js";
 import { blobSize, blobUrl, formatBytes, groupRefs, isChecked, projectTitle, resolveVersion, uncheckedText } from "./configure/sources.js";
 import { versionOptions } from "./configure/version-picker.js";
 import { checkNumber } from "./configure/kconfig-tree.js";
-import { BuildCancelled, Builder } from "./build/builder.js";
+import { BuildCancelled, Builder, untilAborted } from "./build/builder.js";
 import { buildRecord, renderArtifacts, renderMemory } from "./build/artifacts.js";
 import { configKey, splitFailure } from "./build/build-panel.js";
 import { workerCount } from "./build/toolchain-pool.js";
@@ -101,6 +101,7 @@ export class FirmwareSection {
     this.optionsChanged = false;    // the reader changed an option in the loaded configuration
     this.running = "";              // "build" or "load" while one runs
     this.cancelled = false;
+    this._stop = null;              // the running run's AbortController
     this.build = null;              // the last build that worked (buildRecord's)
     this.shownBuild = undefined;    // what onBuild got last
     this.indexError = "";
@@ -517,10 +518,12 @@ export class FirmwareSection {
     this.renderLink();
   }
 
-  // The choices made before the configuration loaded, set in the engine.
-  async applyPending() {
+  // The choices made before the configuration loaded, set in the engine. An
+  // aborted signal stops between choices: the rest stay for the next run.
+  async applyPending(signal = null) {
     const s = this.session;
     for (const option of this.config.options) {
+      if (signal && signal.aborted) return;
       if (!this.pending.has(option.symbol)) continue;
       const value = this.pending.get(option.symbol);
       this.pending.delete(option.symbol);
@@ -640,6 +643,10 @@ export class FirmwareSection {
     if (this.running || this.blockReason()) return;
     this.running = build ? "build" : "load";
     this.cancelled = false;
+    // Cancel ends the wait for the configuration at once; its load goes on in
+    // the engine's queue, which keeps the engine consistent.
+    const stop = new AbortController();
+    this._stop = stop;
     this.failed = null;
     this.resetView();
     this.startClock(build ? "Building" : "Loading");
@@ -649,14 +656,14 @@ export class FirmwareSection {
     // is left to prepare(), which loads it again and says why.
     if (build && !this.loaded) this.builder.discover().then((tc) => this.builder.fetchToolchain(tc)).catch(() => {});
     try {
-      if (!this.loaded) await this.loadConfiguration();
-      else await this.applyPending();
+      if (!this.loaded) await untilAborted(this.loadConfiguration(stop.signal), stop.signal);
+      else await untilAborted(this.applyPending(stop.signal), stop.signal);
       this.checkCancelled();
       if (!build) {
         this.finishLoaded();
         return;
       }
-      const tc = await this.builder.discover();
+      const tc = await untilAborted(this.builder.discover(), stop.signal);
       this.builder.begin();
       this.checkCancelled();
       await this.builder.prepare(tc, { step: (text) => this.step(text) });
@@ -675,6 +682,7 @@ export class FirmwareSection {
       if (e instanceof BuildCancelled || this.cancelled) this.finishCancelled();
       else this.finishFailed(this.failed, e);
     } finally {
+      if (this._stop === stop) this._stop = null;
       this.running = "";
       s.setLocked("");
       this.stopClock();
@@ -690,9 +698,10 @@ export class FirmwareSection {
   /**
    * The Python runtime, the version's sources and its Kconfig (they download
    * side by side: one step, its bar the sources' bytes), then the reader's
-   * choices.
+   * choices. Once signal aborts (the run was cancelled), it reports nothing
+   * and leaves the choices for the next run.
    */
-  async loadConfiguration() {
+  async loadConfiguration(signal = null) {
     const s = this.session;
     const { ref } = this.resolve();
     const label = `${projectTitle(s.index, s.project)} ${ref ? ref.id : s.version}`;
@@ -718,12 +727,13 @@ export class FirmwareSection {
       offSources();
       offBoot();
     }
+    if (signal && signal.aborted) return;
     if (!ok) throw new Error(s.sources.state === "error" ? s.sources.detail : `${label} did not load.`);
     row.finish(`${s.ref ? s.ref.describe || s.ref.id : ""}, sources ${s.sources.cached ? "from this browser's cache" : formatBytes(s.sources.size)}`);
     this.checkCancelled();
     if (this.pending.size) {
       const apply = this.step("Applying your choices");
-      await this.applyPending();
+      await this.applyPending(signal);
       apply.finish();
     }
   }
@@ -769,6 +779,7 @@ export class FirmwareSection {
   async cancel() {
     if (!this.running || this.cancelled) return;
     this.cancelled = true;
+    if (this._stop) this._stop.abort();
     this.renderButton();
     this.setStep("Cancelling…");
     if (this.running === "build") await this.builder.cancel("the build was cancelled");

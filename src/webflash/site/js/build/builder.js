@@ -32,6 +32,34 @@ export class BuildCancelled extends Error {
   constructor() { super("the build was cancelled"); }
 }
 
+/**
+ * promise, or a BuildCancelled as soon as signal aborts, whichever comes
+ * first. What the promise stands for goes on unawaited (a download still
+ * fills the cache); onAbort() runs when the abort ends the wait.
+ */
+export function untilAborted(promise, signal, onAbort = null) {
+  promise.catch(() => {});   // nothing may await it after an abort
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      if (onAbort) onAbort();
+      reject(new BuildCancelled());
+    };
+    if (signal.aborted) {
+      stop();
+      return;
+    }
+    signal.addEventListener("abort", stop, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", stop);
+      resolve(value);
+    }, (e) => {
+      signal.removeEventListener("abort", stop);
+      reject(e);
+    });
+  });
+}
+
 // A view that draws nothing.
 const NO_STEP = () => ({ progress() {}, finish() {} });
 
@@ -98,9 +126,11 @@ export class Builder {
    * the workers, so the build that follows starts at once: the site does it
    * while the user configures, a generated page while Python starts. Calls
    * made while one runs share it; onProgress({done, total}) follows it in
-   * bytes. Resolves to {files, cached}.
+   * bytes. Resolves to {files, cached}. Aborting signal rejects this call
+   * with a BuildCancelled and drops its onProgress, while the download goes
+   * on for the others and the cache.
    */
-  fetchToolchain(tc, { onProgress = null } = {}) {
+  fetchToolchain(tc, { onProgress = null, signal = null } = {}) {
     if (this.files && this.filesId === tc.id) return Promise.resolve({ files: this.files, cached: true });
     if (onProgress) this._fetchListeners.add(onProgress);
     if (!this._fetching || this._fetchingId !== tc.id) {
@@ -117,7 +147,7 @@ export class Builder {
         this._fetchListeners.clear();
       });
     }
-    return this._fetching;
+    return untilAborted(this._fetching, signal, () => this._fetchListeners.delete(onProgress));
   }
 
   /** Whether fetchToolchain is downloading the release now. */
@@ -210,8 +240,10 @@ export class Builder {
     if (!this.files || this.filesId !== tc.id) {
       const size = Builder.size(tc);
       const row = step("Loading the compiler");
-      // Joins a download fetchToolchain already started.
+      // Joins a download fetchToolchain already started. A cancel stops the
+      // wait at once; the download goes on for the cache.
       const got = await this.fetchToolchain(tc, {
+        signal: this._abort.signal,
         onProgress: ({ done, total }) => {
           row.progress(done, total);
           if (onDownload) onDownload(done, total);
@@ -277,9 +309,11 @@ export class Builder {
       if (!forPool.includes(b) && !engineLacks.has(b.key)) continue;
       this._check();
       const row = step(b.key === "core" ? "Reading the sources" : `Loading ${b.label}`);
-      const got = await runtime.fetchBlob(b.url, {
-        size: b.size, phase: "lib", detail: b.key, onProgress: ({ done, total }) => row.progress(done, total),
-      });
+      const got = await untilAborted(runtime.fetchBlob(b.url, {
+        size: b.size, phase: "lib", detail: b.key,
+        onProgress: ({ done, total }) => { if (!signal.aborted) row.progress(done, total); },
+      }), signal);
+      this._check();
       b.bytes = got.bytes;
       if (engineLacks.has(b.key)) await runtime.addLib(b.key, got.bytes);
       row.finish(got.cached ? "from this browser's cache" : formatBytes(got.size));
