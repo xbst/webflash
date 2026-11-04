@@ -509,6 +509,14 @@ class Driver:
             order.parent.mkdir(parents=True, exist_ok=True)
             order.write_bytes(b"ResetHandler\nreset_handler_stage_two\n")
             out.extend(["--symbol-ordering-file=out/webflash-symbol-order.txt", "--no-warn-symbol-ordering"])
+        if not any(w in ("-e", "--entry") or w.startswith("--entry=") or (w.startswith("-e") and len(w) > 2)
+                   for w in wl):
+            # The projects' linker scripts name no entry: GNU ld then takes
+            # the start of .text without a word, while lld looks for _start
+            # and warns on every link. Every armcm_boot.c defines
+            # ResetHandler, which the vector table keeps anyway, so the
+            # images do not change; only the ELF header's entry does.
+            out.append("--entry=ResetHandler")
         out.extend(["--target2=rel", "-o", output])
         cmd = Command("ld.lld", out, "link", list(argv))
         cmd.cpu = cpu
