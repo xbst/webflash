@@ -152,8 +152,9 @@ export function ready() {
       emit("ready");
       return about;
     }).catch((e) => {
-      // Keep the rejected promise so a blocked CDN does not restart the whole
-      // download on every call. Recovery goes through retry().
+      // Keep the rejected promise, so the calls waiting on this boot fail
+      // with it rather than each one restarting the download. The next call
+      // made after the failure starts over through retry() (see booted()).
       _failure = e;
       emit("error", e && e.message ? e.message : String(e));
       throw e;
@@ -172,6 +173,14 @@ export function retry() {
 }
 
 export function failure() { return _failure; }
+
+// The boot a new call waits for: after a failed one, a fresh boot in a new
+// worker, so Try again, a card's next Build, Generate and the theme list
+// recover once the CDN or the payload answers again. retry() clears
+// _failure at once, so calls made together restart it only once.
+function booted() {
+  return _failure ? retry() : ready();
+}
 
 /** True once webflash is importable, for callers that cannot await. */
 export function isReady() { return _about !== null; }
@@ -218,9 +227,10 @@ export function pythonMessage(e) {
 
 /**
  * Call a function of the bridge (site/py/bridge.py), or one of the worker's
- * own (fetchBlob, loadSources), booting the worker first if needed. params
- * are its positional arguments: strings, numbers, booleans, null, plain
- * objects for the worker's own methods, or typed arrays (Python bytes).
+ * own (fetchBlob, loadSources), booting the worker first if needed, and
+ * again if the last boot failed. params are its positional arguments:
+ * strings, numbers, booleans, null, plain objects for the worker's own
+ * methods, or typed arrays (Python bytes).
  * Rejects with the Python error's own message.
  *
  * Options: onProgress({phase, detail, done, total}) for this call's own
@@ -230,9 +240,9 @@ export function pythonMessage(e) {
  * the objects in params to move rather than copy (MessagePorts must move).
  */
 export async function call(method, params = [], { onProgress = null, signal = null, long = false, early = false, transfer = [] } = {}) {
-  const booted = ready();
-  if (!early) await booted;
-  else booted.catch(() => {});   // the call itself reports the failure
+  const boot = booted();
+  if (!early) await boot;
+  else boot.catch(() => {});   // the call itself reports the failure
   try {
     return await post(method, params, { onProgress, signal, long, transfer });
   } catch (e) {
