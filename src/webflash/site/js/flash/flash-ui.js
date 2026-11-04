@@ -56,6 +56,18 @@ export function renderInline(text) {
   return clean.split(/\n[ \t]*\n+/).map(strip).filter(Boolean).map((p) => `<p>${renderSpans(escapeText(p))}</p>`).join("");
 }
 
+/**
+ * The progress line for a protocol's progress(phase, done, total, unit):
+ * bytes as sizes ("Writing: 42% (12.5 KiB of 30 KiB)"), any other unit
+ * ("pages", "sectors", "blocks") as a count ("Erasing: 33% (1 of 3 pages)").
+ */
+export function progressText(phase, done, total, unit = "bytes") {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const label = { erase: "Erasing", write: "Writing", verify: "Verifying" }[phase] || phase;
+  const counts = unit === "bytes" ? `${formatSize(done)} of ${formatSize(total)}` : `${done} of ${total} ${total === 1 ? unit.replace(/s$/, "") : unit}`;
+  return `${label}: ${pct}% (${counts})`;
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -131,11 +143,10 @@ export function createFlashPanel(root, options = {}) {
     logPre.scrollTop = logPre.scrollHeight;
   }
 
-  function setProgress(phase, done, total) {
+  function setProgress(phase, done, total, unit = "bytes") {
     progressWrap.hidden = false;
     const pct = total ? Math.round((done / total) * 100) : 0;
-    const label = { erase: "Erasing", write: "Writing", verify: "Verifying" }[phase] || phase;
-    document.getElementById("flash-phase") && (progressWrap.querySelector("#flash-phase").textContent = `${label}: ${pct}% (${formatSize(done)} of ${formatSize(total)})`);
+    document.getElementById("flash-phase") && (progressWrap.querySelector("#flash-phase").textContent = progressText(phase, done, total, unit));
     progressWrap.querySelector("#flash-progress").value = pct;
   }
 

@@ -415,8 +415,8 @@ export class DfuDevice {
 /**
  * Flash an image over DFU: open, check it fits, erase the pages it
  * touches, write it, read it back, leave. callbacks: log(text),
- * progress(phase, done, total). Returns {verified, transferSize, device,
- * serial}.
+ * progress(phase, done, total, unit): bytes, but pages for the erase.
+ * Returns {verified, transferSize, device, serial}.
  */
 export async function flashDfu(usb, image, { verify = true, leave = true, altSetting = null, settleMs = DFU_SETTLE_MS } = {}, { log = null, progress = null } = {}) {
   const dfu = new DfuDevice(usb, { altSetting, log, settleMs });
@@ -435,7 +435,7 @@ export async function flashDfu(usb, image, { verify = true, leave = true, altSet
   for (const p of allPages) {
     await dfu.erasePage(p.address);
     n++;
-    if (progress) progress("erase", n, allPages.length);
+    if (progress) progress("erase", n, allPages.length, "pages");
   }
 
   // Write, transferSize at a time, each chunk at an explicit address.

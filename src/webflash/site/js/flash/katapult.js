@@ -257,9 +257,10 @@ export const DEFAULT_TIMING = {
 
 /**
  * One Katapult session over a link. callbacks: log(text), progress(phase,
- * done, total). options: timing (tests shrink it), prime (send the
- * invalid command first; the serial caller decides from the USB product
- * string: STM32 other than F2, F4, H7), log.
+ * done, total, unit): bytes, but blocks for the verification. options:
+ * timing (tests shrink it), prime (send the invalid command first; the
+ * serial caller decides from the USB product string: STM32 other than F2,
+ * F4, H7), log.
  */
 export class KatapultFlasher {
   constructor(link, { timing = {}, prime = false, log = null } = {}) {
@@ -491,7 +492,7 @@ export class KatapultFlasher {
       }
       if (!resp) fail("protocol", `Block request error, block ${i}.`);
       hash.update(resp.subarray(4, 4 + this.blockSize));
-      if (progress) progress("verify", i + 1, this.blockCount);
+      if (progress) progress("verify", i + 1, this.blockCount, "blocks");
     }
     const got = await hash.hex();
     const want = await this.lastHash.hex();

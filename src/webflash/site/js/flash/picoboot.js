@@ -279,7 +279,7 @@ export async function flashPicoboot(usb, image, { verify = true, reboot = true }
   for (const s of plan.sectors) {
     await dev.flashErase(s, SECTOR_SIZE);
     n++;
-    if (progress) progress("erase", n, plan.sectors.length);
+    if (progress) progress("erase", n, plan.sectors.length, "sectors");
   }
 
   const total = plan.chunks.reduce((sum, c) => sum + c.data.length, 0);

@@ -141,8 +141,9 @@ export function shouldPrime(mcu) {
 /**
  * Flash an image. options: {connection, mcu, uuid, baud, bitrate, prime,
  * verify, leave, family, fileName, timing, nodeQueryMs, settleMs,
- * rebootWaitMs}. callbacks: {log(text), progress(phase, done, total),
- * status(text), pickNode(nodes) -> uuidHex | null}.
+ * rebootWaitMs}. callbacks: {log(text), progress(phase, done, total, unit),
+ * status(text), pickNode(nodes) -> uuidHex | null}; unit is "bytes" unless
+ * the protocol counts "pages", "sectors" or "blocks".
  */
 export async function flashImage(method, image, options = {}, callbacks = {}) {
   const log = callbacks.log || (() => {});
