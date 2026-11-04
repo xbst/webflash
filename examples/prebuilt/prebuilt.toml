@@ -1,6 +1,6 @@
 # A firmware file flashed as it is, with nothing to configure or build: here
 # a Katapult build for the STM32G0B1, installed with the chip's DFU bootloader.
-# See README.md: katapult.bin is added from a verified build.
+# README.md says how katapult.bin was built.
 
 [board]
 title = "Katapult for STM32G0B1 (prebuilt)"
