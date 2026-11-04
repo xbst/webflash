@@ -292,8 +292,9 @@ export function createFlashPanel(root, options = {}) {
     const fam = family();
     if (!avail.ok) {
       notice.hidden = false;
-      notice.innerHTML = `<p><strong>${esc(METHODS[method] ? METHODS[method].short : method)}</strong> ${esc(avail.reason)}: ` +
-        `${caps.browser === "firefox" || caps.browser === "safari" ? "download the files and flash them with Chrome or Edge, or your usual tools." : "download the files instead."}</p>`;
+      // A reason that already says what to do instead (the UF2 drive's) ends the sentence.
+      notice.innerHTML = `<p><strong>${esc(METHODS[method] ? METHODS[method].short : method)}</strong> ${esc(avail.reason)}` +
+        `${/ instead$/.test(avail.reason) ? "." : `: ${caps.browser === "firefox" || caps.browser === "safari" ? "download the files and flash them with Chrome or Edge, or your usual tools." : "download the files instead."}`}</p>`;
       renderDownloads(actions, fw);
       return;
     }
@@ -405,16 +406,26 @@ export function createFlashPanel(root, options = {}) {
     // before the .bin. A pair's are katapult.bin, then the firmware's.
     const flashed = fw.parts ? fw.parts.map((p) => p.name) : [fw.image.name];
     const files = [...flashed.map((n) => listed.find((f) => f.name === n)).filter(Boolean), ...listed.filter((f) => !flashed.includes(f.name))];
+    // The .uf2 of the whole image, for an RP2 build without its own: a
+    // pair's .uf2 files are Katapult's alone, so it gets one with both
+    // segments, first when the UF2 drive is the method the browser withholds.
+    const fam = family();
+    const uf2 = (fam === "rp2040" || fam === "rp2350") && (fw.parts || !files.some((f) => /\.uf2$/i.test(f.name)));
+    const uf2First = uf2 && Boolean(fw.parts) && state.method === "uf2";
+    const uf2Button = () => button(fw.parts ? `Download ${uf2Name(fw.image)}` : "Download .uf2", () => downloadUf2(), { primary: uf2First });
+    if (uf2First) container.appendChild(uf2Button());
     for (const f of files) {
       container.appendChild(button(`Download ${f.label || f.name} (${formatSize(f.bytes ? f.bytes.length : fw.image.size)})`, async () => {
         const bytes = f.bytes || (await rawBytes(fw));
         opts.saveFile(bytes, f.saveAs || f.name, "application/octet-stream");
-      }, { primary: files[0] === f }));
+      }, { primary: !uf2First && files[0] === f }));
     }
-    const fam = family();
-    if ((fam === "rp2040" || fam === "rp2350") && !files.some((f) => /\.uf2$/i.test(f.name))) {
-      container.appendChild(button("Download .uf2", () => downloadUf2()));
-    }
+    if (uf2 && !uf2First) container.appendChild(uf2Button());
+  }
+
+  // The name uf2Download gives an image's .uf2.
+  function uf2Name(image) {
+    return image.name ? `${image.name.replace(/\.(bin|elf|hex|uf2)$/i, "")}.uf2` : "firmware.uf2";
   }
 
   async function rawBytes(fw) {
