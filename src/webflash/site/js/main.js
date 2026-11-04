@@ -99,7 +99,7 @@ function setupRuntimeStatus() {
     } else if (st.state === "error") {
       pillState(sources, "error", "Sources: failed", st.detail);
     } else {
-      pillState(sources, "", "Sources", "Load when you press Next on Firmware.");
+      pillState(sources, "", "Sources", "Loads when you press Next on Firmware.");
     }
   };
   session.on("change", ({ what }) => { if (what === "sources") render(); });
@@ -476,7 +476,7 @@ async function openToml(text, { name = "board.toml", files = new Map() } = {}) {
   session.openTables(out.board, { name, files });
   markSaved(session.tomlText);
   setTomlStatus(out.warnings.length ? "warn" : "ok",
-    out.warnings.length ? out.warnings.join("\n") : `Opened ${name}. Save TOML writes this; comments are not kept.`);
+    out.warnings.length ? out.warnings.join("\n") : `Opened ${name}; Save TOML writes this text, without its comments.`);
   if (session.firmware) {
     wizard.go("configure");
     await startConfigure("open");

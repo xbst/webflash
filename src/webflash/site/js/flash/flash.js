@@ -47,12 +47,12 @@ export function methodAvailable(method, caps = capabilities()) {
   if (transport === "filesystem" && !caps.fileSystem) {
     // Say what was checked: STOP 3 saw this on a desktop Chrome, where the
     // folder picker should exist, and the old text gave nothing to go on.
-    const why = caps.secure === false ? "needs an https or localhost page: the browser hides the File System Access API elsewhere"
-      : caps.crossOriginFrame ? "needs a folder picker, which the browser never opens in a page embedded from another site (open the card in a tab of its own to use it)"
+    const why = caps.secure === false ? "needs an https or localhost page"
+      : caps.crossOriginFrame ? "needs a folder picker, which browsers block in a frame from another site (open the card in a tab of its own)"
       : caps.os === "android" ? "needs the File System Access API, which Android Chrome does not have"
       : caps.browser === "firefox" || caps.browser === "safari" ? "needs the File System Access API, which this browser does not have (Chrome or Edge on a computer do)"
       : caps.browser === "brave" ? "needs the File System Access API, which Brave turns off by default (enable brave://flags/#file-system-access-api and restart Brave, or use Chrome or Edge)"
-      : "needs the File System Access API, but this browser exposes no window.showDirectoryPicker on this page (Chrome and Edge on a computer have it unless a policy, a flag or an extension removes it)";
+      : "needs the File System Access API, but this page has no window.showDirectoryPicker (a policy, a flag or an extension may have removed it)";
     return { ok: false, reason: `${why}; download the .uf2 and copy it onto the drive instead` };
   }
   return { ok: true, reason: "" };

@@ -248,7 +248,7 @@ export class ConfigurePage {
     const k = s.katapult;
     const names = s.project ? configureNames(s.index, s.project, Boolean(k)) : "";
     this.els.title.textContent = names ? `Set up ${names}` : "Configure";
-    this.els.lead.textContent = this.paired ? "Match your board. Options both use are set once." : "Match your board.";
+    this.els.lead.textContent = this.paired ? "Match your board; options both use are set once." : "Match your board.";
     if (!this.wizard) return;
     this.wizard.setHint("configure", s.firmware ? `Next builds ${names} here, in your browser.` : "");
     const st = s.sources.state;
@@ -299,7 +299,7 @@ export class ConfigurePage {
     const part = (title, ref) => `<span class="kc-status-ref"${ref.date ? ` title="${esc(ref.date)}"` : ""}>` +
       `${esc(title)} <strong>${esc(ref.id)}</strong></span>` +
       (ref.describe && ref.describe !== ref.id ? `<span class="kc-status-detail">${esc(ref.describe)}</span>` : "") +
-      (isChecked(ref) ? "" : `<span class="ref-badge" title="This snapshot ${esc(uncheckedText(ref))}. It may still build.">unchecked</span>`);
+      (isChecked(ref) ? "" : `<span class="ref-badge" title="This snapshot ${esc(uncheckedText(ref))}; it may still build.">unchecked</span>`);
     let html = part(projectTitle(s.index, s.project), s.ref);
     const k = s.katapult;
     if (k) {
@@ -419,9 +419,9 @@ export class ConfigurePage {
     const ref = s.ref;
     const fwName = `${projectTitle(s.index, s.project)} ${ref ? ref.id : ""}`.trim();
     body.innerHTML =
-      `<p>Paste a <code>.config</code> or a defconfig, or open the file. ` +
-      (paired ? "It replaces the configuration of the project picked below; " : `It replaces the configuration of ${esc(fwName)}; `) +
-      `what it leaves out takes its default.</p>` +
+      `<p>Paste or open a <code>.config</code> or defconfig: ` +
+      (paired ? "it replaces the configuration of the project picked below, " : `it replaces ${esc(fwName)}'s configuration, `) +
+      `and what it leaves out takes its default.</p>` +
       (paired ? `<p><label>Load into <select data-act="slot"><option value="fw">${esc(fwName)}</option>` +
         `<option value="katapult">Katapult ${esc(s.katapult.ref ? s.katapult.ref.id : "")}</option></select></label></p>` : "") +
       `<textarea class="code load-config" spellcheck="false" rows="12" data-act="text" ` +

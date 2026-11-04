@@ -8,7 +8,7 @@
 //
 // Nothing heavy downloads at page load: the first call boots the worker
 // (Pyodide from the CDN, then webflash.zip), and onProgress reports how far it
-// got, for the toolbar's status.
+// got, for the top bar's status chip.
 //
 // Long work reports progress as it goes: call(method, params, {onProgress})
 // receives that call's own progress ({phase, detail, done, total}, done and

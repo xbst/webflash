@@ -587,7 +587,7 @@ export class FirmwareFlow {
     const none = p.project === "none";
     this.fwRow.classList.toggle("off", none);
     const kalico = this.config.firmware.projects.includes("kalico");
-    this.fwSub.textContent = none || p.project === "katapult" ? "" : `Runs the printer.${kalico ? " Kalico is a Klipper fork." : ""}`;
+    this.fwSub.textContent = none || p.project === "katapult" ? "" : `Runs the printer${kalico ? "; Kalico is a Klipper fork" : ""}.`;
     this.fwSub.hidden = !this.fwSub.textContent;
     this.fwVer.hidden = none;
     if (!none) {
@@ -632,7 +632,7 @@ export class FirmwareFlow {
     fixed.replaceChildren(ref ? refText(ref) : value);
     fixed.title = ref ? `${ref.describe || ref.id}${ref.date ? `, ${ref.date}` : ""}` : why;
     if (ref && !isChecked(ref)) {
-      fixed.append(" ", el("span", { class: "wf-badge", text: "unchecked", title: `This snapshot ${uncheckedText(ref)}. It may still build.` }));
+      fixed.append(" ", el("span", { class: "wf-badge", text: "unchecked", title: `This snapshot ${uncheckedText(ref)}; it may still build.` }));
     }
     if (why) fixed.append(el("span", { class: "wf-muted wf-why", text: ` ${why}` }));
     return picker;

@@ -268,7 +268,9 @@ export function createFlashPanel(root, options = {}) {
     const m = currentMethod();
     reasonLine.textContent = m ? `Why ${METHODS[m.id] ? METHODS[m.id].short : m.id}: ${m.reason}.` : "";
     if (fw.warnings && fw.warnings.length) {
-      reasonLine.textContent += ` ${fw.warnings.join(" ")}`;
+      // The warnings go on a line of their own, after the reason.
+      if (reasonLine.textContent) reasonLine.appendChild(el("br"));
+      reasonLine.appendChild(el("span", { class: "flash-warn", text: fw.warnings.join(" ") }));
     }
   }
 
@@ -289,8 +291,8 @@ export function createFlashPanel(root, options = {}) {
     const fam = family();
     if (!avail.ok) {
       notice.hidden = false;
-      notice.innerHTML = `<p><strong>${esc(METHODS[method] ? METHODS[method].short : method)}</strong> ${esc(avail.reason)}. ` +
-        `${caps.browser === "firefox" || caps.browser === "safari" ? "Download the files and flash them with Chrome or Edge, or your usual tools." : "Download the files instead."}</p>`;
+      notice.innerHTML = `<p><strong>${esc(METHODS[method] ? METHODS[method].short : method)}</strong> ${esc(avail.reason)}: ` +
+        `${caps.browser === "firefox" || caps.browser === "safari" ? "download the files and flash them with Chrome or Edge, or your usual tools." : "download the files instead."}</p>`;
       renderDownloads(actions, fw);
       return;
     }
@@ -299,7 +301,7 @@ export function createFlashPanel(root, options = {}) {
       // A pair over Katapult: only the firmware goes, onto the Katapult already there.
       const rom = fw.methods.find((x) => x.both);
       notice.hidden = false;
-      notice.innerHTML = `<p>Katapult has to be on the board already.${rom ? ` Flash it once with ${esc(METHODS[rom.id] ? METHODS[rom.id].short : rom.id)}.` : ""}</p>`;
+      notice.innerHTML = `<p>Katapult has to be on the board already${rom ? `: flash it once with ${esc(METHODS[rom.id] ? METHODS[rom.id].short : rom.id)}` : ""}.</p>`;
     }
     if (method === "download") {
       instructions.innerHTML = stepsHtml("download", fam);
@@ -565,7 +567,7 @@ export function createFlashPanel(root, options = {}) {
     state.phase = "ready";
     if (!applyPending()) renderAll();
     const label = outcome.expect.label || "the device";
-    showPrompt(`The board is restarting as ${label}: pick it once.`, [
+    showPrompt(`The board restarted as ${label}: pick it in the browser's list.`, [
       button(`Pick ${label}`, () => connectAndConfirm(), { primary: true }),
     ]);
   }
@@ -584,7 +586,7 @@ export function createFlashPanel(root, options = {}) {
     return new Promise((resolve) => {
       prompt.hidden = false;
       prompt.innerHTML = "";
-      prompt.appendChild(el("p", { text: `${nodes.length} node${nodes.length === 1 ? "" : "s"} answered on the bus. Pick the one to flash:` }));
+      prompt.appendChild(el("p", { text: `${nodes.length} node${nodes.length === 1 ? "" : "s"} answered on the bus; pick the one to flash:` }));
       const list = el("div", { class: "flash-nodes" });
       nodes.forEach((n, i) => {
         const input = el("input", { type: "radio", name: "flash-node", value: n.uuidHex, id: `flash-node-${i}` });
@@ -757,7 +759,11 @@ export function createFlashPanel(root, options = {}) {
         prompt.hidden = false;
         prompt.innerHTML = "";
         const input = el("input", { type: "text", id: "flash-address", value: defaultAddress !== null && defaultAddress !== undefined ? hex8(defaultAddress) : "0x08000000", spellcheck: "false" });
-        prompt.appendChild(el("p", { text: `${name} is a raw .bin with no address. Where does it go (hex)? STM32: 0x08000000, or 0x08002000 after an 8 KiB Katapult. RP2040: 0x10000100, or 0x10004000 after Katapult.` }));
+        prompt.appendChild(el("p", { text: `${name} has no address: where does it go (hex)?` }));
+        prompt.appendChild(el("ul", {}, [
+          el("li", { text: "STM32: 0x08000000, or 0x08002000 after an 8 KiB Katapult." }),
+          el("li", { text: "RP2040: 0x10000100, or 0x10004000 after Katapult." }),
+        ]));
         const row = el("div", { class: "flash-actions" }, [
           el("label", { class: "field" }, ["Address ", input]),
           el("button", { class: "primary", onclick: (e) => {

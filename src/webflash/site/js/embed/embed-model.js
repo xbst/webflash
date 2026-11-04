@@ -35,7 +35,7 @@ export function readConfig(text) {
     return {
       newer,
       error: newer
-        ? `This page was made by a newer WebFlash (configuration schema ${data.schema}) than the runtime it loaded, which reads schema ${SCHEMA}. Generate it again, or load the runtime its version names.`
+        ? `This page needs a newer WebFlash runtime (schema ${data.schema}; this one reads ${SCHEMA}): generate it again, or load the runtime its version names.`
         : `This page's configuration has schema ${JSON.stringify(data.schema)}, which this runtime does not read (it reads schema ${SCHEMA}).`,
     };
   }
@@ -307,7 +307,7 @@ export function offsetLocked(option, picks) {
 
 /** Why the reader cannot pick a setup now, or "": one without Katapult while Katapult is ticked. */
 export function setupBlock(setup, katapult) {
-  return katapult && setup && typeof setup.katapult !== "string" ? "Has no Katapult. Untick Katapult to use it." : "";
+  return katapult && setup && typeof setup.katapult !== "string" ? "No Katapult in this setup: untick Katapult to use it." : "";
 }
 
 /** The setup to use: preferred when it can be picked, else the first that can, else preferred. */
@@ -480,19 +480,19 @@ export function frameNotice(perms, nav, href) {
   const serialBlocked = !perms.serial && Boolean(nav && nav.serial);
   if (!usbBlocked && !serialBlocked) return null;
   const own = `<a href="${escHtml(href)}" target="_blank" rel="noopener">open this card in a tab of its own</a>`;
-  const allow = `(The site can allow it with <code>allow="usb; serial"</code> on the embed.)`;
+  const allow = `(the site can allow it with <code>allow="usb; serial"</code> on the embed)`;
   const usable = (perms.usb && nav.usb) || (perms.serial && nav.serial);
   if (!usable) {
     const blocked = [usbBlocked ? "USB" : "", serialBlocked ? "serial ports" : ""].filter(Boolean).join(" or ");
-    return `<p>The page this card is embedded in does not let it use ${blocked}, so it cannot flash from here. ` +
-      `Build and download the files, or ${own}. ${allow}</p>`;
+    return `<p>The page this card is embedded in does not let it use ${blocked}, so it cannot flash from here: ` +
+      `download the files, or ${own} ${allow}.</p>`;
   }
   if (serialBlocked) {
-    return `<p>The page this card is embedded in does not let it use serial ports, so Katapult over a USB or UART serial port is not offered here; ` +
-      `the USB methods (DFU, PICOBOOT, Katapult through a CAN adapter) still work. For a serial port, ${own}. ${allow}</p>`;
+    return `<p>The page this card is embedded in does not let it use serial ports, so Katapult over a USB or UART serial port is not offered ` +
+      `(DFU, PICOBOOT and Katapult through a CAN adapter still work): for it, ${own} ${allow}.</p>`;
   }
-  return `<p>The page this card is embedded in does not let it use USB, so DFU, PICOBOOT and CAN adapters are not offered here; ` +
-    `Katapult over a serial port still works. For the others, ${own}. ${allow}</p>`;
+  return `<p>The page this card is embedded in does not let it use USB, so DFU, PICOBOOT and CAN adapters are not offered ` +
+    `(Katapult over a serial port still works): for those, ${own} ${allow}.</p>`;
 }
 
 // ── The firmware the flash panel gets ────────────────────────────────

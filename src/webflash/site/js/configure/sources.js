@@ -29,7 +29,7 @@ export async function loadIndex(base = sourcesBase()) {
   try {
     resp = await fetch(url, { cache: "no-cache" });
   } catch (e) {
-    throw new Error(`Could not load the list of versions from ${url}: the request failed. Check your connection.`);
+    throw new Error(`Could not load the list of versions from ${url}: check your connection.`);
   }
   if (!resp.ok) throw new Error(`Could not load the list of versions from ${url} (HTTP ${resp.status}).`);
   let index;
@@ -44,7 +44,7 @@ export async function loadIndex(base = sourcesBase()) {
 /** The index if it has the shape this site reads (schema 1), else an error naming what is wrong. */
 export function checkIndex(index, where = "index.json") {
   if (!index || typeof index !== "object" || index.schema !== 1 || !index.projects || typeof index.projects !== "object") {
-    throw new Error(`${where} is not a schema 1 sources index; this site needs a newer copy of itself.`);
+    throw new Error(`${where} is not a schema 1 sources index; this copy of the site is too old to read it.`);
   }
   for (const [name, p] of Object.entries(index.projects)) {
     if (!p || !Array.isArray(p.refs)) throw new Error(`${where}: project ${name} has no refs list.`);
@@ -268,14 +268,6 @@ export function findVersion(index, project, text) {
       ? `${String(text).trim()} is older than every kept ${parsed.tag} commit.`
       : `No kept ${projectTitle(index, project)} commit is on ${parsed.tag}.`,
   };
-}
-
-/** "v0.13.0-820-g0cee841e · 2026-10-28" for a branch, "2025-04-11" for a tag. */
-export function refDetail(ref) {
-  const bits = [];
-  if (ref.kind !== "tag" && ref.describe) bits.push(ref.describe);
-  if (ref.date) bits.push(ref.date);
-  return bits.join(" · ");
 }
 
 export function uncheckedText(ref) {

@@ -421,7 +421,7 @@ export class Builder {
   // A worker died (most likely out of memory): a running build cannot go on.
   _crashed(message) {
     this.attached = -1;
-    this.crash = `${message}. It may have run out of memory: fewer compiler workers use less.`;
+    this.crash = `${message}. It may have run out of memory: set fewer compiler workers under Versions and licenses.`;
     if (this._abort) this._abort.abort();
     runtime.detachToolchain(message).catch(() => {});
     if (this.onCrash) this.onCrash(this.crash);

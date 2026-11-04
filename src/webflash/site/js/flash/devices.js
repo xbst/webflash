@@ -53,12 +53,12 @@ export const METHODS = {
   katapult: {
     id: "katapult", label: "Katapult (USB or UART)", transport: "serial",
     short: "Katapult",
-    needs: "No driver needed; on Linux, your user must be in the dialout group.",
+    needs: "No driver needed; on Linux, add your user to the dialout group.",
   },
   "katapult-can": {
     id: "katapult-can", label: "Katapult over CAN", transport: "usb",
     short: "Katapult over CAN",
-    needs: "A candleLight (gs_usb) adapter or a USB to CAN bridge board; on Linux, unbind it from gs_usb first.",
+    needs: "Needs a candleLight (gs_usb) adapter or a USB to CAN bridge board; on Linux, unbind it from gs_usb first.",
   },
   dfu: {
     id: "dfu", label: "DFU (STM32 ROM)", transport: "usb",
@@ -435,9 +435,9 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
   const offset = `the firmware starts at ${hex(appAddr)}, after a bootloader`;
 
   const katapultByInterface = () => {
-    if (iface === "can") add("katapult-can", `${offset}, and it talks CAN bus (the toolhead is reached through a USB to CAN adapter)`);
+    if (iface === "can") add("katapult-can", `${offset}, and it talks CAN through a USB to CAN adapter`);
     else if (iface === "usbcan") add("katapult", `${offset}; a USB to CAN bridge board runs Katapult over its own USB port`);
-    else if (iface === "serial") add("katapult", `${offset}, and it talks serial (Katapult in UART mode through a USB-UART adapter)`);
+    else if (iface === "serial") add("katapult", `${offset}, and Katapult answers in UART mode through a USB-UART adapter`);
     else add("katapult", `${offset}, so Katapult updates it over USB`);
   };
 
@@ -462,8 +462,8 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
       if (hasBootloader) katapultByInterface();
       if (hasDfuRom(cfg)) {
         add("dfu", hasBootloader
-          ? `the STM32's ROM bootloader (BOOT0) writes the whole flash${overUsb}, Katapult included, when Katapult is not there yet`
-          : `no bootloader offset is configured, so the STM32's own ROM bootloader (hold BOOT0 and tap RESET) is the way in${overUsb}`);
+          ? `the STM32's ROM bootloader (BOOT0) writes the flash${overUsb} while Katapult is not on the board yet`
+          : `there is no bootloader offset, so the STM32's ROM bootloader (hold BOOT0, tap RESET) writes it${overUsb}`);
       } else if (!hasBootloader) {
         add("download", "this STM32 has no USB DFU in its ROM; flash the file with its own tool");
       }
@@ -473,7 +473,7 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
       if (hasBootloader) katapultByInterface();
       add("picoboot", hasBootloader
         ? "the BOOTSEL ROM (hold BOOTSEL while plugging in) writes the flash directly, Katapult or not"
-        : "no bootloader offset is configured, so the BOOTSEL ROM (hold BOOTSEL while plugging in) is the way in");
+        : "there is no bootloader offset, so the BOOTSEL ROM (hold BOOTSEL while plugging in) writes it");
       add("uf2", "the BOOTSEL ROM also takes a .uf2 copied onto its drive");
       break;
     case "lpc176x":
@@ -506,7 +506,7 @@ export function applyTomlMethods(inferred, tomlMethods) {
   for (const idv of tomlMethods) {
     const found = inferred.find((m) => m.id === idv);
     if (found) methods.push(found);
-    else if (METHODS[idv]) warnings.push(`The board TOML offers "${idv}", which this configuration cannot use; it was left out.`);
+    else if (METHODS[idv]) warnings.push(`The board TOML's "${idv}" does not fit this configuration, so it is left out.`);
     else warnings.push(`The board TOML names an unknown flashing method "${idv}".`);
   }
   if (!methods.length) {
@@ -566,7 +566,7 @@ export function methodsForPrebuilt({ mcu = null, image = null, tomlMethods = nul
       { id: "katapult", reason: `${why}: Katapult over USB when the board has it` },
     ];
   } else {
-    inferred = METHOD_IDS.map((idv) => ({ id: idv, reason: "nothing is known about the board, so every method is offered; pick the one that matches its bootloader" }));
+    inferred = METHOD_IDS.map((idv) => ({ id: idv, reason: "nothing names the chip, so every method is offered: pick the one for its bootloader" }));
   }
   if (image && image.family && image.format === "uf2") {
     // A UF2 can only go where UF2s go, plus the methods that write its bytes.

@@ -196,7 +196,7 @@ export class FirmwarePage {
     e.prebuilt.hidden = !prebuilt;
     if (prebuilt) {
       const file = s.toml && s.toml.prebuilt && s.toml.prebuilt.file;
-      e.prebuilt.textContent = `This board TOML flashes its own file${file ? `, ${file}` : ""}. Next goes to Flash.`;
+      e.prebuilt.textContent = `This board TOML flashes its own file${file ? `, ${file}` : ""}: Next goes to Flash.`;
     }
 
     const index = s.index;

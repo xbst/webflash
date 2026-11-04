@@ -284,7 +284,7 @@ export async function discoverToolchain(assetsBase) {
     throw new Error(`Could not read the compiler's manifest (${manifestUrl}): ${e.message}`);
   }
   if (!manifest || manifest.schema !== 1) {
-    throw new Error(`${manifestUrl} is not a schema 1 toolchain manifest; this site needs a newer copy of itself.`);
+    throw new Error(`${manifestUrl} is not a schema 1 toolchain manifest; this copy of the site is too old to read it.`);
   }
   return { id, base, manifestUrl, manifest, files: toolchainFiles(manifest, base) };
 }

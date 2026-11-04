@@ -287,7 +287,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     // The same decision parseFirmware makes: only a raw binary needs an address.
     const isBin = sniffFormat(name, bytes) === "bin";
     if (isBin && looksLikeText(bytes)) {
-      throw new FlashError(`${name} is a text file, not a firmware image (a Klipper dictionary, or an Intel HEX file whose first record cannot be read). Upload the firmware itself: a .bin, .hex, .uf2 or .elf file.`, { code: "format" });
+      throw new FlashError(`${name} is a text file, not a firmware image (a Klipper dictionary, or an Intel HEX file whose first record cannot be read): upload a .bin, .hex, .uf2 or .elf file.`, { code: "format" });
     }
     if (isBin) {
       let address = givenAddress;
@@ -313,7 +313,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   if (uploadButton) {
     uploadButton.disabled = false;
-    uploadButton.title = "Flash a firmware file you already have (.bin, .hex, .uf2 or .elf)";
+    uploadButton.title = "Flash a firmware file you have (.bin, .hex, .uf2 or .elf)";
     uploadButton.addEventListener("click", () => input.click());
   }
 

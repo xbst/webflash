@@ -352,7 +352,7 @@ export class OptionsPanel {
     e.add.addEventListener("click", () => {
       const out = addSetup(s.tables(), s.setupIndex);
       s.setSetups(out, { selected: out.selected });
-      this._note(`Added “${out.setups[out.selected].title}”. Configure now edits it.`);
+      this._note(`Added “${out.setups[out.selected].title}”; Configure now edits it.`);
       // Name it at once: the title is selected for typing over.
       const input = e.setups.querySelector(`li[data-i="${out.selected}"] [data-f="title"]`);
       if (input) {

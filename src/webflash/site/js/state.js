@@ -6,8 +6,8 @@
 // setup at a time (setupIndex, the Setup select; the first by default):
 // they are what Save TOML writes, and the TOML text is derived from them
 // (tomlText, the same text as bridge.save_toml for the same tables). Opening a
-// TOML replaces them; the Configure, Embed options and toolbar controls
-// change them. Beside the tables it holds the configure session: the sources
+// TOML replaces them; page 1 (Firmware), Configure and Embed options change
+// them. Beside the tables it holds the configure session: the sources
 // index, the ref being configured, the full .config and the Kconfig tree the
 // engine reports, the build plan, the files opened beside the TOML (its image
 // and firmware file, which Generate embeds with -i), and whether a build has

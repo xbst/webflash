@@ -87,12 +87,12 @@ export function slotProblem(s, slot) {
   const sources = k ? k.sources : s.sources;
   const ref = k ? k.ref : s.ref;
   const title = k ? "Katapult" : projectTitle(s.index, s.project);
-  if (!sources || sources.state !== "ready" || !ref) return `Load ${k ? "Katapult's" : "the"} configuration first (Configure).`;
+  if (!sources || sources.state !== "ready" || !ref) return `Load ${k ? "Katapult's" : "the"} configuration first.`;
   const unsupported = unsupportedReason((k ? k.configText : s.configText) || "");
   if (unsupported) return unsupported;
   const p = k ? k.plan : s.plan;
   if (!p || p.ref !== ref.id) return "Working out what the build needs…";
-  if (p.error) return `${title}: what the build needs could not be worked out: ${p.error}`;
+  if (p.error) return `Could not work out what the ${title} build needs: ${p.error}`;
   if (p.unavailable && p.unavailable.length) {
     return `This snapshot of ${title} lacks ${p.unavailable.join(", ")}, which the build needs.`;
   }
@@ -854,7 +854,7 @@ export class BuildPanel {
       .filter(Boolean).join(", ");
     el.innerHTML =
       `<h3>Build</h3><table class="about-table">` +
-      `<tr><td>Compiler workers</td><td><select id="about-workers" title="How many compiles run at once. Each worker holds its own compiler and a copy of the sources.">${options.join("")}</select>` +
+      `<tr><td>Compiler workers</td><td><select id="about-workers" title="How many compiles run at once; each worker holds its own compiler and a copy of the sources.">${options.join("")}</select>` +
       `${machine ? `<div class="about-note">${esc(machine)}</div>` : ""}</td></tr>` +
       `<tr><td>Kept in this browser</td><td id="about-storage">…</td></tr>` +
       `</table>` +

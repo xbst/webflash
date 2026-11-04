@@ -302,6 +302,7 @@
 .wf-app .flash-notice p, .wf-app .flash-prompt p, .wf-app .flash-confirm p, .wf-app .flash-result p { margin: 0 0 .45em; }
 .wf-app .flash-notice p:last-child { margin-bottom: 0; }
 .wf-app .flash-result p { overflow-wrap: anywhere; }
+.wf-app .flash-prompt ul { margin: 0 0 .45em; padding-left: 1.4em; }
 .wf-app .flash-prompt input[type="text"] { font-family: var(--mono-font); width: 11em; }
 .wf-app .flash-prompt input.bad { border-color: var(--error); }
 .wf-app .flash-table { border-collapse: collapse; margin-bottom: .45em; }

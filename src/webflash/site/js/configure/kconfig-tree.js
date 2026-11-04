@@ -359,7 +359,7 @@ export class KconfigTree {
       seen.add(key);
       if (seen.size > LIMIT) {
         const more = document.createElement("li");
-        more.textContent = `…and ${list.length - LIMIT} more. Search for a longer text to narrow the list.`;
+        more.textContent = `…and ${list.length - LIMIT} more: type more of the name to narrow the list.`;
         ul.append(more);
         break;
       }
@@ -731,7 +731,7 @@ export class KconfigTree {
     const m = (node.members || []).find((x) => x.name === node.value);
     const by = node.locked === "katapult" ? "Katapult" : String(node.locked);
     text(rec.lock, `${m ? m.prompt : "(none)"} · set by ${by}`);
-    rec.lock.title = `${by} sets this. Change it there.`;
+    rec.lock.title = `Set by ${by}: change it there.`;
   }
 
   // A value as the expose mode shows it.
