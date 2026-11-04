@@ -336,7 +336,10 @@ export class OptionsPanel {
 
     s.on("change", ({ what }) => {
       if (what === "config") this._rememberConfig();
-      if (what === "open") this._methodTargetId = null;   // another TOML's setups
+      if (what === "open") {
+        this._methodTargetId = null;   // another TOML's setups
+        this._note();
+      }
       if (what === "tree" || what === "ref") this._renderTree();
       else if (what === "options" || what === "setups") this.tree.render();
       if (["board", "firmware", "project", "version", "flash", "prebuilt", "open", "index", "options", "tree", "undo",
@@ -367,6 +370,8 @@ export class OptionsPanel {
       }
     });
     e.undo.addEventListener("click", () => s.undo());
+    // An undo or redo (here or anywhere) takes back what the note tells.
+    s.on("restore", () => this._note());
     e.setups.addEventListener("change", (ev) => {
       const row = ev.target.closest("li[data-i]");
       if (!row) return;
