@@ -323,7 +323,10 @@ def config_json(data: dict) -> str:
     )
 
 
-_ENGINE_TAIL_RE = re.compile(r"engine/v[0-9]+/$")
+# The engine folder as whole path segments: "/engine/v1/" after a host or a
+# folder, so neither a folder that only ends in "engine" (myengine/v1/) nor a
+# host named "engine" counts.
+_ENGINE_TAIL_RE = re.compile(r"(?<=[^/]/)engine/v[0-9]+/$")
 
 
 def site_url(engine_url: str) -> str:

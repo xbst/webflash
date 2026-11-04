@@ -719,7 +719,9 @@ export function tomlToHash(text) {
  */
 export function siteUrl(engineUrl) {
   const url = String(engineUrl);
-  if (/engine\/v[0-9]+\/$/.test(url)) return url.replace(/engine\/v[0-9]+\/$/, "");
+  // The engine folder as whole path segments, as renderer._ENGINE_TAIL_RE.
+  const tail = /(?<=[^/]\/)engine\/v[0-9]+\/$/;
+  if (tail.test(url)) return url.replace(tail, "");
   const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(url);
   return m ? `${m[1].toLowerCase()}://${m[2]}/` : `${new URL(url).origin}/`;
 }
