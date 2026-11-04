@@ -2,7 +2,8 @@
 //
 // This is the one flash module that knows the site's state. The firmware
 // comes, in this order of preference, from a file the user uploaded (Upload
-// firmware in the top bar, or page 1's "Flash a file you have"), from
+// firmware in the top bar, or page 1's "Flash a file you have"; a build that
+// finishes after it takes its place), from
 // session.builds (the in-browser builds' outputs, while the project, ref and
 // .config of each slot are still the build's: Katapult and the firmware
 // together, through pair.js, when Katapult is picked), or, for a [prebuilt]
@@ -333,6 +334,9 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   // ── Session changes ─────────────────────────────────────────────
   session.on("change", ({ what }) => {
+    // A build that finishes after an upload replaces it (uploading again
+    // brings the file back); a "build" change that clears the builds does not.
+    if (what === "build" && (session.build || (session.builds && session.builds.katapult))) state.uploaded = null;
     if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files", "katapult", "katapult-ref", "katapult-config", "setup"].includes(what)) refresh();
   });
   refresh();
