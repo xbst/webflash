@@ -236,9 +236,12 @@ class _Handler(SimpleHTTPRequestHandler):
             return self.site.joinpath(*_ENGINE_ROOT), rest
         if self.assets_dir is not None:
             for prefix in _ASSET_PREFIXES:
-                if _under(path, prefix) is not None:
-                    # The prefix stays in the path: <folder>/toolchain/...
-                    return self.assets_dir, path
+                rest = _under(path, prefix)
+                if rest is not None:
+                    # Resolved against <folder>/toolchain or <folder>/sources,
+                    # so a ".." after the prefix stops there rather than
+                    # reaching the rest of the folder.
+                    return self.assets_dir / prefix.lstrip("/"), rest
         return None
 
     def _asks_for_payload(self) -> bool:
