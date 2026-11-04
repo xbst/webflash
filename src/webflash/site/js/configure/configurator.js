@@ -180,8 +180,11 @@ export class Configurator {
       if ((what === "open" || what === "prebuilt") && !session.firmware &&
           (this.loaded || session.sources.state !== "idle")) this.unload();
       // Katapult unticked (or the firmware became Katapult itself), or a board
-      // TOML opened: the page loads an opened TOML's Katapult again.
-      if ((what === "open" || (what === "katapult" && !session.katapult)) && this.slots.katapult) this.dropKatapult();
+      // TOML opened: the page loads an opened TOML's Katapult again. A load
+      // of it still in flight is dropped too, once it lands.
+      if ((what === "open" || (what === "katapult" && !session.katapult)) && (this.slots.katapult || this._loading.katapult)) {
+        this.dropKatapult();
+      }
       // A build (js/build/) loads the built .config into the engine's Kconfig
       // session, which pins every symbol; load the defconfig again so later
       // edits follow the defaults as before.
@@ -259,13 +262,16 @@ export class Configurator {
   /**
    * Let go of the katapult slot (Katapult unticked): the engine forgets it,
    * nothing pairs any more, and Klipper's bootloader offset is free again.
+   * A load of it still in flight gives up (the generation moved on), and
+   * the drop queued behind it takes the sources it may have put in the
+   * engine out again (bridge.drop_slot takes an empty slot too).
    */
   dropKatapult() {
     const slot = "katapult";
     this._generations[slot]++;
     clearTimeout(this._planTimers[slot]);
     this._planCounts[slot]++;
-    const had = this.slots.katapult;
+    const had = this.slots.katapult || this._loading.katapult > 0;
     this.slots.katapult = null;
     if (this._notices.katapult) this._setNotice(null, slot);
     if (!had) return Promise.resolve(false);
@@ -647,9 +653,7 @@ export class Configurator {
     const at = this._setupId();
     const fw = this._reapplySlot("fw");
     const k = this._view("katapult");
-    let kat;
-    if (!k.on) kat = this.slots.katapult ? this.dropKatapult() : Promise.resolve(false);
-    else kat = this._reapplySlot("katapult");
+    const kat = k.on ? this._reapplySlot("katapult") : this.dropKatapult();
     // Both restored: pair them again, which changes nothing in a restored
     // pair but brings back the notes of what Katapult refuses.
     return Promise.all([fw, kat]).then(async ([a]) => {
