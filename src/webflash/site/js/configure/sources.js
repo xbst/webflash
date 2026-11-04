@@ -269,7 +269,10 @@ export function findVersion(index, project, text, accept = null) {
     }
   }
   if (best) {
-    return { ref: best, exact: false, note: `Closest ${accept ? "offered" : "kept"}: ${best.describe}.${dirty ? ` ${dirty}` : ""}` };
+    // A describe string names no branch, so the closest count may be on
+    // another line of development: the note names a branch other than the default.
+    const branch = best.kind === "branch" && best.id !== (p && p.default_branch) ? ` (the ${best.id} branch)` : "";
+    return { ref: best, exact: false, note: `Closest ${accept ? "offered" : "kept"}: ${best.describe}${branch}.${dirty ? ` ${dirty}` : ""}` };
   }
   const sameTag = refs.some((r) => { const d = parseVersionString(r.describe); return d && d.tag === parsed.tag; });
   let error;
