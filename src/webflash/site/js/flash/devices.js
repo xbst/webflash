@@ -333,16 +333,23 @@ function defaultStm32Offset(map) {
   return 0;
 }
 
-/** Whether the STM32's ROM has USB DFU: CONFIG_STM32_DFU_ROM_ADDRESS, else Klipper's table by chip. */
+/**
+ * Whether the STM32's ROM has USB DFU, whatever interface the firmware uses:
+ * a CAN or serial build of a toolhead with a USB port is flashed through the
+ * ROM's DFU like any other. CONFIG_STM32_DFU_ROM_ADDRESS is 0 for those
+ * builds (its "default 0 if !USB" is about Klipper restarting itself into
+ * the ROM), so a 0 there falls back to the Kconfig's table by chip.
+ */
 export function hasDfuRom(cfg) {
   const map = parseConfig(cfg);
   const given = configInt(map, "STM32_DFU_ROM_ADDRESS", null);
-  if (given !== null) return given !== 0;
+  if (given) return true;
   if (familyOf(map) !== "stm32") return false;
-  if (interfaceOf(map) === "can" || interfaceOf(map) === "serial") return false;   // default 0 if !USB
   const is = (sym) => map.get(`CONFIG_${sym}`) === true;
+  // The G070 and G071 are the G0 parts without a USB peripheral at all.
+  if (is("MACH_STM32G070") || is("MACH_STM32G071")) return false;
   const on = [...map.keys()].filter((k) => map.get(k) === true);
-  if (is("MACH_STM32F042") || is("MACH_STM32F072")) return true;
+  if (is("MACH_STM32F042") || is("MACH_STM32F072") || is("MACH_AT32F403")) return true;
   return on.some((k) => /^CONFIG_MACH_STM32(F4\w*|F7\w*|G0\w*|G4\w*|L4\w*|H7\w*)$/.test(k));
 }
 
@@ -393,10 +400,14 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
     else add("katapult", `${offset}, so Katapult updates it over USB`);
   };
 
+  // A CAN or serial build reaches the ROM's DFU through the board's own USB
+  // port, which a toolhead may or may not have.
+  const overUsb = iface === "can" || iface === "serial" ? " over the board's USB port, if it has one" : "";
+
   if (project === "katapult") {
     // The bootloader itself: flashed with the chip's ROM bootloader, never with Katapult.
     if (family === "stm32") {
-      if (hasDfuRom(cfg)) add("dfu", "the STM32's own ROM bootloader (hold BOOT0 and tap RESET) installs the Katapult bootloader");
+      if (hasDfuRom(cfg)) add("dfu", `the STM32's own ROM bootloader (hold BOOT0 and tap RESET) installs the Katapult bootloader${overUsb}`);
     } else if (family === "rp2040" || family === "rp2350") {
       add("picoboot", "the RP2 BOOTSEL ROM installs the Katapult bootloader over USB");
       add("uf2", "the same ROM also takes a .uf2 copied onto its drive");
@@ -410,12 +421,10 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
       if (hasBootloader) katapultByInterface();
       if (hasDfuRom(cfg)) {
         add("dfu", hasBootloader
-          ? "the STM32's ROM bootloader (BOOT0) writes the whole flash, Katapult included, when Katapult is not there yet"
-          : "no bootloader offset is configured, so the STM32's own ROM bootloader (hold BOOT0 and tap RESET) is the way in");
+          ? `the STM32's ROM bootloader (BOOT0) writes the whole flash${overUsb}, Katapult included, when Katapult is not there yet`
+          : `no bootloader offset is configured, so the STM32's own ROM bootloader (hold BOOT0 and tap RESET) is the way in${overUsb}`);
       } else if (!hasBootloader) {
-        add("download", iface === "can"
-          ? "a CAN-only configuration cannot reach the ROM's USB DFU; flash the file with an ST-LINK or another tool"
-          : "this STM32 has no USB DFU in its ROM; flash the file with its own tool");
+        add("download", "this STM32 has no USB DFU in its ROM; flash the file with its own tool");
       }
       break;
     case "rp2040":

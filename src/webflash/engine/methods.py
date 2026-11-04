@@ -5,9 +5,16 @@ each with the reason the site shows (the shape of ``devices.js``'s
 """
 from __future__ import annotations
 
+import re
 from typing import Mapping
 
 METHODS = ("dfu", "picoboot", "uf2", "katapult", "katapult-can", "download")
+
+# The chips whose ROM has a USB DFU bootloader, as the projects' Kconfig lists
+# them for STM32_DFU_ROM_ADDRESS. That symbol is 0 for a CAN or serial build
+# ("default 0 if !USB", about Klipper restarting itself into the ROM), while
+# the board may still have a USB port the ROM answers on.
+_DFU_ROM_CHIP = re.compile(r"MACH_STM32(F042|F072|F4\w*|F7\w*|G0\w*|G4\w*|L4\w*|H7\w*)|MACH_AT32F403")
 
 
 def _flag(values: Mapping[str, str], name: str) -> bool:
@@ -20,6 +27,17 @@ def _number(values: Mapping[str, str], name: str) -> int:
         return int(raw, 0)
     except ValueError:
         return 0
+
+
+def _dfu_method(values: Mapping[str, str]) -> dict | None:
+    """DFU when the chip's ROM has it, whatever interface the firmware uses."""
+    rom = _number(values, "STM32_DFU_ROM_ADDRESS")
+    if rom:
+        return {"id": "dfu", "reason": f"the STM32's ROM has a USB DFU bootloader at 0x{rom:08x}"}
+    usb = _flag(values, "HAVE_STM32_USBFS") or _flag(values, "HAVE_STM32_USBOTG")
+    if usb and any(_DFU_ROM_CHIP.fullmatch(name) and value == "y" for name, value in values.items()):
+        return {"id": "dfu", "reason": "the STM32's ROM has a USB DFU bootloader, reached over the board's USB port if it has one"}
+    return None
 
 
 def _katapult_methods(values: Mapping[str, str], why: str) -> list[dict]:
@@ -47,18 +65,18 @@ def infer_methods(values: Mapping[str, str], project: str = "klipper") -> list[d
     offset = f"the application starts at 0x{app:08x}, after a bootloader"
     if project == "katapult":
         # The bootloader itself is written by the chip's own ROM method.
-        dfu = _number(values, "STM32_DFU_ROM_ADDRESS")
-        if _flag(values, "MACH_STM32") and dfu:
-            methods.append({"id": "dfu", "reason": f"the STM32's ROM has a USB DFU bootloader at 0x{dfu:08x}"})
+        dfu = _dfu_method(values) if _flag(values, "MACH_STM32") else None
+        if dfu:
+            methods.append(dfu)
         elif _flag(values, "MACH_RPXXXX"):
             methods.append({"id": "picoboot", "reason": "the RP2 ROM's PICOBOOT over USB (BOOTSEL)"})
             methods.append({"id": "uf2", "reason": "a UF2 written to the BOOTSEL drive"})
     elif _flag(values, "MACH_STM32"):
         if app != boot:
             methods += _katapult_methods(values, offset)
-        dfu = _number(values, "STM32_DFU_ROM_ADDRESS")
+        dfu = _dfu_method(values)
         if dfu:
-            methods.append({"id": "dfu", "reason": f"the STM32's ROM has a USB DFU bootloader at 0x{dfu:08x}"})
+            methods.append(dfu)
     elif _flag(values, "MACH_RPXXXX"):
         if _flag(values, "RPXXXX_FLASH_START_4000"):
             methods += _katapult_methods(values, offset)

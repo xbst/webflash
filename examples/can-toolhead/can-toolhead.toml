@@ -30,7 +30,8 @@ values = [1000000, 500000, 250000]
 labels = { 1000000 = "1 Mbit/s", 500000 = "500 kbit/s", 250000 = "250 kbit/s" }
 
 [flash]
-methods = ["katapult-can", "download"]
+methods = ["katapult-can", "dfu", "download"]
 
 [flash.instructions]
 katapult-can = "Plug in the USB to CAN adapter and click Connect. WebFlash lists the nodes on the bus; pick the toolhead. A node running Klipper is restarted into Katapult first."
+dfu = "For a toolhead with a USB port: plug it into this computer, hold BOOT, tap RESET, release BOOT, then click Connect. Katapult in the first 8 KiB stays where it is."
