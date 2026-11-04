@@ -3,7 +3,8 @@
 // This is the one flash module that knows the site's state. The firmware
 // comes, in this order of preference, from a file the user uploaded with
 // the toolbar's Upload firmware, from session.build (the in-browser build's
-// outputs), or from a [prebuilt] board TOML whose file was opened beside it.
+// outputs, while the project, ref and .config are still the build's), or,
+// for a [prebuilt] board TOML, from the file opened beside it.
 // The methods come from the configuration (session.configText, the
 // configure code's full .config, else the TOML's defconfig) through
 // devices.js's inferMethods, narrowed by the TOML's [flash].methods; a file
@@ -16,6 +17,7 @@ import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin, sniffFormat, looksLikeText } from "./firmware-file.js";
 import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict, serialBaud } from "./devices.js";
 import { explainError, FlashError } from "./errors.js";
+import { buildMatches } from "../build/artifacts.js";
 
 /**
  * Mount the panel into root (the #flash-card element) for a Session. The
@@ -58,10 +60,14 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return t.prebuilt && typeof t.prebuilt === "object" ? t.prebuilt : null;
   }
 
-  /** The build's firmware (session.build), as a panel firmware, or null. */
+  /**
+   * The build's firmware (session.build), as a panel firmware, or null. A
+   * build of another project, version or .config is not offered: the Build
+   * card says Rebuild and keeps its files, as a card withdraws its build.
+   */
   function fromBuild() {
     const b = session.build;
-    if (!b || !b.outputs) return null;
+    if (!b || !b.outputs || !buildMatches(session, b)) return null;
     const outputs = b.outputs instanceof Map ? b.outputs : new Map(Object.entries(b.outputs));
     const project = b.project || session.project || "klipper";
     const cfg = b.config || configText();
@@ -205,8 +211,11 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return { origin, text };
   }
 
+  // While a flash runs, the panel holds a new firmware back until it ends
+  // (flash-ui.js's setFirmware), so a refresh never interrupts one.
   function refresh() {
-    const firmware = fromUpload() || fromBuild() || fromPrebuilt();
+    // A [prebuilt] board TOML flashes its own file, never a build.
+    const firmware = fromUpload() || (prebuiltTable() ? fromPrebuilt() : fromBuild());
     const key = firmwareKey(firmware);
     if (shown && shown.origin === key.origin && shown.text === key.text) return;
     shown = key;
@@ -272,7 +281,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   // ── Session changes ─────────────────────────────────────────────
   session.on("change", ({ what }) => {
-    if (["toml", "project", "build", "config", "configText", "files"].includes(what)) refresh();
+    if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files"].includes(what)) refresh();
   });
   refresh();
 

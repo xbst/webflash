@@ -138,6 +138,7 @@ export class Session {
     this.plan = null;
     this.sources = { state: "idle", detail: "" };   // idle, loading, ready, error
     this.locked = "";           // why configuring is locked (a build running), "" when not
+    this.build = null;          // the last build (build/artifacts.js's buildRecord), until a TOML is opened
 
     this._listeners = new Map();
     this._undo = [];
@@ -259,12 +260,15 @@ export class Session {
   /**
    * Replace every table with an opened board TOML's (board_data's shape, as
    * bridge.check_board returns it), with the file's name and the files opened
-   * beside it.
+   * beside it. The last build is dropped with the board it was made for (the
+   * "open" event tells the Flash card; a "build" event would also make the
+   * configurator load the engine's defconfig again, which the open does).
    */
   openTables(tables, { name = null, files = null, origin = "open" } = {}) {
     this.checkpoint();
     const before = this._t;
     this._t = normalizeTables(tables);
+    this.build = null;
     if (name !== null) this.tomlName = name;
     if (files !== null) this.files = files;
     for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);

@@ -22,7 +22,7 @@ import { formatBytes, projectTitle } from "../configure/sources.js";
 import { copyText } from "../configure/config-tab.js";
 import { chosenWorkerCount, defaultWorkerCount, setChosenWorkerCount, workerCount } from "./toolchain-pool.js";
 import { cachedFlags, clearCache, storageEstimate } from "./cache.js";
-import { buildRecord, renderArtifacts, renderMemory } from "./artifacts.js";
+import { buildMatches, buildRecord, configKey, renderArtifacts, renderMemory } from "./artifacts.js";
 import { BuildCancelled, Builder, treePath } from "./builder.js";
 
 const AUTO_KEY = "webflash.build.auto";
@@ -42,13 +42,8 @@ function remember(key, value) {
   } catch (e) { /* storage can be blocked */ }
 }
 
-export { treePath };
-
-/** The CONFIG_ lines of a .config, for telling whether two configurations differ. */
-export function configKey(text) {
-  return String(text || "").split(/\r?\n/).map((l) => l.trim())
-    .filter((l) => /^(# )?CONFIG_/.test(l)).sort().join("\n");
-}
+// configKey lives in artifacts.js beside buildMatches; the embed imports it from here.
+export { treePath, configKey };
 
 /**
  * The parts of an engine build error: the bridge's message is the failing
@@ -99,7 +94,7 @@ export class BuildPanel {
     this.consented = false;        // the Configure tab's first-visit box agreed to the build's downloads
     this.running = false;
     this.cancelled = false;
-    this.last = null;              // {config, project, ref} of the last build that worked
+    this.last = null;              // the last build that worked (buildRecord's), also session.build until a TOML is opened
     this.follow = true;            // the log scrolls with new lines
     this.logBuffer = [];
     this.logLines = 0;
@@ -148,10 +143,7 @@ export class BuildPanel {
 
   /** The last build no longer matches the configuration: another project, version or .config. */
   get stale() {
-    const s = this.session;
-    if (!this.last) return false;
-    return this.last.project !== s.project || !s.ref || this.last.ref !== s.ref.id ||
-      configKey(this.last.config) !== configKey(s.configText);
+    return Boolean(this.last) && !buildMatches(this.session, this.last);
   }
 
   render() {
@@ -165,7 +157,9 @@ export class BuildPanel {
       : c.reason;
     cancel.hidden = !this.running;
     cancel.disabled = this.cancelled;
-    if (this.session.build && !this.running) renderArtifacts(this.els.artifacts, this.session.build, { stale: this.stale });
+    // The card's own last build: opening a board TOML clears session.build,
+    // but its files stay here, labeled as from an earlier configuration.
+    if (this.last && !this.running) renderArtifacts(this.els.artifacts, this.last, { stale: this.stale });
   }
 
   // ── The toolchain ─────────────────────────────────────────────────
@@ -395,7 +389,7 @@ export class BuildPanel {
     this.finishOpen(null);
     this.els.bar.value = this.els.bar.max;
     const build = buildRecord(result, outputs, { project: job.project, ref: job.ref.id });
-    this.last = { config: build.config, project: job.project, ref: job.ref.id };
+    this.last = build;
     renderMemory(this.els.memory, build.memory);
     const engine = Number(result.duration) * 1000;
     // The time the clock showed: the wait from the click, downloads included.

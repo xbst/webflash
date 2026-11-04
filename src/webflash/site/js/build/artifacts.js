@@ -137,6 +137,24 @@ export function buildRecord(result, outputs, { project, ref }) {
   };
 }
 
+/** The CONFIG_ lines of a .config, for telling whether two configurations differ. */
+export function configKey(text) {
+  return String(text || "").split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^(# )?CONFIG_/.test(l)).sort().join("\n");
+}
+
+/**
+ * Whether a build record (buildRecord's) is a build of what the session
+ * configures now: the same project, the same ref and the same .config. A
+ * build that no longer matches is not flashed (the Build card keeps its
+ * files, labeled as from an earlier configuration).
+ */
+export function buildMatches(session, build) {
+  if (!session || !build) return false;
+  return build.project === session.project && Boolean(session.ref) && build.ref === session.ref.id &&
+    configKey(build.config) === configKey(session.configText);
+}
+
 function numberOrNull(v) {
   return Number.isFinite(v) ? v : null;
 }
