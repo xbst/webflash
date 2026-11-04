@@ -9,7 +9,7 @@
 // configuration in the browser (build/build-panel.js) and Flash writes the
 // result, or an uploaded file, to the board (flash/flash-panel.js).
 
-import { Session, PROJECTS } from "./state.js";
+import { Session, PROJECTS, fetchBoardToml } from "./state.js";
 import * as runtime from "./runtime.js";
 import { tomlFromHash, parseToml } from "./toml-io.js";
 import { openGenerate, openAbout, maybeShowAboutOnFirstVisit, showError, openModal, esc } from "./dialogs.js";
@@ -661,16 +661,10 @@ async function openFromUrl({ hashOnly = false } = {}) {
   const config = hashOnly ? null : params.get("config");
   if (text === null && config) {
     try {
-      const url = new URL(config, location.href);
-      const resp = await fetch(url, { cache: "no-cache" });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      text = await resp.text();
-      name = decodeURIComponent(url.pathname.split("/").pop() || "") || name;
-      if (!/\.toml$/i.test(name)) name = "board.toml";
+      ({ text, name } = await fetchBoardToml(config, location.href));
     } catch (e) {
       failed = true;
-      showError("Could not load the board TOML",
-                `${config}: ${e.message}\n\nThe server it is on must allow the site to fetch it (CORS).`);
+      showError(e.title || "Could not load the board TOML", e.message || String(e));
     }
   }
   if (text === null) return failed ? false : null;

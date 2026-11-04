@@ -78,6 +78,49 @@ export function normalizeTables(t) {
   };
 }
 
+function loadError(message) {
+  const e = new Error(message);
+  e.title = "Could not load the board TOML";
+  return e;
+}
+
+/**
+ * The board TOML a ?config= link names: {text, name}, the name being the
+ * URL's last segment when it is a .toml file, else board.toml. A failure
+ * throws an Error whose title and message are the error dialog's, worded by
+ * the step that failed: only a fetch that fails outright can be CORS, since
+ * an HTTP status reaches the page only when the server allowed it.
+ */
+export async function fetchBoardToml(config, base, fetchImpl = globalThis.fetch) {
+  let url;
+  try {
+    url = new URL(config, base);
+  } catch (e) {
+    throw loadError(`${config}: not an address the site can fetch.`);
+  }
+  let resp;
+  try {
+    resp = await fetchImpl(url, { cache: "no-cache" });
+  } catch (e) {
+    throw loadError(`${config}: ${e.message}\n\nThe server could not be reached, or it does not allow the site to fetch the file (CORS).`);
+  }
+  if (!resp.ok) {
+    throw loadError(`${config}: HTTP ${resp.status}\n\nThe file is not there or the server refused it: check the address.`);
+  }
+  let text;
+  try {
+    text = await resp.text();
+  } catch (e) {
+    throw loadError(`${config}: the download broke off: ${e.message}`);
+  }
+  let name = "board.toml";
+  try {
+    name = decodeURIComponent(url.pathname.split("/").pop() || "") || name;
+  } catch (e) { /* a malformed escape: keep board.toml */ }
+  if (!/\.toml$/i.test(name)) name = "board.toml";
+  return { text, name };
+}
+
 export class Session {
   constructor() {
     this._t = defaultTables();
