@@ -117,6 +117,12 @@ const GS_USB_UNBIND = [
 
 const BUSY_GENERIC = "Close any other program that is talking to the board: a Klipper host (stop klipper.service), a serial monitor, STM32CubeProgrammer, Arduino IDE, dfu-util or picotool. Then click Connect again.";
 
+const OTHER_TAB = "Another tab of this site may hold the device: close it.";
+
+const SECURE_PAGE = "The page needs to be served over HTTPS or from localhost.";
+
+const EMBED_ALLOW = "If this page is embedded in another site, the embedding page must allow USB and serial access: allow=\"usb; serial\" on its iframe.";
+
 const PICKER_NOTE = "Make sure the board is in the right mode and is plugged straight into this computer (a USB hub can hide it); the picker only lists devices in that mode.";
 
 const DISCONNECTED_FIXES = [
@@ -186,8 +192,22 @@ export function explainError(err, context = {}) {
         // The serial and USB wrappers' own error for a board unplugged mid-step.
         if (!fixes.length) fixes.push(...DISCONNECTED_FIXES);
         break;
+      case "busy":
+        // The wrappers' error for a port another program or tab holds.
+        if (!fixes.length) fixes.push(...busyFixes(os, transport, err.cause));
+        break;
+      case "permission":
+        // The wrappers' error for a device the browser or the OS refuses.
+        if (!fixes.length) fixes.push(...permissionFixes(os, transport, vid, pid));
+        break;
       default:
         break;
+    }
+    // A wrapped browser error keeps the advice the browser's error itself
+    // would get, when that advice is about the same thing.
+    if (!fixes.length && err.cause && !(err.cause instanceof FlashError) && err.cause.name) {
+      const inner = explainError(err.cause, { ...context, os, browser, method, transport });
+      if (inner.code === err.code) fixes.push(...inner.fixes);
     }
     return { code: err.code, title: titleFor(err.code), message: err.message, fixes: dedupe(fixes) };
   }
@@ -201,10 +221,7 @@ export function explainError(err, context = {}) {
       code: "permission",
       title: "The browser may not use this device",
       message: raw,
-      fixes: transport === "serial" ? [DIALOUT] : [
-        os === "linux" ? UDEV_RULE(vid, pid) : "The page needs to be served over HTTPS or from localhost, and an embedded page needs allow=\"usb; serial\" on its iframe.",
-        "If this page is embedded in another site, the embedding page must allow USB and serial access (the allow attribute of the iframe).",
-      ],
+      fixes: permissionFixes(os, transport, vid, pid),
     };
   }
   if (name === "NetworkError" || /claim interface|Unable to claim|open serial port|Failed to open|LIBUSB_ERROR_ACCESS|LIBUSB_ERROR_BUSY|device busy|Access denied/i.test(raw)) {
@@ -213,7 +230,7 @@ export function explainError(err, context = {}) {
       code: claim ? "claim-failed" : "busy",
       title: claim ? "The browser could not take over the device" : "The port could not be opened",
       message: raw,
-      fixes: claim ? claimFixes(os, method, label, vid, pid, transport) : [transport === "serial" && os === "linux" ? DIALOUT : BUSY_GENERIC, BUSY_GENERIC],
+      fixes: dedupe(claim ? claimFixes(os, method, label, vid, pid, transport) : busyFixes(os, transport, err)),
     };
   }
   if (name === "NotFoundError" || /disconnected|Device unavailable|device was lost|has been lost/i.test(raw)) {
@@ -232,7 +249,7 @@ export function explainError(err, context = {}) {
       code: "busy",
       title: "The device is in use",
       message: raw,
-      fixes: [BUSY_GENERIC, "Another tab of this site may hold the device: close it."],
+      fixes: busyFixes(os, transport, err),
     };
   }
   return { code: "flash", title: "Flashing failed", message: raw, fixes: dedupe([
@@ -261,6 +278,33 @@ function claimFixes(os, method, label, vid, pid, transport) {
   }
   fixes.push(BUSY_GENERIC);
   return fixes;
+}
+
+function busyFixes(os, transport, cause) {
+  // "The port is already open" is this page's own handle, not a permission.
+  const msg = cause && cause.message ? String(cause.message) : "";
+  const alreadyOpen = !!cause && (cause.name === "InvalidStateError" || /already open|interface state is in progress/i.test(msg));
+  const fixes = [];
+  if (transport === "serial" && os === "linux" && !alreadyOpen) fixes.push(DIALOUT);
+  fixes.push(BUSY_GENERIC, OTHER_TAB);
+  return fixes;
+}
+
+function permissionFixes(os, transport, vid, pid) {
+  if (transport === "serial") {
+    // Chrome refuses a port with a SecurityError for the permissions policy
+    // (an iframe without allow) or an insecure page, not for the OS's rules.
+    const fixes = [EMBED_ALLOW, SECURE_PAGE];
+    if (os === "linux") fixes.push(DIALOUT);
+    return fixes;
+  }
+  if (transport === "filesystem") {
+    return ["The browser refused the folder. Pick the BOOTSEL drive itself (its top folder, named RPI-RP2 or RP2350) and allow the page to edit files there, or download the .uf2 and copy it onto the drive yourself."];
+  }
+  return [
+    os === "linux" ? UDEV_RULE(vid, pid) : SECURE_PAGE,
+    EMBED_ALLOW,
+  ];
 }
 
 function apiFixes(os, browser, transport) {
