@@ -77,25 +77,11 @@ async function prebuiltBytes(config) {
  */
 export async function mountCard(card, config, env) {
   const behavior = behaviorOf(card.dataset);
-  const fallback = card.querySelector(".wf-static");
-  const app = el("div", { class: "wf-app" });
-  app.append(el("h1", { class: "wf-title", text: config.board.title }));
-  const description = renderInline(config.board.description);
-  if (description) app.append(el("div", { class: "wf-desc", html: description }));
-  const image = fallback ? fallback.querySelector(".wf-image") : null;
-  if (image) {
-    image.addEventListener("load", relayout);
-    app.append(image);
-  }
-  const notes = el("div", { class: "wf-notes" });
-  app.append(notes);
-  const note = (kind, html) => {
-    notes.append(el("div", { class: `wf-box wf-${kind}`, html }));
-    relayout();
-  };
 
   // What the flash panel may use: the scripted devices with ?mock=, else
-  // the browser's, without what the embedding page does not allow.
+  // the browser's, without what the embedding page does not allow. Loaded
+  // before the photo leaves the fallback, so the fallback is never shown
+  // without it while this waits.
   let mocks = null;
   const params = new URLSearchParams(location.search);
   if (params.get("mock")) {
@@ -106,6 +92,34 @@ export async function mountCard(card, config, env) {
       console.error("The flash mocks could not be installed:", e);
     }
   }
+
+  // Nothing reports the card's height until the app replaces the fallback:
+  // measured before that, the fallback has lost its photo to the app, and
+  // the host's frame would shrink by the photo's height before it grows.
+  let mounted = false;
+  const relayoutMounted = () => { if (mounted) relayout(); };
+  const mount = () => {
+    card.replaceChildren(app);
+    mounted = true;
+    relayout();
+  };
+  const fallback = card.querySelector(".wf-static");
+  const app = el("div", { class: "wf-app" });
+  app.append(el("h1", { class: "wf-title", text: config.board.title }));
+  const description = renderInline(config.board.description);
+  if (description) app.append(el("div", { class: "wf-desc", html: description }));
+  const image = fallback ? fallback.querySelector(".wf-image") : null;
+  if (image) {
+    image.addEventListener("load", relayoutMounted);
+    app.append(image);
+  }
+  const notes = el("div", { class: "wf-notes" });
+  app.append(notes);
+  const note = (kind, html) => {
+    notes.append(el("div", { class: `wf-box wf-${kind}`, html }));
+    relayoutMounted();
+  };
+
   const perms = framePermissions(document, window);
   const platform = mocks ? { nav: mocks.nav, win: mocks.win } : platformFor(navigator, window, perms);
   const caps = capabilities(platform.nav || navigator, platform.win || window);
@@ -139,7 +153,7 @@ export async function mountCard(card, config, env) {
       title: "Open this board's configuration on the WebFlash site, with every option of make menuconfig",
     });
     app.append(firmwareSection, flashSection, el("p", { class: "wf-foot" }, [link]));
-    card.replaceChildren(app);
+    mount();
     const { FirmwareSection } = await import("./embed-build.js");
     // The flash panel follows the build, and lets it go while the settings
     // differ from the build's (the reader would flash what they did not pick).
@@ -164,7 +178,7 @@ export async function mountCard(card, config, env) {
   } else {
     const loading = el("p", { class: "wf-muted", text: `Loading ${config.prebuilt.file}…` });
     app.append(loading, flashSection);
-    card.replaceChildren(app);
+    mount();
     try {
       const bytes = await prebuiltBytes(config);
       const image = parseFirmware(config.prebuilt.file, bytes, {
