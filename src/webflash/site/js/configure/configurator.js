@@ -497,9 +497,10 @@ export class Configurator {
       this._report(slot, reason, { result, carry, configText, previous, ref, note, copied });
       // An opened .config pins every symbol it names as the user's: the
       // defconfig it became loads again, so later edits follow the defaults
-      // and the tree shows no mark on what the file merely spelled out.
+      // and the tree shows no mark on what the file merely spelled out. The
+      // defconfig is read again: the pair sync may have changed it since.
       if (reason === "config") {
-        const again = await runtime.kconfigLoad(defconfigText, { slot });
+        const again = await runtime.kconfigLoad(await runtime.kconfigDefconfig({ slot }), { slot });
         if (generation !== this._generations[slot]) return false;
         view.setTree(normalizeTree(again && again.tree ? again.tree : await runtime.kconfigTree({ slot })));
       }
