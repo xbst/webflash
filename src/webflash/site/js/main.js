@@ -194,12 +194,23 @@ function setupConfigure() {
 // Load what page 1 picked: the firmware, then Katapult beside it (whose
 // shared options then follow the firmware's). Whether the TOML is as it was
 // last saved or opened, so a load that only normalizes the defconfigs does
-// not count as an unsaved change.
+// not count as an unsaved change. A change of the tables made meanwhile by
+// anything but the engine (an edit in Embed, an undo) does.
 async function startConfigure(reason) {
   const clean = !hasUnsavedChanges();
-  let ok = await configurator.load({ reason });
-  if (ok && session.katapult && !configurator.slots.katapult) ok = await configurator.loadKatapult({ reason });
-  if (ok && clean && ["start", "open", "config"].includes(reason)) markSaved(session.tomlText);
+  let touched = false;
+  const off = session.on("change", ({ what, origin }) => {
+    if (origin !== "engine" && ["board", "firmware", "setups", "options", "flash", "prebuilt", "katapult", "project",
+      "version", "undo"].includes(what)) touched = true;
+  });
+  let ok;
+  try {
+    ok = await configurator.load({ reason });
+    if (ok && session.katapult && !configurator.slots.katapult) ok = await configurator.loadKatapult({ reason });
+  } finally {
+    off();
+  }
+  if (ok && clean && !touched && ["start", "open", "config"].includes(reason)) markSaved(session.tomlText);
   return ok;
 }
 
