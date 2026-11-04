@@ -23,6 +23,8 @@ import { parseToml, writeBoardToml, DEFAULT_ENGINE_URL } from "./toml-io.js";
 export const PROJECTS = ["klipper", "kalico", "katapult"];
 export const PROJECT_TITLES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult" };
 // The flashing methods, in the order webflash's config.METHODS lists them.
+// The versions that follow new snapshots rather than pin a ref.
+const PINLESS = ["latest", "release"];
 export const METHODS = ["dfu", "picoboot", "uf2", "katapult", "katapult-can", "download"];
 
 const UNDO_LIMIT = 100;
@@ -252,6 +254,11 @@ export class Session {
   setFirmware(fields, { origin = "visual", undoable = true } = {}) {
     if (!this._t.firmware) return;
     const next = { ...this._t.firmware, ...fields };
+    // A pinned version must be one of the versions the reader picks from
+    // (the loader refuses the TOML otherwise): a list gains it.
+    if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
+      next.versions = [...next.versions, next.version];
+    }
     if (JSON.stringify(next) === JSON.stringify(this._t.firmware)) return;
     if (undoable) this.checkpoint();
     const versionChanged = next.version !== this._t.firmware.version;

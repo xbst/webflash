@@ -169,8 +169,11 @@ export class OptionsPanel {
     e.versionsMode.addEventListener("change", () => {
       const mode = e.versionsMode.querySelector("input:checked").value;
       if (mode === "list") {
+        // A fresh list starts with the version the card starts with, when
+        // that pins a ref, else with the default branch.
         const f = s.firmware;
-        const refs = f && Array.isArray(f.versions) ? f.versions : this._refIds().slice(0, 1);
+        const pinned = f && !["latest", "release"].includes(f.version) ? [f.version] : null;
+        const refs = f && Array.isArray(f.versions) ? f.versions : pinned || this._refIds().slice(0, 1);
         s.setFirmware({ versions: refs.length ? refs : ["latest"] });
       } else {
         s.setFirmware({ versions: mode });
@@ -178,8 +181,10 @@ export class OptionsPanel {
     });
     e.versionsList.addEventListener("change", () => {
       const ids = [...e.versionsList.querySelectorAll("input:checked")].map((i) => i.value);
+      // A list keeps at least one version, and a pinned start version stays
+      // ticked (the session adds it back).
       if (ids.length) s.setFirmware({ versions: ids });
-      else this.render();   // a list keeps at least one version
+      this.render();
     });
 
     this.container.addEventListener("change", (ev) => {
@@ -322,7 +327,11 @@ export class OptionsPanel {
         e.versionsList.innerHTML = listHtml;
         e.versionsList.dataset.html = listHtml;
       }
-      for (const box of e.versionsList.querySelectorAll("input")) box.checked = chosen.includes(box.value);
+      for (const box of e.versionsList.querySelectorAll("input")) {
+        box.checked = chosen.includes(box.value);
+        box.disabled = box.value === f.version;   // the version the card starts with is always offered
+        box.closest("label").title = box.disabled ? "The version the card starts with: the reader can always pick it" : "";
+      }
       e.versionsList.hidden = mode !== "list";
     }
 
