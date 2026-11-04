@@ -122,6 +122,17 @@ The wizard (Firmware, Configure, Build, Flash, Embed) with Katapult and Klipper 
 
 1. Open the site in Firefox; page 1 **Next**, **Build**, **Next**. Expected: the build works, the Flash step offers only the downloads and says why.
 
+### STOP U6: a CAN node held by its host, flashed by its canbus_uuid
+
+The CAN toolhead with Katapult, running Klipper with its host connected (`klipper.service` up), so the node holds a node id and does not answer the query; the CANable on the same bus, on this computer; the toolhead's `canbus_uuid` from printer.cfg.
+
+1. Leave Klipper running on the host. On the site, open `examples/can-toolhead` (setup "CAN bus, with Katapult", Katapult unticked on page 1), **Build**, **Next**.
+2. Flash: "Katapult over CAN"; **Connect**, the CANable (on Linux, `can0` down or `gs_usb` unbound first, as the fixes say), **Flash**.
+3. Expected: "No node answered on the bus." with "Node not listed? Enter its canbus_uuid" open (or the other nodes listed with the field folded).
+4. Type a short value: refused with "A canbus_uuid is 12 hex digits, like aabbccddeeff." Then the toolhead's UUID (also try it with colons), **Use this UUID**.
+5. Expected: the log says the bootloader request went to that UUID, Katapult answers, the write is verified, and the hint shows the same `canbus_uuid`; Klipper reconnects after a `FIRMWARE_RESTART`.
+6. Negative run: **Flash**, then **Cancel** on the empty list. Expected: the no-node error, whose fixes say to stop Klipper on the host.
+
 ## Results
 
 | Date | OS and browser | Board | Method | File | Result | Notes |
