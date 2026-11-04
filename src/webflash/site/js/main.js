@@ -730,22 +730,35 @@ async function openFromUrl({ hashOnly = false } = {}) {
 }
 
 // The hash of the address the session's board came from: Back and Forward
-// to an entry of that link only move between steps.
-const link = { hash: null };
+// to an entry of that link only move between steps. asking: the question
+// before another link replaces unsaved changes is open.
+const link = { hash: null, asking: false };
 
 // A later change of the hash: a #toml= pasted or followed in this tab, or the
 // browser's Back and Forward across one. Another link's TOML replaces the
-// board, after asking when that loses unsaved changes.
+// board, after asking when that loses unsaved changes: one question at a
+// time, answered for the link the address names by then.
 async function onHashChange() {
-  const hash = location.hash;
-  if (hash === link.hash) return;
-  let named = true;
-  try {
-    named = tomlFromHash(hash) !== null;
-  } catch (e) { /* damaged: openFromUrl says so */ }
-  if (!named) return;
-  if (hasUnsavedChanges() && !(await askOpenLink())) return;
-  link.hash = hash;
+  const other = (hash) => {
+    if (hash === link.hash) return false;
+    try {
+      return tomlFromHash(hash) !== null;
+    } catch (e) {
+      return true;   // damaged: openFromUrl says so
+    }
+  };
+  if (link.asking || !other(location.hash)) return;
+  if (hasUnsavedChanges()) {
+    link.asking = true;
+    let yes;
+    try {
+      yes = await askOpenLink();
+    } finally {
+      link.asking = false;
+    }
+    if (!yes || !other(location.hash)) return;
+  }
+  link.hash = location.hash;
   await openFromUrl({ hashOnly: true });
 }
 
