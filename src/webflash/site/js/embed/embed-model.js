@@ -200,11 +200,28 @@ export function isCurrent(model, value) {
 
 // ── The reader's choices as a configuration ──────────────────────────
 
-function configLine(symbol, value) {
-  if (value === "y") return `CONFIG_${symbol}=y`;
-  if (value === "n") return `# CONFIG_${symbol} is not set`;
-  if (/^-?\d+$/.test(value) || /^0[xX][0-9a-fA-F]+$/.test(value)) return `CONFIG_${symbol}=${value}`;
+const numberLike = (value) => /^-?\d+$/.test(value) || /^0[xX][0-9a-fA-F]+$/.test(value);
+
+function configLine(symbol, value, { string = false } = {}) {
+  if (!string) {
+    if (value === "y") return `CONFIG_${symbol}=y`;
+    if (value === "n") return `# CONFIG_${symbol} is not set`;
+    if (numberLike(value)) return `CONFIG_${symbol}=${value}`;
+  }
   return `CONFIG_${symbol}="${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Whether an option's symbol is a string one, as far as can be told before
+ * the configuration loads: the defconfig assigns it a quoted value, or the
+ * option offers a value no bool, int or hex symbol takes. (The TOML's value
+ * types cannot tell: both writers write an integer as a string.) The engine
+ * ignores an unquoted value for a string symbol.
+ */
+function isStringOption(option, lines) {
+  const quoted = new RegExp(`^\\s*CONFIG_${option.symbol}="`);
+  if (lines.some((l) => quoted.test(l))) return true;
+  return Array.isArray(option.values) && option.values.some((v) => !/^[ynm]$/.test(String(v)) && !numberLike(String(v)));
 }
 
 /**
@@ -220,9 +237,10 @@ export function applyChoices(defconfig, options, choices) {
     if (!choices.has(option.symbol)) continue;
     const value = String(choices.get(option.symbol));
     const names = choiceLike(option) ? option.values : [option.symbol];
+    const string = !choiceLike(option) && isStringOption(option, lines);
     const drop = new RegExp(`^\\s*(?:CONFIG_(?:${names.join("|")})=|#\\s*CONFIG_(?:${names.join("|")}) is not set\\s*$)`);
     lines = lines.filter((l) => !drop.test(l));
-    lines.push(choiceLike(option) ? `CONFIG_${value}=y` : configLine(option.symbol, value));
+    lines.push(choiceLike(option) ? `CONFIG_${value}=y` : configLine(option.symbol, value, { string }));
   }
   return lines.length ? `${lines.join("\n")}\n` : "";
 }
