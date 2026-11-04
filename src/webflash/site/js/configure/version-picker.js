@@ -72,19 +72,27 @@ export function mayOfferOlder(index, project, versions, value) {
  * some versions builds only those. Anything but the commit itself waits for
  * the older commits: {ref: null, pending: true, error} while they are not
  * loaded (loading, or failed), since the closest kept commit may be among them.
+ * A found ref comes with value, the version to hold: its id, or "latest" or
+ * "release" when the list offers that and not the ref it names.
  */
 export function matchVersion(index, project, text, { value = "latest", versions = "all" } = {}) {
   let found;
+  const via = new Map();
   if (!restricts(versions)) found = findVersion(index, project, text);
   else {
     const { offered } = offerer(index, project, versions, value);
-    found = findVersion(index, project, text, (ref) => offered(ref.id));
+    for (const v of ["latest", "release"]) {
+      const r = offered(v) && resolveVersion(index, project, v).ref;
+      if (r && !offered(r.id) && !via.has(r.id)) via.set(r.id, v);
+    }
+    found = findVersion(index, project, text, (ref) => offered(ref.id) || via.has(ref.id));
   }
   if (found && !found.exact && historyInfo(index, project) && !historyRefs(index, project) &&
       mayOfferOlder(index, project, versions, value)) {
     return { ref: null, pending: true,
       error: `${String(text).trim()} may be an older ${projectTitle(index, project)} commit; the list of older commits has not loaded yet.` };
   }
+  if (found && found.ref) found.value = via.get(found.ref.id) || found.ref.id;
   return found;
 }
 
@@ -151,11 +159,11 @@ export function pickerList(index, project, { value = "latest", versions = "all",
   }
   const match = q && parseVersionString(query) ? matchVersion(index, project, query, { value, versions }) : null;
   // The match leads the list, unless the filter already shows it (a hash typed whole).
-  if (match && match.ref && !groups.some((grp) => grp.options.some((o) => o.value === match.ref.id))) {
+  if (match && match.ref && !groups.some((grp) => grp.options.some((o) => o.value === match.value))) {
     const ref = match.ref;
     groups.unshift({
       label: "Match",
-      options: [{ value: ref.id, label: describeOf(ref),
+      options: [{ value: match.value, label: describeOf(ref),
         detail: match.exact ? "this commit" : restricts(versions) ? "closest offered" : "closest kept",
         unchecked: !isChecked(ref), ref, note: match.note, title: match.note || "", selected: false }],
     });
@@ -384,7 +392,7 @@ class VersionCombobox {
     if (loading) await loading;
     if (this.query !== query) return;
     const found = this._find(query);
-    if (found && found.ref) this._pick(found.ref.id, found.note || "");
+    if (found && found.ref) this._pick(found.value, found.note || "");
     else if (found && !found.pending) { this._setNote(found.error, true); this.render(); }
     else this.render();
   }
@@ -445,7 +453,7 @@ class VersionCombobox {
       if (o) return this._pick(o.value, o.note || "");
       const found = this.query && this._find(this.query);
       if (found && found.pending) { this._pickTyped(); return; }
-      if (found && found.ref) return this._pick(found.ref.id, found.note || "");
+      if (found && found.ref) return this._pick(found.value, found.note || "");
       if (found) { this._setNote(found.error, true); this.render(); }
       return;
     }
