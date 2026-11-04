@@ -9,11 +9,12 @@ import { esc, openModal } from "../dialogs.js";
 import { checkConfigText } from "./configure-page.js";
 
 // Symbols only Katapult defines (CanBoot was its name until 2023).
-const KATAPULT_SYMBOL = /^CONFIG_(KATAPULT_VERSION|CANBOOT_VERSION|LAUNCH_APP_ADDRESS|BUILD_DEPLOYER|ENABLE_DOUBLE_RESET|ENABLE_BUTTON|ENABLE_LED|BLOCK_SIZE|STM32_APP_START_[0-9A-F]+)\b/m;
+const KATAPULT_SYMBOL = /^(# )?CONFIG_(KATAPULT_VERSION|CANBOOT_VERSION|LAUNCH_APP_ADDRESS|BUILD_DEPLOYER|ENABLE_DOUBLE_RESET|ENABLE_BUTTON|ENABLE_LED|BLOCK_SIZE|STM32_APP_START_[0-9A-F]+)\b/m;
 
 // Symbols only Klipper and Kalico define: the optional features, the GPIO
-// capabilities and the architectures Katapult has no port for.
-const FIRMWARE_SYMBOL = /^(# )?CONFIG_(WANT_[A-Z0-9_]+|HAVE_GPIO[A-Z0-9_]*|HAVE_STRICT_TIMING|HAVE_BOOTLOADER_REQUEST|INLINE_STEPPER_HACK|NEED_SENSOR_BULK|USBCANBUS|MACH_AVR|MACH_LINUX|MACH_PRU|MACH_AR100|MACH_SIMU)\b/m;
+// capabilities and the architectures Katapult has no port for (not USBCANBUS:
+// Katapult has it too, for its USB to CAN bridge mode).
+const FIRMWARE_SYMBOL = /^(# )?CONFIG_(WANT_[A-Z0-9_]+|HAVE_GPIO[A-Z0-9_]*|HAVE_STRICT_TIMING|HAVE_BOOTLOADER_REQUEST|INLINE_STEPPER_HACK|NEED_SENSOR_BULK|MACH_AVR|MACH_LINUX|MACH_PRU|MACH_AR100|MACH_SIMU)\b/m;
 
 // The build stamp a .config carries: the version of the tree that wrote it,
 // not a setting.
