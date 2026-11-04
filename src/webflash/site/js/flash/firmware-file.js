@@ -328,6 +328,24 @@ function looksLikeHex(data) {
 }
 
 /**
+ * True when the first bytes (up to 64) are all printable ASCII or
+ * whitespace: a text file, such as a Klipper dictionary or an Intel HEX
+ * file with a bad record, that sniffFormat calls "bin". A firmware image
+ * starts with its vector table, whose words always hold bytes outside
+ * that range.
+ */
+export function looksLikeText(bytes) {
+  const data = asBytes(bytes);
+  const n = Math.min(data.length, 64);
+  if (!n) return false;
+  for (let i = 0; i < n; i++) {
+    const c = data[i];
+    if (!((c >= 0x20 && c <= 0x7e) || c === 0x09 || c === 0x0a || c === 0x0d)) return false;
+  }
+  return true;
+}
+
+/**
  * Parse a file by name and content. A .bin needs options.address; the
  * other formats carry their addresses (and a given address is ignored).
  */

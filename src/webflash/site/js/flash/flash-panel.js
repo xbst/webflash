@@ -13,9 +13,9 @@
 // devices (mocks/install.js) so the whole panel runs without hardware.
 
 import { createFlashPanel } from "./flash-ui.js";
-import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin } from "./firmware-file.js";
+import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin, sniffFormat, looksLikeText } from "./firmware-file.js";
 import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict } from "./devices.js";
-import { explainError } from "./errors.js";
+import { explainError, FlashError } from "./errors.js";
 
 /**
  * Mount the panel into root (the #flash-card element) for a Session. The
@@ -228,9 +228,11 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const pre = prebuiltTable();
     const project = session.project || "klipper";
     let image;
-    const lower = name.toLowerCase();
-    const isBin = !/\.(hex|ihx|ihex|uf2|elf)$/.test(lower) && !(bytes.length >= 4 && bytes[0] === 0x7f && bytes[1] === 0x45) &&
-      !(bytes.length >= 512 && bytes[0] === 0x55 && bytes[1] === 0x46 && bytes[2] === 0x32 && bytes[3] === 0x0a);
+    // The same decision parseFirmware makes: only a raw binary needs an address.
+    const isBin = sniffFormat(name, bytes) === "bin";
+    if (isBin && looksLikeText(bytes)) {
+      throw new FlashError(`${name} is a text file, not a firmware image (a Klipper dictionary, or an Intel HEX file whose first record cannot be read). Upload the firmware itself: a .bin, .hex, .uf2 or .elf file.`, { code: "format" });
+    }
     if (isBin) {
       let address = givenAddress;
       if (address === null) {
