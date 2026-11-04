@@ -580,9 +580,9 @@ async function openConfigs(fileList) {
   const names = [firmware, katapult].filter(Boolean).map((f) => f.name).join(" and ");
   setTomlStatus("ok", `Made from ${names}; Save TOML writes it as a board TOML.`);
   wizard.go("configure");
-  const ok = await startConfigure("config");
-  if (ok) await configurator.reapply();
-  return ok;
+  // The load (reason "config") loads the defconfig again itself, and marks
+  // the TOML saved once it is done.
+  return startConfigure("config");
 }
 
 // A message about a file with its name in front, unless it starts with it
