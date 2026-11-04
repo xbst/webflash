@@ -240,14 +240,16 @@ export class Session {
     this._changed("undo", origin);
   }
 
+  // Neither applies while configuring is locked: the build in progress
+  // depends on the tables and the engine's configuration.
   undo() {
-    if (!this.canUndo) return;
+    if (!this.canUndo || this.locked) return;
     this._redo.push(this._snapshot());
     this._restore(this._undo.pop(), "undo");
   }
 
   redo() {
-    if (!this.canRedo) return;
+    if (!this.canRedo || this.locked) return;
     this._undo.push(this._snapshot());
     this._restore(this._redo.pop(), "redo");
   }
