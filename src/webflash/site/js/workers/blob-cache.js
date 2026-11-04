@@ -66,8 +66,15 @@ async function download(url, { revalidate, onProgress, size = null }) {
   const encoded = (resp.headers.get("Content-Encoding") || "identity") !== "identity";
   let total = Number.isFinite(size) && size > 0 ? size
     : encoded ? null : Number(resp.headers.get("Content-Length")) || null;
+  // A connection that breaks off mid-file fails the body read with a bare
+  // "network error"; say which download it was and what to do.
+  const brokenOff = (got) => new Error(`Could not download ${url}: the connection broke off` +
+    `${got ? ` after ${got.toLocaleString("en-US")}${total ? ` of ${total.toLocaleString("en-US")}` : ""} bytes` : ""}. ` +
+    "Check your connection and try again; what did arrive is not kept.");
   if (!resp.body || !resp.body.getReader) {
-    const bytes = new Uint8Array(await resp.arrayBuffer());
+    let buffer;
+    try { buffer = await resp.arrayBuffer(); } catch (e) { throw brokenOff(0); }
+    const bytes = new Uint8Array(buffer);
     if (onProgress) onProgress(bytes.length, bytes.length);
     return { bytes, type: resp.headers.get("Content-Type") || "" };
   }
@@ -76,7 +83,9 @@ async function download(url, { revalidate, onProgress, size = null }) {
   let done = 0;
   if (onProgress) onProgress(0, total);
   for (;;) {
-    const { value, done: end } = await reader.read();
+    let chunk;
+    try { chunk = await reader.read(); } catch (e) { throw brokenOff(done); }
+    const { value, done: end } = chunk;
     if (end) break;
     chunks.push(value);
     done += value.length;
