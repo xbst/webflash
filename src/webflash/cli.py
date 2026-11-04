@@ -65,15 +65,24 @@ def _check_not_a_folder(out_path: Path, default_name: str) -> None:
 
 def _render_inputs(config_path: Path, theme_name: str) -> list[tuple[str, Path]]:
     """The files a render reads that an output path must not replace: the board
-    TOML, its image and prebuilt file, and the theme file, if one was found."""
-    from .config import load_board, theme_path
+    TOML, its image (unless it is a URL) and prebuilt file, and the theme file,
+    if one was found."""
+    from .config import asset_parts, is_asset_url, load_board, theme_path
+
+    def local(name: str) -> Path | None:
+        # A URL names no file here, and resolving or comparing one would reach
+        # for the network: //host/x.png is a UNC path on Windows.
+        parts = None if is_asset_url(name) else asset_parts(name)
+        return config_path.parent.joinpath(*parts) if parts else None
 
     config = load_board(config_path)
     inputs = [("the board TOML", config_path)]
-    if config.board.image:
-        inputs.append(("the board image", (config_path.parent / config.board.image).resolve()))
-    if config.prebuilt is not None:
-        inputs.append(("the firmware file", (config_path.parent / config.prebuilt.file).resolve()))
+    image = local(config.board.image) if config.board.image else None
+    if image is not None:
+        inputs.append(("the board image", image))
+    firmware = local(config.prebuilt.file) if config.prebuilt is not None else None
+    if firmware is not None:
+        inputs.append(("the firmware file", firmware))
     found = theme_path(theme_name or config.board.theme, config_path, config.board.theme_dir)
     if found is not None:
         inputs.append(("the theme file", found))
