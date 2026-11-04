@@ -565,7 +565,10 @@ export class FirmwareSection {
     if (kind === "build") {
       const tc = await this.builder.discover();
       const plan = this.loaded && s.plan && s.ref && s.plan.ref === s.ref.id && !s.plan.error ? s.plan : null;
-      items.push(...await this.builder.downloads(tc, { project: s.project, ref: s.ref || ref, libs: plan ? plan.libs : [] }));
+      // Before the configuration loads, the sources are listed above.
+      items.push(...await this.builder.downloads(tc, {
+        project: s.project, ref: s.ref || ref, index: this.loaded ? s.index : null, libs: plan ? plan.libs : [],
+      }));
       if (!plan) {
         items.push({ label: "The library bundles of this chip (about 1 MB for an STM32G0B1, up to 5 MB for an STM32H7)", size: null, sizeText: "", cached: false });
       }

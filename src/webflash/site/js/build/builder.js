@@ -19,7 +19,7 @@
 // talks to the engine (the site: inside the configurator's queue).
 
 import * as runtime from "../runtime.js";
-import { blobSize, formatBytes } from "../configure/sources.js";
+import { blobSize, formatBytes, projectTitle } from "../configure/sources.js";
 import { ToolchainPool, discoverToolchain, loadToolchainFiles, summarizeStats, workerCount } from "./toolchain-pool.js";
 import { cachedFlags, isCached } from "./cache.js";
 
@@ -172,10 +172,12 @@ export class Builder {
 
   /**
    * What a build of a ref downloads before it can start: [{label, size,
-   * cached}] (the compiler, unless it is loaded; each lib bundle the workers
-   * lack). libs: [{dir, blob, size}] (the configuration's plan).
+   * cached}] (the compiler, unless it is loaded; the ref's sources and each
+   * lib bundle the workers lack). libs: [{dir, blob, size}] (the
+   * configuration's plan); index (sources/index.json, for the sources' size):
+   * without it the sources are left out, for a caller that lists them itself.
    */
-  async downloads(tc, { project, ref, libs = [] }) {
+  async downloads(tc, { project, ref, libs = [], index = null }) {
     const items = [];
     if (!this.files || this.filesId !== tc.id) {
       items.push({
@@ -184,6 +186,14 @@ export class Builder {
       });
     }
     const tree = treePath(project, ref);
+    // The workers take the sources from the cache configuring filled, unless
+    // it was emptied since (About's Clear cache): then they download again.
+    if (index && ref && ref.core && !this.has(tree, ["core"])) {
+      items.push({
+        label: `${projectTitle(index, project)} ${ref.id}'s sources`,
+        size: blobSize(index, ref.core), cached: await isCached(this.blobUrl(ref.core)),
+      });
+    }
     for (const lib of libs) {
       if (this.has(tree, [lib.dir])) continue;
       items.push({ label: `The ${lib.dir} library bundle`, size: lib.size, cached: await isCached(this.blobUrl(lib.blob)) });

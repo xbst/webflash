@@ -264,7 +264,7 @@ export class BuildPanel {
     const s = this.session;
     let list = [];
     try {
-      list = await this.builder.downloads(tc, { project: s.project, ref: s.ref, libs: (s.plan && s.plan.libs) || [] });
+      list = await this.builder.downloads(tc, { project: s.project, ref: s.ref, index: s.index, libs: (s.plan && s.plan.libs) || [] });
     } catch (e) { /* the build lists what it loads anyway */ }
     if (list.some((d) => !d.cached) && remembered(AUTO_KEY) !== "1" && !this.consented) {
       this.showStart(tc, list);
