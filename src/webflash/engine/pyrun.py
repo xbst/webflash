@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import importlib
 import io
 import os
 import runpy
@@ -111,6 +112,12 @@ class TreeModules:
                     for name in names:
                         sys.modules.pop(name, None)
                     names.clear()
+            # A relative sys.path entry (Klipper's buildcommands.py appends
+            # './klippy') leaves a finder in the importer cache bound to the
+            # folder it named under the previous tree.
+            for entry in [k for k in sys.path_importer_cache if not os.path.isabs(k)]:
+                del sys.path_importer_cache[entry]
+            importlib.invalidate_caches()
             self._current = key
         return key
 
@@ -127,7 +134,6 @@ class TreeModules:
     def import_module(self, tree: Path, subdir: str, name: str):
         """Import ``name`` from ``<tree>/<subdir>`` (``kconfiglib`` from
         ``lib/kconfiglib``), the tree's own copy, never one of ours."""
-        import importlib
         key = self.switch(tree)
         folder = str((Path(tree) / subdir).resolve())
         before = set(sys.modules)
