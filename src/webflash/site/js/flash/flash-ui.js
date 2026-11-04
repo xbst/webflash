@@ -12,6 +12,7 @@ import { METHODS, familyFromMcu, defaultSteps } from "./devices.js";
 import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable, probeConnection } from "./flash.js";
 import { enterFromKlipperUsb, enterFromKlipperSerial, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
 import { uf2Download } from "./uf2.js";
+import { planWrites } from "./picoboot.js";
 import { imageForMethod, writesFor, projectName } from "./pair.js";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -379,6 +380,10 @@ export function createFlashPanel(root, options = {}) {
     // holding it: PICOBOOT's counts include each segment's padding to whole
     // pages, which can carry the fraction past a row's end.
     const badAddress = failed && typeof failed.address === "number" ? rows.reduce((row, r, i) => (r.address <= failed.address ? i : row), 0) : null;
+    // An erase that failed names the start of its page or sector, which can
+    // lie below the row that brought it into the erase: the first row ending past it.
+    const erasedRow = failed && typeof failed.erased === "number" ? rows.findIndex((r) => r.address + r.size > failed.erased) : -1;
+    const badRow = badAddress !== null ? badAddress : erasedRow >= 0 ? erasedRow : null;
     let before = 0;
     const items = [];
     const m = currentMethod();
@@ -398,7 +403,7 @@ export function createFlashPanel(root, options = {}) {
       else if (state.phase === "flashing" && w) {
         if (written >= end - 1e-9) { icon = "✓"; cls = "ok"; }
         else if (w.phase === "erase" ? i === 0 : written >= start - 1e-9) cls = "run";
-      } else if (badAddress !== null ? i === badAddress : failedAt !== null && (f.phase === "verify"
+      } else if (badRow !== null ? i === badRow : failedAt !== null && (f.phase === "verify"
         ? (failedAt > start + 1e-9 || i === 0) && failedAt <= end + 1e-9
         : failedAt >= start - 1e-9 && (failedAt < end - 1e-9 || i === rows.length - 1))) { icon = "✗"; cls = "bad"; }
       items.push(`<li class="flash-write ${cls}"><span class="fw-icon" aria-hidden="true">${cls === "run" ? `<span class="spinner"></span>` : esc(icon)}</span>` +
@@ -671,7 +676,7 @@ export function createFlashPanel(root, options = {}) {
       state.phase = "failed";
       state.connection = null;
       // Where it stopped, for the write list's cross; a cancel crosses nothing.
-      state.failed = isCancel(e) ? null : { firmware: fw, method, written: state.written, address: differedAt(e) };
+      state.failed = isCancel(e) ? null : { firmware: fw, method, written: state.written, address: differedAt(e), erased: erasedAt(e, method, image, state.written) };
       progressWrap.hidden = true;
       showFailure(e, method);
     } finally {
@@ -687,6 +692,17 @@ export function createFlashPanel(root, options = {}) {
   function differedAt(e) {
     const m = e && e.code === "verify-failed" ? /differ from the firmware at 0x([0-9a-f]+)/i.exec(String(e.message)) : null;
     return m ? parseInt(m[1], 16) : null;
+  }
+
+  // The page or sector an erase failed on, or null: dfu.js's errors name the
+  // page; PICOBOOT erases picoboot.js's planWrites sectors in order, so the
+  // count of those erased points at the one that failed.
+  function erasedAt(e, method, image, written) {
+    const m = /erase of the page at 0x([0-9a-f]+)/i.exec(String(e && e.message));
+    if (m) return parseInt(m[1], 16);
+    if (method !== "picoboot" || !written || written.phase !== "erase" || !image) return null;
+    const sectors = planWrites(image).sectors;
+    return written.done < sectors.length ? sectors[written.done] : null;
   }
 
   function showSuccess(r) {
