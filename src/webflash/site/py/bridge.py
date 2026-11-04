@@ -424,14 +424,23 @@ def pair_shared() -> str:
     return json.dumps(_need_pair().shared_json())
 
 
-def pair_sync() -> str:
-    """Copy the firmware's shared values into Katapult and apply the offset
-    link (after loading either slot). Returns ``{"notes", "offset", "trees":
-    {"fw", "katapult"}}``."""
+def pair_sync(source: str = "fw") -> str:
+    """Copy one slot's shared values into the other (the firmware's into
+    Katapult by default; a ``.config`` loaded into Katapult wins over the
+    firmware's) and apply the offset link (after loading either slot).
+    Returns ``{"notes", "offset", "copied": [the other slot's options it
+    uses before and after whose value changed, by name], "trees": {"fw",
+    "katapult"}}``."""
+    if source not in SLOTS:
+        raise ValueError(f"pair_sync copies from fw or katapult, not {source!r}")
     pair = _need_pair()
-    notes = pair.sync()
+    target = pair.other(source)
+    before = pair.shared_values(target)
+    notes = pair.sync(source)
+    after = pair.shared_values(target)
     link = pair.link()
     return json.dumps({"notes": notes, "offset": link,
+                       "copied": [name for name, value in before.items() if name in after and after[name] != value],
                        "trees": {s: pair.session(s).tree_json() for s in SLOTS}})
 
 

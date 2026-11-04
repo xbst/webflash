@@ -382,15 +382,16 @@ export class Configurator {
     const s = this.session;
     const start = this._view(slot);
     const at = this._setupId();
+    const own = Boolean(start.defconfigText);
     if (carry === undefined) {
-      if (slot === "katapult" && !start.defconfigText) carry = carryText("", s.tree);
+      if (slot === "katapult" && !own) carry = carryText("", s.tree);
       else carry = reason === "switch" ? carryText(start.defconfigText, start.tree) : start.defconfigText;
     }
     this._loading[slot]++;
     this._target[slot] = { project: start.project, version: start.version };
     return this._enqueue(async () => {
       try {
-        return await this._load({ slot, generation, reason, carry, at });
+        return await this._load({ slot, generation, reason, carry, at, own });
       } finally {
         this._loading[slot]--;
       }
@@ -398,7 +399,7 @@ export class Configurator {
   }
 
   // The queued part of load.
-  async _load({ slot, generation, reason, carry, at }) {
+  async _load({ slot, generation, reason, carry, at, own }) {
     if (generation !== this._generations[slot]) return false;
     const view = this._view(slot);
     const project = view.project;
@@ -450,7 +451,7 @@ export class Configurator {
         return false;
       }
       if (generation !== this._generations[slot]) return false;
-      return this._configure({ slot, generation, reason, carry, at, project, version, ref, label, note, previous, out });
+      return this._configure({ slot, generation, reason, carry, at, own, project, version, ref, label, note, previous, out });
     }
   }
 
@@ -461,7 +462,7 @@ export class Configurator {
 
   // The second half of load: the sources are in the engine; read the
   // configuration into them and report.
-  async _configure({ slot, generation, reason, carry, at, project, version, ref, label, note, previous, out }) {
+  async _configure({ slot, generation, reason, carry, at, own, project, version, ref, label, note, previous, out }) {
     const view = this._view(slot);
     try {
       view.setSources("loading", label, { ref, phase: "kconfig" });
@@ -478,9 +479,13 @@ export class Configurator {
       view.setConfig({ configText, defconfigText }, at);
       view.setSources("ready", label, { ref, size: out.size, cached: out.cached });
       remember(AUTO_KEY, "1");
-      // What the other tree refused shows under the shared options (session.katapult.notes).
-      await this._afterPairing(slot, loaded && loaded.pair, { sync: true, at });
-      this._report(slot, reason, { result, carry, configText, previous, ref, note });
+      // What the other tree refused shows under the shared options
+      // (session.katapult.notes). The firmware's shared values win over a
+      // version loaded; a Katapult .config opened beside the firmware's
+      // (reason "config") hears which of its own they replaced.
+      const block = await this._afterPairing(slot, loaded && loaded.pair, { sync: "fw", at });
+      const copied = slot === "katapult" && reason === "config" && own && block ? block.copied || [] : [];
+      this._report(slot, reason, { result, carry, configText, previous, ref, note, copied });
       this.schedulePlan(0, slot);
       return true;
     } catch (e) {
@@ -494,27 +499,29 @@ export class Configurator {
 
   // After an engine call in a paired session: bring the other slot's tree
   // (and texts) up to date from the answer's pair block, and keep the link
-  // and the notes in session.katapult. With sync (after a load), the
-  // firmware's shared options are copied into Katapult first. at is the
-  // setup the call was asked for. Runs inside the queue. Returns the notes.
+  // and the notes in session.katapult. With sync (after a load: the slot
+  // whose shared options win, "fw" for a version loaded, the loaded slot
+  // for a .config), they are copied into the other slot first. at is the
+  // setup the call was asked for. Runs inside the queue. Returns the pair
+  // block ({notes, offset, trees, copied?}), or null when nothing pairs.
   async _afterPairing(slot, pair, { sync = false, at = null } = {}) {
-    if (!this.paired) return [];
+    if (!this.paired) return null;
     let block = pair || null;
     if (sync) {
-      const synced = await runtime.pairSync();
+      const synced = await runtime.pairSync({ source: sync });
       for (const s of ["fw", "katapult"]) await this._refresh(s, synced.trees[s], { plan: s !== slot, at });
-      block = { notes: synced.notes, offset: synced.offset, trees: {} };
+      block = { notes: synced.notes, offset: synced.offset, trees: {}, copied: synced.copied || [] };
     } else if (block) {
       for (const [other, tree] of Object.entries(block.trees || {})) {
         if (other !== slot && this.slots[other]) await this._refresh(other, tree, { at });
       }
     }
-    if (!block) return [];
+    if (!block) return null;
     this.session.setKatapultState({ link: block.offset || null, notes: block.notes || [] }, "link");
-    return block.notes || [];
+    return block;
   }
 
-  _report(slot, reason, { result, carry, configText, previous, ref, note }) {
+  _report(slot, reason, { result, carry, configText, previous, ref, note, copied = [] }) {
     const s = this.session;
     const view = this._view(slot);
     const missing = result.missing || [];
@@ -537,6 +544,9 @@ export class Configurator {
           .join(", ") + ".");
     }
     for (const w of warnings) lines.push(w);
+    if (copied.length) {
+      lines.push(`${projectTitle(s.index, s.project)}'s .config won over the file's: ${copied.join(", ")}.`);
+    }
     const exposedGone = reason === "open" && slot === "fw" ? this._unknownOptions() : [];
     if (exposedGone.length) {
       lines.push(`Embed options this version lacks: ${exposedGone.join(", ")}.`);
@@ -553,7 +563,7 @@ export class Configurator {
     const verb = switched ? "Carried the configuration over to" : reason === "open" ? "Opened the board TOML with"
       : reason === "config" ? "Opened the .config with" : "Loaded";
     this._setNotice({
-      kind: missing.length || lost.length || exposedGone.length ? "warn" : "info",
+      kind: missing.length || lost.length || exposedGone.length || copied.length ? "warn" : "info",
       title: switched ? `Carried the configuration from ${from} to ${to}` : `${verb} ${to}`,
       lines, verb, label: to, project: view.title(s.index, view.project),
     }, slot);
@@ -608,8 +618,8 @@ export class Configurator {
       try {
         const out = await runtime.kconfigSet(name, value, { slot: which });
         await this._refresh(which, out, { at });
-        await this._afterPairing(which, out && out.pair, { at });
-        return out && out.pair ? out.pair.notes : [];
+        const block = await this._afterPairing(which, out && out.pair, { at });
+        return block ? block.notes || [] : [];
       } catch (e) {
         await this._refresh(which, null, { at }).catch(() => {});
         throw e;
@@ -620,8 +630,10 @@ export class Configurator {
   /**
    * Load a .config or defconfig text into a slot's current version (Load
    * .config, Reset), reporting symbols it names that this version does not
-   * have. checkpoint false: the caller took the undo point (a Reset of both
-   * slots is one undo step).
+   * have. While paired, the loaded text's shared options are copied into the
+   * other slot (a .config loaded into Katapult stands, as the dialog says).
+   * checkpoint false: the caller took the undo point (a Reset of both slots
+   * is one undo step).
    */
   apply(text, { title = "Loaded the configuration", slot = "fw", checkpoint = true } = {}) {
     const s = this.session;
@@ -631,7 +643,7 @@ export class Configurator {
       if (checkpoint) s.checkpoint();
       const loaded = await runtime.kconfigLoad(text, { slot });
       await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null, { at });
-      await this._afterPairing(slot, loaded && loaded.pair, { sync: true, at });
+      await this._afterPairing(slot, loaded && loaded.pair, { sync: slot, at });
       const view = this._view(slot);
       const result = loadReport(loaded, text, view.tree);
       const missing = result.missing;
@@ -663,7 +675,7 @@ export class Configurator {
     // Both restored: pair them again, which changes nothing in a restored
     // pair but brings back the notes of what Katapult refuses.
     return Promise.all([fw, kat]).then(async ([a]) => {
-      if (this.paired) await this._enqueue(() => this._afterPairing("fw", null, { sync: true, at }));
+      if (this.paired) await this._enqueue(() => this._afterPairing("fw", null, { sync: "fw", at }));
       return a;
     });
   }

@@ -9,8 +9,10 @@ follows Katapult's application offset.
 What counts as shared comes from the two trees, not from a list: a symbol both
 define with the same type and a prompt in both, or a choice both define with
 common member symbols, minus :data:`DENY_SYMBOLS` and the bootloader choices
-(same names, other meanings). The firmware's values win: :meth:`Pair.sync`
-copies them into Katapult wherever the two differ.
+(same names, other meanings). After a load, one side's values win:
+:meth:`Pair.sync` copies them into the other wherever the two differ, the
+firmware's by default (a version loaded) and the loaded slot's for a
+``.config`` loaded into it.
 """
 from __future__ import annotations
 
@@ -225,10 +227,25 @@ class Pair:
     def _copy(self, slot: str, entry: Shared, value: str) -> Optional[str]:
         session = self.session(slot)
         try:
-            session.assign(entry.name, value)
+            session.assign(entry.item(slot).name, value)
         except KconfigError:
             return f"{self.title(slot)} does not take {entry.name}={value}."
         return None
+
+    def shared_values(self, slot: str) -> dict:
+        """What each shared option the slot shows now holds, by the option's
+        name: a choice's selected member, a symbol's value. One the slot's
+        configuration hides (a CAN bitrate under USB) is not listed."""
+        lib = self.session(slot).kconfiglib
+        out = {}
+        for e in self.shared:
+            item = e.item(slot)
+            if e.kind == "choice":
+                if _active(item, lib):
+                    out[e.name] = item.selection.name
+            elif item.visibility > 0:
+                out[e.name] = item.str_value
+        return out
 
     def mirror(self, slot: str, name: str, value: str) -> list[str]:
         """Copy a set made in slot into the other tree, when it set a shared
@@ -244,30 +261,36 @@ class Pair:
             else self._copy(other, entry, value)
         return [note] if note else []
 
-    def sync(self) -> list[str]:
-        """Copy the firmware's value of every shared option into Katapult
-        where the two differ and both use it. A few passes, since a choice
-        made (the processor) shows or hides the options after it."""
-        lib_f, lib_k = self.fw.kconfiglib, self.katapult.kconfiglib
+    def sync(self, source: str = "fw") -> list[str]:
+        """Copy one slot's value of every shared option (the firmware's by
+        default) into the other where the two differ and both use it. A few
+        passes, since a choice made (the processor) shows or hides the
+        options after it. A member the other tree stands in for (a USB to
+        CAN bridge's Katapult runs as plain USB, see :func:`_fallback`) is
+        left as it is, whichever side it is on."""
+        target = self.other(source)
+        lib_s, lib_t = self.session(source).kconfiglib, self.session(target).kconfiglib
         notes: list[str] = []
         for _ in range(4):
             changed = False
             for e in self.shared:
-                if not (_active(e.fw, lib_f) and _active(e.katapult, lib_k)):
+                src, dst = e.item(source), e.item(target)
+                if not (_active(src, lib_s) and _active(dst, lib_t)):
                     continue
                 if e.kind == "choice":
-                    want = e.fw.selection.name
-                    if e.katapult.selection.name == want:
+                    want = src.selection.name
+                    have = dst.selection.name
+                    if have == want or _fallback(want) == have or _fallback(have) == want:
                         continue
-                    note = self._select("katapult", e, want, "fw")
-                    if e.katapult.selection is not None and e.katapult.selection.name == want:
+                    note = self._select(target, e, want, source)
+                    if dst.selection is not None and dst.selection.name == want:
                         changed = True
                 else:
-                    want = e.fw.str_value
-                    if e.katapult.str_value == want:
+                    want = src.str_value
+                    if dst.str_value == want:
                         continue
-                    note = self._copy("katapult", e, want)
-                    changed = changed or e.katapult.str_value == want
+                    note = self._copy(target, e, want)
+                    changed = changed or dst.str_value == want
                 if note and note not in notes:
                     notes.append(note)
             if not changed:

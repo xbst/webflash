@@ -361,11 +361,12 @@ export async function pairShared() {
 }
 
 /**
- * Copy the firmware's shared values into Katapult and apply the offset link:
- * {notes, offset, trees: {fw, katapult}}.
+ * Copy one slot's shared values into the other (the firmware's into
+ * Katapult by default) and apply the offset link: {notes, offset, copied:
+ * [the other slot's options that changed], trees: {fw, katapult}}.
  */
-export async function pairSync() {
-  return JSON.parse(await call("pair_sync"));
+export async function pairSync({ source = "fw" } = {}) {
+  return JSON.parse(await call("pair_sync", [source]));
 }
 
 /**
