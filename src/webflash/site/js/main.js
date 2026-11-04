@@ -1,31 +1,40 @@
-// The WebFlash site: wires the toolbar, the panels and the session together.
+// The WebFlash site: wires the wizard, its steps and the session together.
 //
-// Pick a project and a version (or open a board TOML, or arrive with one in
-// the URL), configure the firmware in the Configure tab with every option of
-// `make menuconfig`, decide in Embed options what the reader of the generated
-// page may change, then Save TOML or Generate the page. The session's tables
-// are the board TOML (the TOML tab shows what Save writes); the configure
-// session behind them runs in the engine worker. Build compiles the
-// configuration in the browser (build/build-panel.js) and Flash writes the
-// result, or an uploaded file, to the board (flash/flash-panel.js).
+// The page is one box with five steps (js/wizard/wizard.js): Firmware (what
+// to flash and which versions; Next starts the downloads), Configure (every
+// option of `make menuconfig`), Build (compiles the configuration in the
+// browser, build/build-panel.js), Flash (writes the result, or an uploaded
+// file, to the board, flash/flash-panel.js) and Embed (what the reader of
+// the generated page may change, the .config, the TOML, Save TOML and
+// Generate). The session's tables are the board TOML (the TOML tab shows
+// what Save writes); the configure session behind them runs in the engine
+// worker. The top bar holds the status chip, Open TOML, Upload firmware and
+// About.
 
-import { Session, PROJECTS, fetchBoardToml } from "./state.js";
+import { Session, PROJECTS, PROJECT_TITLES, fetchBoardToml } from "./state.js";
 import * as runtime from "./runtime.js";
-import { tomlFromHash, parseToml } from "./toml-io.js";
-import { openGenerate, openAbout, maybeShowAboutOnFirstVisit, showError, openModal, esc } from "./dialogs.js";
+import { tomlFromHash, parseToml, openInSiteUrl } from "./toml-io.js";
+import { openGenerate, openAbout, renderAbout, showError, openModal, esc, siteEngineUrl } from "./dialogs.js";
 import { mountFlashPanel } from "./flash/flash-panel.js";
+import { explainError } from "./flash/errors.js";
 import { Configurator } from "./configure/configurator.js";
 import { KconfigTree } from "./configure/kconfig-tree.js";
-import { VersionPicker } from "./configure/version-picker.js";
 import { ConfigTab, copyText } from "./configure/config-tab.js";
 import { OptionsPanel } from "./configure/options-panel.js";
 import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
 import { BuildPanel, planErrorLine } from "./build/build-panel.js";
+import { buildMatches } from "./build/artifacts.js";
+import { Wizard } from "./wizard/wizard.js";
+import { mountStatusChip } from "./wizard/status-chip.js";
+import { FirmwarePage } from "./wizard/firmware-page.js";
 
 const session = new Session();
 const configurator = new Configurator(session);
 let buildPanel = null;
+let wizard = null;
+let firmwarePage = null;
+let flashApi = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,26 +60,25 @@ function pillState(pill, cls, text, title) {
   pill.title = title;
 }
 
+// The pills live in the status chip's popover; the chip sums them up.
 function setupRuntimeStatus() {
   const pill = $("status-python");
-  const idleTitle = "The Python runtime (Pyodide, about 7 MB) loads when it is first needed: " +
-                    "configuring a version, opening a TOML, Generate, or the theme list.";
+  const idleTitle = "About 7 MB, loaded when first needed.";
   pillState(pill, "", "Python", idleTitle);
   runtime.onProgress((phase, detail) => {
-    if (phase === "runtime") pillState(pill, "busy", "Python: loading", "Downloading the Python runtime (Pyodide) from the CDN…");
-    else if (phase === "package") pillState(pill, "busy", "Python: starting", "Loading the webflash package into Python…");
+    if (phase === "runtime") pillState(pill, "busy", "Python: loading", "Downloading Pyodide from the CDN…");
+    else if (phase === "package") pillState(pill, "busy", "Python: starting", "Loading the webflash package…");
     else if (phase === "ready") {
       const a = runtime.about();
       pillState(pill, "ready", "Python", a ? `Python ${a.python}, Pyodide ${a.pyodide}, webflash ${a.webflash}` : "Ready");
       // Whatever booted it, the theme list can come now.
       refreshThemes();
     } else if (phase === "error") {
-      pillState(pill, "error", "Python: failed", `${detail}\n\nClick to try again.`);
+      pillState(pill, "error", "Python: failed", detail);
     }
   });
-  pill.addEventListener("click", () => {
-    if (runtime.failure()) runtime.retry().catch(() => {});
-  });
+  const retry = () => { if (runtime.failure()) runtime.retry().catch(() => {}); };
+  pill.addEventListener("click", retry);
 
   const sources = $("status-sources");
   const render = () => {
@@ -82,22 +90,28 @@ function setupRuntimeStatus() {
       const what = st.phase === "extract" ? "unpacking" : st.phase === "kconfig" ? "reading Kconfig"
         : waiting ? "waiting for Python" : pct !== null ? `${pct}%` : "loading";
       pillState(sources, "busy", `Sources: ${what}`, `${st.detail}: ${st.phase === "kconfig" ? "loading the Kconfig files"
-        : st.phase === "extract" ? "unpacking the sources" : waiting ? "downloaded, waiting for the Python runtime"
+        : st.phase === "extract" ? "unpacking" : waiting ? "downloaded, waiting for Python"
         : `downloading${st.total ? ` ${formatBytes(st.total)}` : ""}`}…`);
     } else if (st.state === "ready") {
       pillState(sources, "ready", "Sources", `${st.detail}${st.ref ? ` (${st.ref.describe})` : ""}: ` +
-        `${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ", downloaded"}`);
+        `${formatBytes(st.size)}${st.cached ? ", from this browser's cache" : ", downloaded"}`);
     } else if (st.state === "error") {
       pillState(sources, "error", "Sources: failed", st.detail);
     } else {
-      pillState(sources, "", "Sources", "The source snapshots: a version's sources load when you configure it.");
+      pillState(sources, "", "Sources", "Load when you press Next on Firmware.");
     }
   };
   session.on("change", ({ what }) => { if (what === "sources") render(); });
   render();
+
+  mountStatusChip({
+    chip: $("status-chip"), popover: $("status-pop"),
+    pills: [$("status-python"), $("status-sources"), $("status-toolchain")],
+    retry: $("status-python-retry"), onRetry: retry,
+  });
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────
+// ── Embed's tabs ─────────────────────────────────────────────────────
 
 function setupPanelTabs() {
   const tabs = [...document.querySelectorAll(".panel-tab")];
@@ -153,12 +167,13 @@ function setupTomlView() {
   };
   session.on("change", ({ what }) => { if (["toml", "files", "open", "undo"].includes(what)) show(); });
   $("toml-copy").addEventListener("click", (e) => copyText(session.tomlText, e.currentTarget));
+  $("toml-copy-link").addEventListener("click", (e) => {
+    copyText(openInSiteUrl(session.board.engine_url || siteEngineUrl(), session.tomlText), e.currentTarget);
+  });
   show();
 }
 
 // ── Configure ────────────────────────────────────────────────────────
-
-let tabs = null;
 
 function setupConfigure() {
   const tree = new KconfigTree($("kconfig-tree"), {
@@ -190,11 +205,18 @@ function setupConfigure() {
     configurator.apply("", { title: "Every option is back to its default" }).catch((e) => showError("Could not reset", e.message));
   });
   $("kconfig-load").addEventListener("click", openLoadConfig);
+  $("kconfig-undo").addEventListener("click", () => session.undo());
+  $("kconfig-redo").addEventListener("click", () => session.redo());
 
   const renderTree = () => {
     const has = Boolean(session.tree && session.ref);
     tree.setTree(has ? session.tree : null, has ? `${session.project}/${session.ref.sha}` : "", session.project || "");
     if (search.value) runSearch();
+  };
+  const renderUndo = () => {
+    const locked = Boolean(session.locked);
+    $("kconfig-undo").disabled = locked || !session.canUndo;
+    $("kconfig-redo").disabled = locked || !session.canRedo;
   };
   const renderState = () => {
     const ready = configurator.ready;
@@ -203,17 +225,33 @@ function setupConfigure() {
     $("kconfig-reset").disabled = !ready || locked;
     $("kconfig-load").disabled = !ready || locked;
     tree.setLocked(session.locked);
+    renderUndo();
     renderStatus();
     renderStart();
+    renderConfigureStep();
   };
   session.on("change", ({ what }) => {
     if (what === "tree" || what === "ref") renderTree();
     if (what === "options") tree.render();
     if (["sources", "lock", "ref", "index", "project", "version", "firmware", "open", "prebuilt"].includes(what)) renderState();
+    else renderUndo();
   });
   configurator.onNotice(renderNotice);
   renderState();
   return tree;
+}
+
+// The step's title, its footer hint and whether Next (Build) can go on.
+function renderConfigureStep() {
+  if (!wizard) return;
+  const title = PROJECT_TITLES[session.project] || (session.project ? projectTitle(session.index, session.project) : "");
+  $("configure-title").textContent = title ? `Set up ${title}` : "Configure";
+  wizard.setHint("configure", session.firmware ? `Next builds ${title} here, in your browser.` : "");
+  const st = session.sources.state;
+  wizard.setNext("configure", {
+    enabled: Boolean(session.firmware) && (st === "loading" || st === "ready"),
+    reason: st === "error" ? "The configuration did not load." : "Load the configuration first.",
+  });
 }
 
 // The line above the tree: what is loaded, and whether its snapshot passed the check.
@@ -229,7 +267,7 @@ function renderStatus() {
   const title = projectTitle(session.index, session.project);
   el.innerHTML = `<span class="kc-status-ref">${esc(title)} <strong>${esc(ref.id)}</strong></span>` +
     `<span class="kc-status-detail">${esc(ref.describe || "")}${ref.date ? ` · ${esc(ref.date)}` : ""}</span>` +
-    (isChecked(ref) ? "" : `<span class="ref-badge" title="This snapshot ${esc(uncheckedText(ref))}: WebFlash could not confirm that it builds.">unchecked</span>`) +
+    (isChecked(ref) ? "" : `<span class="ref-badge" title="This snapshot ${esc(uncheckedText(ref))}. It may still build.">unchecked</span>`) +
     (session.locked ? `<span class="kc-locked">${esc(session.locked)}</span>` : "");
 }
 
@@ -244,13 +282,14 @@ function renderNotice(notice) {
   $("kconfig-notice-close").addEventListener("click", () => configurator.dismissNotice());
 }
 
-// Before the first load: what Configure will download, and the button for it.
+// Above the tree until it loads: the progress, a failure with Try again, or,
+// reached without page 1's Next, what loading downloads and its button.
 async function renderStart() {
   const el = $("kconfig-start");
   const st = session.sources;
   if (!session.firmware) {
     el.hidden = false;
-    el.innerHTML = `<p>This board TOML flashes a prebuilt firmware file: there is nothing to configure.</p>`;
+    el.innerHTML = `<p>This board TOML flashes its own file: there is nothing to configure.</p>`;
     return;
   }
   if (st.state === "ready") {
@@ -263,7 +302,7 @@ async function renderStart() {
   if (st.state === "loading") {
     const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
     const what = st.phase === "extract" ? "Unpacking the sources…" : st.phase === "kconfig" ? "Reading the Kconfig files…"
-      : !runtime.isReady() ? (pct === 100 ? "Starting the Python runtime…" : "Starting the Python runtime and downloading the sources…")
+      : !runtime.isReady() ? (pct === 100 ? "Starting Python…" : "Starting Python and downloading the sources…")
       : `Downloading the sources${pct !== null ? ` (${pct}%)` : ""}…`;
     el.innerHTML = `<p class="kc-loading"><span class="spinner" aria-hidden="true"></span>${esc(st.detail)}: ${esc(what)}</p>` +
       (st.total ? `<progress max="${st.total}" value="${st.done || 0}"></progress>` : "");
@@ -294,17 +333,14 @@ async function renderStart() {
   const compiler = buildPanel ? await buildPanel.compilerToFetch() : null;
   if (el.dataset.ref !== mine || session.sources.state !== "idle") return;
   const downloads = [];
-  if (!runtime.isReady()) downloads.push("the Python runtime (about 7 MB, from cdn.jsdelivr.net, once per browser)");
-  downloads.push(`${title} ${ref.id}'s sources (${size ? formatBytes(size) : "size unknown"}${cached ? ", already in this browser's cache" : ""})`);
+  if (!runtime.isReady()) downloads.push("Python (about 7 MB, once)");
+  downloads.push(`the sources (${size ? formatBytes(size) : "size unknown"}${cached ? ", in this browser already" : ""})`);
   el.innerHTML =
-    `<h3>Configure ${esc(title)} ${esc(ref.id)}</h3>` +
-    `<p>Every option of <code>make menuconfig</code>, from the Kconfig files of ${esc(ref.describe || ref.id)}` +
-    `${ref.date ? ` (${esc(ref.date)})` : ""}.</p>` +
+    `<h3>${esc(title)} ${esc(ref.id)}</h3>` +
     (note ? `<p class="kc-warn-text">${esc(note)}</p>` : "") +
-    `<p>This downloads ${downloads.map(esc).join(" and ")}. Nothing you configure leaves the browser.</p>` +
+    `<p>Loading it downloads ${downloads.map(esc).join(" and ")}.</p>` +
     (compiler ? `<p><label class="check kc-start-compiler"><input type="checkbox" id="kconfig-start-compiler" checked> ` +
-      `Then download the compiler while I configure (${esc(formatBytes(compiler.size))}, kept in this browser's cache), ` +
-      `so the first build starts at once</label></p>` : "") +
+      `Download the compiler while I configure (${esc(formatBytes(compiler.size))})</label></p>` : "") +
     `<button class="primary" id="kconfig-start-btn">Load the configuration</button>`;
   $("kconfig-start-btn").addEventListener("click", async () => {
     const box = $("kconfig-start-compiler");
@@ -341,9 +377,9 @@ function openLoadConfig() {
   const { body, close } = openModal("Load a .config", { wide: false });
   const ref = session.ref;
   body.innerHTML =
-    `<p>Paste a <code>.config</code> or a defconfig (what <code>make savedefconfig</code> writes), or open the file. ` +
-    `It replaces the configuration of ${esc(projectTitle(session.index, session.project))} ${esc(ref ? ref.id : "")} ` +
-    `the way <code>make olddefconfig</code> reads it: whatever it leaves out takes its default.</p>` +
+    `<p>Paste a <code>.config</code> or a defconfig, or open the file. ` +
+    `It replaces the configuration of ${esc(projectTitle(session.index, session.project))} ${esc(ref ? ref.id : "")}; ` +
+    `what it leaves out takes its default.</p>` +
     `<textarea id="load-config-text" class="code load-config" spellcheck="false" rows="12" ` +
     `placeholder="CONFIG_MACH_STM32=y&#10;CONFIG_MACH_STM32G0B1=y" aria-label="The .config to load"></textarea>` +
     `<p class="kc-error-text" id="load-config-error" hidden></p>` +
@@ -401,9 +437,9 @@ function setupPlan() {
       return;
     }
     const missing = p.unavailable && p.unavailable.length
-      ? ` This snapshot does not include ${p.unavailable.join(", ")}, which the build needs, so it would fail.` : "";
+      ? ` This snapshot lacks ${p.unavailable.join(", ")}, which the build needs.` : "";
     if (!p.libs.length) {
-      el.textContent = `The build needs no library bundles beyond the sources already loaded.${missing}`;
+      el.textContent = `No library bundles needed.${missing}`;
       return;
     }
     const cached = await Promise.all(p.libs.map((l) => isCached(blobUrl(l.blob))));
@@ -411,13 +447,13 @@ function setupPlan() {
     const known = p.libs.filter((l) => Number.isFinite(l.size));
     const total = known.reduce((n, l) => n + l.size, 0);
     const all = cached.every(Boolean);
-    el.textContent = `The build ${all ? "needs" : "downloads"} ${p.libs.length === 1 ? "one library bundle" : `${p.libs.length} library bundles`}: ` +
+    el.textContent = `Library bundles${all ? "" : " to download"}: ` +
       p.libs.map((l, i) => {
         const bits = [Number.isFinite(l.size) ? formatBytes(l.size) : "", cached[i] && !all ? "cached" : ""].filter(Boolean);
         return `${l.dir}${bits.length ? ` (${bits.join(", ")})` : ""}`;
       }).join(", ") +
       (known.length > 1 ? `, ${formatBytes(total)} in all` : "") +
-      (all ? `, ${p.libs.length === 1 ? "already in this browser's cache" : "all in this browser's cache"}.` : ".") + missing;
+      (all ? `, ${p.libs.length === 1 ? "in this browser already" : "all in this browser already"}.` : ".") + missing;
   };
   session.on("change", ({ what }) => { if (["plan", "sources", "ref", "build"].includes(what)) render(); });
   render();
@@ -426,77 +462,140 @@ function setupPlan() {
 
 let renderPlanNote = () => {};
 
-// ── Toolbar ──────────────────────────────────────────────────────────
+// ── Build ────────────────────────────────────────────────────────────
+
+// The Build step starts the build on arrival, unless the build on record
+// still matches the configuration. It waits for what the build needs (the
+// sources, the plan) while the step is shown, and starts at most once per
+// arrival.
+let autoBuild = false;
+
+function tryAutoBuild() {
+  if (!autoBuild) return;
+  if (!wizard || wizard.current !== "build" || !buildPanel || buildPanel.running) {
+    autoBuild = false;
+    return;
+  }
+  if (buildPanel.last && !buildPanel.stale) {
+    autoBuild = false;
+    return;
+  }
+  if (!buildPanel.check().ok) return;
+  autoBuild = false;
+  buildPanel.onBuild();
+}
+
+function renderBuildStep() {
+  if (!wizard) return;
+  const done = Boolean(session.build) && buildMatches(session, session.build);
+  wizard.setNext("build", { enabled: done, reason: "Next is enabled once the build is done." });
+}
+
+function setupBuildStep() {
+  wizard.onEnter("build", () => {
+    autoBuild = true;
+    tryAutoBuild();
+  });
+  wizard.onLeave("build", () => { autoBuild = false; });
+  session.on("change", ({ what }) => {
+    if (autoBuild) tryAutoBuild();
+    if (["build", "ref", "config", "project", "version", "open"].includes(what)) renderBuildStep();
+  });
+  renderBuildStep();
+}
+
+// ── Themes ───────────────────────────────────────────────────────────
 
 let themeList = [];
-
-function fillThemeSelect() {
-  const sel = $("theme-select");
-  const cur = session.theme || "default";
-  const list = themeList.slice();
-  if (!list.some((t) => t.name === cur)) list.push({ name: cur, display: cur });
-  sel.innerHTML = list.map((t) =>
-    `<option value="${esc(t.name)}"${t.name === cur ? " selected" : ""}>${esc(t.display)}</option>`
-  ).join("");
-}
 
 async function refreshThemes() {
   try {
     themeList = await runtime.themeCatalog();
   } catch (e) {
-    return;   // the status pill says why
+    return;   // the status chip says why
   }
-  fillThemeSelect();
   if (optionsPanel) optionsPanel.fillThemes();
 }
 
-let picker = null;
 let optionsPanel = null;
 
-// The toolbar's Version select and Embed options' "Version the card starts
-// with" both edit [firmware] version: either one loads the new version.
+// Embed options' Theme select lists the bundled themes, from Python: load
+// the list when the select is first reached for, not with the page.
+function setupThemes() {
+  const want = (e) => {
+    if (e.target && e.target.id === "opt-theme" && !themeList.length) refreshThemes();
+  };
+  $("embed-options").addEventListener("pointerdown", want);
+  $("embed-options").addEventListener("focusin", want);
+}
+
+// ── Project and version ──────────────────────────────────────────────
+
+// Page 1's switch, its version selects and Embed options' "Version the card
+// starts with" all edit [firmware]: a change loads the new version once
+// configuring has started.
+function switchProject(project) {
+  // An exact ref belongs to one project; the aliases work for any.
+  const version = ["latest", "release"].includes(session.version) ? session.version : "latest";
+  session.setProject(project, { version });
+  if (configureStarted()) configurator.load({ reason: "switch" });
+}
+
 function switchVersion(version) {
   session.setVersion(version);
   if (configureStarted()) configurator.load({ reason: "switch" });
 }
 
-function setupToolbar() {
-  picker = new VersionPicker({
-    projectSelect: $("project-select"), versionSelect: $("version-select"), badge: $("version-badge"),
-  }, session, {
-    onProject: (project) => {
-      // An exact ref belongs to one project; the aliases work for any.
-      const version = ["latest", "release"].includes(session.version) ? session.version : "latest";
-      session.setProject(project, { version });
-      if (configureStarted()) configurator.load({ reason: "switch" });
+// ── About ────────────────────────────────────────────────────────────
+
+function aboutOptions() {
+  const st = session.sources;
+  return {
+    sources: st.state === "ready" && st.ref
+      ? `${st.detail} (${st.ref.describe}), ${formatBytes(st.size)}${st.cached ? ", from this browser's cache" : ""}` : "",
+    toolchain: buildPanel ? () => buildPanel.aboutText() : "",
+    extend: buildPanel ? (el) => buildPanel.extendAbout(el) : null,
+    onClearCache: async () => {
+      if (buildPanel) await buildPanel.cacheCleared();
+      renderPlanNote();
+      if (firmwarePage) firmwarePage.renderHint();
     },
-    onVersion: switchVersion,
-  });
+  };
+}
 
-  const theme = $("theme-select");
-  fillThemeSelect();
-  // The list comes from the bundled themes, in Python: load it when the
-  // select is first reached for, not with the page.
-  const wantThemes = () => { if (!themeList.length) refreshThemes(); };
-  theme.addEventListener("pointerdown", wantThemes);
-  theme.addEventListener("focus", wantThemes);
-  theme.addEventListener("change", () => session.setTheme(theme.value));
-  session.on("change", ({ what }) => { if (what === "board" || what === "open") fillThemeSelect(); });
+function setupAbout() {
+  $("about-btn").addEventListener("click", () => openAbout(aboutOptions()));
+  // Page 1's folded "Versions and licenses": the same content, filled when opened.
+  const fold = $("about-fold");
+  const fill = () => { if (fold.open) renderAbout($("about-inline"), aboutOptions()); };
+  fold.addEventListener("toggle", fill);
+  wizard.onEnter("firmware", fill);
+}
 
-  $("generate-btn").addEventListener("click", () => openGenerate(session));
-  $("about-btn").addEventListener("click", () => {
-    const st = session.sources;
-    openAbout({
-      sources: st.state === "ready" && st.ref
-        ? `${st.detail} (${st.ref.describe}), ${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ""}` : "",
-      toolchain: buildPanel ? () => buildPanel.aboutText() : "",
-      extend: buildPanel ? (el) => buildPanel.extendAbout(el) : null,
-      onClearCache: async () => {
-        if (buildPanel) await buildPanel.cacheCleared();
-        renderPlanNote();
-      },
-    });
+// ── Page 1 ───────────────────────────────────────────────────────────
+
+function setupFirmwarePage() {
+  firmwarePage = new FirmwarePage(session, configurator, wizard, {
+    fwButtons: [...document.querySelectorAll("[data-fw]")],
+    fwVersion: $("version-select"), fwBadge: $("version-badge"), fwVersionRow: $("fw-version-row"),
+    katapult: $("katapult-check"), katVersion: $("katapult-version"), katBadge: $("katapult-badge"),
+    katVersionRow: $("katapult-version-row"), soon: $("katapult-soon"), prebuilt: $("fw-prebuilt"),
+  }, {
+    switchProject,
+    switchVersion,
+    start: () => startConfigure("start"),
+    sourcesStarted: () => ["loading", "ready"].includes(session.sources.state),
+    compiler: () => (buildPanel ? buildPanel.compilerToFetch() : Promise.resolve(null)),
+    // Next agreed to the downloads: the compiler comes now, and the first
+    // build does not list them again.
+    consent: async () => {
+      if (!buildPanel) return;
+      buildPanel.consented = true;
+      if (await buildPanel.compilerToFetch()) buildPanel.prefetch();
+    },
   });
+  $("fw-open-toml").addEventListener("click", () => $("open-toml").click());
+  $("fw-upload").addEventListener("click", () => uploadFirmware());
 }
 
 // ── Files ────────────────────────────────────────────────────────────
@@ -524,7 +623,7 @@ function readFile(file, as) {
 /**
  * Open a board TOML: the loader (bridge.check_board) checks it, its tables
  * replace the session's, and its project and version load with its
- * defconfig, so the Configure tab shows it and the exposed options are ticked.
+ * defconfig on the Configure step (a [prebuilt] TOML goes to Flash).
  */
 async function openToml(text, { name = "board.toml", files = new Map() } = {}) {
   try {
@@ -547,10 +646,12 @@ async function openToml(text, { name = "board.toml", files = new Map() } = {}) {
   session.openTables(out.board, { name, files });
   markSaved(session.tomlText);
   setTomlStatus(out.warnings.length ? "warn" : "ok",
-    out.warnings.length ? out.warnings.join("\n") : `Opened ${name}. This is what Save TOML writes; comments are not kept.`);
+    out.warnings.length ? out.warnings.join("\n") : `Opened ${name}. Save TOML writes this; comments are not kept.`);
   if (session.firmware) {
-    if (tabs) tabs.show("tab-configure");
+    wizard.go("configure");
     await startConfigure("open");
+  } else {
+    wizard.go("flash");
   }
   return true;
 }
@@ -573,6 +674,40 @@ async function openFiles(fileList) {
   } else if (extras.length) {
     session.addFiles(extras);
   }
+}
+
+// A message about a file with its name in front, unless it starts with it
+// already (the flash panel's own rule).
+function aboutFile(name, message) {
+  return !name || message.startsWith(`${name}:`) || message.startsWith(`${name} `) ? message : `${name}: ${message}`;
+}
+
+// Upload firmware (the top bar) and "Flash a file you have" (page 1): the
+// file goes to the Flash step, skipping Configure and Build. The step shows
+// first, since a raw .bin asks for its address there.
+const uploadInput = document.createElement("input");
+uploadInput.type = "file";
+uploadInput.accept = ".bin,.hex,.ihx,.uf2,.elf,application/octet-stream";
+uploadInput.hidden = true;
+
+function uploadFirmware() {
+  if (flashApi) uploadInput.click();
+}
+
+function setupUpload() {
+  document.body.appendChild(uploadInput);
+  uploadInput.addEventListener("change", async () => {
+    const file = uploadInput.files && uploadInput.files[0];
+    uploadInput.value = "";
+    if (!file || !flashApi) return;
+    wizard.go("flash");
+    try {
+      await flashApi.useUploadedFile(file.name, new Uint8Array(await file.arrayBuffer()));
+    } catch (e) {
+      showError("The file could not be used", aboutFile(file.name, explainError(e, {}).message));
+    }
+  });
+  $("upload-firmware").addEventListener("click", uploadFirmware);
 }
 
 function setupFileIO() {
@@ -622,6 +757,7 @@ function setupFileIO() {
     markSaved(text);
   });
   session.on("saved", ({ text }) => markSaved(text));
+  $("generate-btn").addEventListener("click", () => openGenerate(session));
 
   // Ask before losing work. The browser writes the wording and ignores
   // anything passed, so the only choice here is whether to ask at all.
@@ -634,9 +770,9 @@ function setupFileIO() {
 
 // ── URL ──────────────────────────────────────────────────────────────
 
-// ?project= and ?version= preselect; #toml= (what a generated page's "Open
-// in WebFlash" sends) and ?config=<url> open a board TOML. hashOnly is a
-// later change of the hash, which only #toml= answers. Returns true when a
+// ?project= and ?version= preselect page 1; #toml= (what a generated page's
+// "Open in WebFlash" sends) and ?config=<url> open a board TOML. hashOnly is
+// a later change of the hash, which only #toml= answers. Returns true when a
 // TOML opened, false when the link named one that did not open (an error
 // dialog said why), and null when the address names none.
 async function openFromUrl({ hashOnly = false } = {}) {
@@ -695,7 +831,7 @@ function setupKeys() {
     if (typing) return;
     if (key === "/" && !mod && !active?.matches("select") && !$("kconfig-search").disabled) {
       e.preventDefault();
-      tabs.show("tab-configure");
+      wizard.go("configure");
       $("kconfig-search").focus();
     } else if (mod && key === "z" && !e.shiftKey) {
       e.preventDefault();
@@ -709,13 +845,27 @@ function setupKeys() {
 
 // ── Start ────────────────────────────────────────────────────────────
 
+function setupWizard() {
+  wizard = new Wizard({ box: $("wizard"), bar: $("wizard-steps") });
+  // A [prebuilt] board TOML has nothing to configure or build.
+  const skip = () => {
+    wizard.setSkipped("configure", !session.firmware);
+    wizard.setSkipped("build", !session.firmware);
+  };
+  session.on("change", ({ what }) => { if (what === "open" || what === "prebuilt" || what === "firmware") skip(); });
+  skip();
+  wizard.onNext("configure", () => (session.firmware ? "build" : "flash"));
+}
+
 async function init() {
   setupColorScheme();
+  setupWizard();
   setupRuntimeStatus();
-  tabs = setupPanelTabs();
+  setupPanelTabs();
   setupTomlView();
   setupConfigure();
   optionsPanel = new OptionsPanel($("embed-options"), session, { themes: () => themeList, onVersion: switchVersion });
+  setupThemes();
   new ConfigTab({
     textarea: $("config-text"), minimal: $("config-minimal"), copy: $("config-copy"),
     download: $("config-download"), note: $("config-note"),
@@ -727,25 +877,32 @@ async function init() {
     artifacts: $("build-artifacts"), logBox: $("build-log-box"), log: $("build-log"), logCopy: $("build-log-copy"),
     logCount: $("build-log-count"), pill: $("status-toolchain"),
   }, { showError });
-  setupToolbar();
+  setupBuildStep();
+  setupFirmwarePage();
+  setupAbout();
   setupFileIO();
+  setupUpload();
   setupKeys();
+  renderConfigureStep();
   markSaved(session.tomlText);
-  mountFlashPanel(session, $("flash-card"), { uploadButton: $("upload-firmware"), showError })
+  const mock = new URLSearchParams(location.search).get("mock");
+  mountFlashPanel(session, $("flash-card"), { showError })
+    .then((api) => {
+      flashApi = api;
+      $("upload-firmware").disabled = false;
+      // The mock mode brings its own firmware: start where it is used.
+      if (mock) wizard.go("flash");
+    })
     .catch((e) => console.error("The flash panel could not start:", e));
 
   configurator.loadIndex().catch((e) => {
-    picker.setError(e.message);
+    firmwarePage.setIndexError(e.message);
     if (session.sources.state === "idle") session.setSources("error", e.message);
   });
   const opened = await openFromUrl();
   addEventListener("hashchange", () => openFromUrl({ hashOnly: true }));
-  if (opened !== true) {
-    // A link that did not open shows its error alone; About waits for a
-    // later visit rather than covering it.
-    if (configurator.autoStart) startConfigure("start");
-    else if (opened === null) maybeShowAboutOnFirstVisit();
-  }
+  // A returning visitor's configuration loads at once, behind page 1.
+  if (opened !== true && configurator.autoStart) startConfigure("start");
 }
 
 init();

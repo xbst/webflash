@@ -11,7 +11,6 @@ import { openInSiteUrl, writeBoardToml } from "./toml-io.js";
 
 const REPO_URL = "https://github.com/xbst/webflash";
 const DOCS_URL = "https://doctools.isiks.tech/webflash/";
-const ABOUT_SEEN_KEY = "webflash.about.seen";
 
 export function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -149,7 +148,7 @@ export function previewToml(tables, engineUrl, { imageAttached = true } = {}) {
 /**
  * The page the TOML renders to, previewed and ready to download, with the
  * TOML beside it. The dialog's Theme is the TOML's [board] theme, the same
- * setting as the toolbar's, so the downloaded TOML renders to the downloaded
+ * setting as Embed options', so the downloaded TOML renders to the downloaded
  * page with the command line too. Attach files adds the image and firmware
  * file the TOML names to the session (session.files), for -i and the preview.
  */
@@ -363,25 +362,34 @@ const LICENSES = [
 ];
 
 /**
- * The About box. sources says which snapshot is loaded, as the toolbar's
- * status does; toolchain (HTML, or a function returning it, which Clear cache
- * asks again) describes the compiler; extend(el) fills the build section (the
- * build panel's worker count and cache size); onClearCache runs after Clear
- * cache emptied the cache.
+ * The About box: the intro, then what renderAbout shows (see there for the
+ * options). Page 1's folded "Versions and licenses" shows the same, without
+ * the intro.
  */
-export function openAbout({ sources = "", toolchain = "", extend = null, onClearCache = null } = {}) {
+export function openAbout(options = {}) {
   const { body } = openModal("About WebFlash");
+  renderAbout(body, { ...options, intro: true });
+}
+
+/**
+ * About's content into el. sources says which snapshot is loaded, as the
+ * status chip does; toolchain (HTML, or a function returning it, which Clear
+ * cache asks again) describes the compiler; extend(el) fills the build
+ * section (the build panel's worker count and cache size); onClearCache runs
+ * after Clear cache emptied the cache. Everything is found inside el, so the
+ * dialog and page 1 can show it at once.
+ */
+export function renderAbout(el, { sources = "", toolchain = "", extend = null, onClearCache = null, intro = false } = {}) {
+  const body = el;
   const about = runtime.about();
   const row = (k, v, id = "") => `<tr><td>${esc(k)}</td><td${id ? ` id="${id}"` : ""}>${v}</td></tr>`;
   const toolchainText = () => (typeof toolchain === "function" ? toolchain() : toolchain) || "loads with the first build";
   body.innerHTML =
-    `<p>WebFlash configures, builds and flashes Klipper, Kalico and Katapult firmware for ` +
-    `3D printer boards from the browser. It runs <code>make menuconfig</code> with the ` +
-    `project's own Kconfig files, compiles the firmware with clang and lld compiled to ` +
-    `WebAssembly, and flashes it over USB. <strong>Generate</strong> turns a board TOML ` +
-    `into a page you can embed in a documentation site.</p>` +
-    `<p>Everything runs in your browser: nothing you configure or build is uploaded. The ` +
-    `<code>webflash</code> command renders the same pages from a saved board TOML.</p>` +
+    (intro
+      ? `<p>WebFlash configures, builds and flashes Klipper, Kalico and Katapult firmware in your browser. ` +
+        `Nothing you configure or build is uploaded.</p>` +
+        `<p>The <code>webflash</code> command renders the same embeddable pages from a board TOML.</p>`
+      : "") +
     `<h3>Versions</h3><table class="about-table">` +
     row("WebFlash", about ? esc(about.webflash) : "loads with the Python runtime") +
     row("Python", about ? `${esc(about.python)} (Pyodide ${esc(about.pyodide)})` : `Pyodide ${esc(runtime.PYODIDE_VERSION)}, not loaded yet`) +
@@ -408,13 +416,4 @@ export function openAbout({ sources = "", toolchain = "", extend = null, onClear
     body.querySelector("#about-toolchain").innerHTML = toolchainText();
     if (extend) extend(body.querySelector("#about-build"));
   });
-}
-
-/** Show the About box once per browser, for someone arriving with no context. */
-export function maybeShowAboutOnFirstVisit() {
-  let seen = null;
-  try { seen = localStorage.getItem(ABOUT_SEEN_KEY); } catch (e) { seen = "1"; }
-  if (seen) return;
-  try { localStorage.setItem(ABOUT_SEEN_KEY, "1"); } catch (e) { /* private window */ }
-  openAbout();
 }
