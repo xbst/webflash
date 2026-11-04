@@ -63,7 +63,7 @@ export const METHODS = {
   dfu: {
     id: "dfu", label: "DFU (STM32 ROM)", transport: "usb",
     short: "DFU",
-    needs: "Windows needs the WinUSB driver once (Zadig: \"DFU in FS Mode\"); Linux needs a udev rule.",
+    needs: "Windows usually needs no driver (if the browser cannot open it, install WinUSB with Zadig: \"DFU in FS Mode\"); Linux needs a udev rule.",
   },
   picoboot: {
     id: "picoboot", label: "PICOBOOT (RP2 BOOTSEL)", transport: "usb",

@@ -26,4 +26,4 @@ CONFIG_STM32_FLASH_START_2000=y
 methods = ["dfu", "download"]
 
 [flash.instructions]
-dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows the **STM32 BOOTLOADER** device needs the WinUSB driver (Zadig) once."
+dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows, if the browser lists the bootloader but cannot open it, install the WinUSB driver on it with Zadig."

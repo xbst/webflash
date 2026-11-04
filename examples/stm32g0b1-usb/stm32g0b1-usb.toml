@@ -46,4 +46,4 @@ methods = ["katapult", "dfu", "download"]
 
 [flash.instructions]
 katapult = "If Klipper is running on the board, WebFlash asks it to restart into Katapult. Otherwise double-tap RESET, then click Connect."
-dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows the **STM32 BOOTLOADER** device needs the WinUSB driver (Zadig) once."
+dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect. On Windows, if the browser lists the bootloader but cannot open it, install the WinUSB driver on it with Zadig."
