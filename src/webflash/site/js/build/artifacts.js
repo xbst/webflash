@@ -52,6 +52,18 @@ function mimeOf(name) {
 }
 
 /**
+ * The name an output is saved under: Katapult's .config and defconfig as
+ * katapult.config and katapult.defconfig, as the Flash step saves them, so
+ * they do not land on the firmware's.
+ */
+export function saveName(build, name) {
+  if (build && build.project === "katapult" && (name === ".config" || name === "defconfig")) {
+    return name === ".config" ? "katapult.config" : "katapult.defconfig";
+  }
+  return name;
+}
+
+/**
  * Fill container with a download button per output. build is a buildRecord;
  * stale says the configuration changed since (the buttons stay, labeled).
  * compact: no heading (the Build step's row names the build already).
@@ -78,7 +90,7 @@ export function renderArtifacts(container, build, { stale = false, compact = fal
     btn.addEventListener("click", () => {
       const name = btn.dataset.name;
       const bytes = outputs.get(name);
-      if (bytes) saveFile(bytes, name, mimeOf(name));
+      if (bytes) saveFile(bytes, saveName(build, name), mimeOf(name));
     });
   }
 }
