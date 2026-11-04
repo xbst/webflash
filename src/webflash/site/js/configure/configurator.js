@@ -720,18 +720,20 @@ export class Configurator {
   // before it evaluates the Makefiles. A full .config would pin every symbol
   // as if the user had set it, so later edits would stop following the
   // defaults; the defconfig leaves the session as it is (olddefconfig of the
-  // defconfig, which is what the board TOML stores).
+  // defconfig, which is what the board TOML stores). The texts are read when
+  // the plan's turn in the queue comes, not when the timer fires: a set
+  // still in flight then is in them, so the plan never turns it back.
   _plan(slot = "fw") {
     const s = this.session;
     const mine = ++this._planCounts[slot];
-    const loaded = this.slots[slot];
-    const ref = loaded && loaded.ref;
-    const view = this._view(slot);
-    const configText = view.configText;
-    const defconfigText = view.defconfigText;
-    if (!ref || !configText) return Promise.resolve();
     return this._enqueue(async () => {
       if (mine !== this._planCounts[slot]) return;
+      const loaded = this.slots[slot];
+      const ref = loaded && loaded.ref;
+      const view = this._view(slot);
+      const configText = view.configText;
+      const defconfigText = view.defconfigText;
+      if (!ref || !configText) return;
       try {
         const out = await runtime.plan(defconfigText, { slot });
         if (mine !== this._planCounts[slot]) return;
