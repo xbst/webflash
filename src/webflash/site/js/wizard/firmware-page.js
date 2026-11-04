@@ -89,7 +89,7 @@ export class FirmwarePage {
     this.fwPicker = null;
     this.katPicker = null;
     session.on("change", ({ what }) => {
-      if (["project", "open", "undo", "katapult", "setup"].includes(what)) this.sync();
+      if (["project", "open", "undo", "katapult", "setup"].includes(what)) this.sync(what === "open");
       if (["index", "project", "version", "firmware", "ref", "open", "lock", "prebuilt", "sources", "undo",
         "katapult", "katapult-sources", "setup"].includes(what)) this.render();
     });
@@ -105,10 +105,11 @@ export class FirmwarePage {
   }
 
   // The page follows the session (an opened TOML, ?project=, undo, the Setup
-  // select): None with nothing ticked is the page's own until a pick.
-  sync() {
+  // select): None with nothing ticked is the page's own until a pick, or
+  // until a TOML or .config opens (force).
+  sync(force = false) {
     const s = this.session;
-    if (this.fw === "none" && !this.katapult && s.project !== "katapult") return;
+    if (!force && this.fw === "none" && !this.katapult && s.project !== "katapult") return;
     const k = s.katapult;
     if (k) this.katapultVersion = k.version;
     else if (s.project === "katapult" && s.version) this.katapultVersion = s.version;
