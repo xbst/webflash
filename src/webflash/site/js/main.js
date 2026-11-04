@@ -62,6 +62,36 @@ function pillState(pill, cls, text, title) {
   pill.title = title;
 }
 
+// The Sources pill, {cls, text, title}, for the firmware's sources and
+// Katapult's beside them (katapult: its sources state, or null): a failure of
+// either comes first, then either one loading, then Ready once both are.
+function sourcesPill(fw, katapult, pythonReady) {
+  const loading = (st) => {
+    const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
+    // A download that finished before Python is up waits for it.
+    const waiting = pct === 100 && !pythonReady;
+    const what = st.phase === "extract" ? "unpacking" : st.phase === "kconfig" ? "reading Kconfig"
+      : waiting ? "waiting for Python" : pct !== null ? `${pct}%` : "loading";
+    return { cls: "busy", text: `Sources: ${what}`, title: `${st.detail}: ${st.phase === "kconfig" ? "loading the Kconfig files"
+      : st.phase === "extract" ? "unpacking" : waiting ? "downloaded, waiting for Python"
+      : `downloading${st.total ? ` ${formatBytes(st.total)}` : ""}`}…` };
+  };
+  const ready = (st) => `${st.detail}${st.ref ? ` (${st.ref.describe})` : ""}: ` +
+    `${formatBytes(st.size)}${st.cached ? ", from this browser's cache" : ", downloaded"}`;
+  const k = katapult && katapult.state ? katapult : null;
+  if (fw.state === "error") return { cls: "error", text: "Sources: failed", title: fw.detail };
+  if (k && k.state === "error") {
+    return { cls: "error", text: "Sources: failed", title: /^Katapult\b/.test(k.detail || "") ? k.detail : `Katapult: ${k.detail}` };
+  }
+  if (fw.state === "loading") return loading(fw);
+  if (k && k.state === "loading") return loading(k);
+  if (fw.state === "ready" && (!k || k.state === "ready")) {
+    return { cls: "ready", text: "Sources", title: [fw, k].filter(Boolean).map(ready).join("\n") };
+  }
+  if (fw.state === "ready") return { cls: "", text: "Sources", title: `${ready(fw)}\nKatapult's load next.` };
+  return { cls: "", text: "Sources", title: "Loads when you press Next on Firmware." };
+}
+
 // The pills live in the status chip's popover; the chip sums them up.
 function setupRuntimeStatus() {
   const pill = $("status-python");
@@ -84,26 +114,13 @@ function setupRuntimeStatus() {
 
   const sources = $("status-sources");
   const render = () => {
-    const st = session.sources;
-    if (st.state === "loading") {
-      const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
-      // A download that finished before Python is up waits for it.
-      const waiting = pct === 100 && !runtime.isReady();
-      const what = st.phase === "extract" ? "unpacking" : st.phase === "kconfig" ? "reading Kconfig"
-        : waiting ? "waiting for Python" : pct !== null ? `${pct}%` : "loading";
-      pillState(sources, "busy", `Sources: ${what}`, `${st.detail}: ${st.phase === "kconfig" ? "loading the Kconfig files"
-        : st.phase === "extract" ? "unpacking" : waiting ? "downloaded, waiting for Python"
-        : `downloading${st.total ? ` ${formatBytes(st.total)}` : ""}`}…`);
-    } else if (st.state === "ready") {
-      pillState(sources, "ready", "Sources", `${st.detail}${st.ref ? ` (${st.ref.describe})` : ""}: ` +
-        `${formatBytes(st.size)}${st.cached ? ", from this browser's cache" : ", downloaded"}`);
-    } else if (st.state === "error") {
-      pillState(sources, "error", "Sources: failed", st.detail);
-    } else {
-      pillState(sources, "", "Sources", "Loads when you press Next on Firmware.");
-    }
+    const k = session.katapult;
+    const pill = sourcesPill(session.sources, k ? k.sources : null, runtime.isReady());
+    pillState(sources, pill.cls, pill.text, pill.title);
   };
-  session.on("change", ({ what }) => { if (what === "sources") render(); });
+  session.on("change", ({ what }) => {
+    if (["sources", "katapult-sources", "katapult", "setup", "project"].includes(what)) render();
+  });
   render();
 
   mountStatusChip({
