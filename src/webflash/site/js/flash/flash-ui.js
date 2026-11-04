@@ -367,9 +367,14 @@ export function createFlashPanel(root, options = {}) {
     // Where the last flash of this firmware with this method stopped, until
     // the next one starts: the row it was writing, or the row whose read-back
     // (a segment or a chunk at a time) it had just finished.
-    const f = (state.phase === "ready" || state.phase === "failed") && state.failed && state.failed.firmware === fw &&
-      state.failed.method === method ? state.failed.written : null;
+    const failed = (state.phase === "ready" || state.phase === "failed") && state.failed && state.failed.firmware === fw &&
+      state.failed.method === method ? state.failed : null;
+    const f = failed && failed.written;
     const failedAt = f && f.total ? f.done / f.total : null;
+    // A read-back that names the address it differed at crosses the row
+    // holding it: PICOBOOT's counts include each segment's padding to whole
+    // pages, which can carry the fraction past a row's end.
+    const badAddress = failed && typeof failed.address === "number" ? rows.reduce((row, r, i) => (r.address <= failed.address ? i : row), 0) : null;
     let before = 0;
     const items = [];
     const m = currentMethod();
@@ -389,7 +394,7 @@ export function createFlashPanel(root, options = {}) {
       else if (state.phase === "flashing" && w) {
         if (written >= end - 1e-9) { icon = "✓"; cls = "ok"; }
         else if (w.phase === "erase" ? i === 0 : written >= start - 1e-9) cls = "run";
-      } else if (failedAt !== null && (f.phase === "verify"
+      } else if (badAddress !== null ? i === badAddress : failedAt !== null && (f.phase === "verify"
         ? (failedAt > start + 1e-9 || i === 0) && failedAt <= end + 1e-9
         : failedAt >= start - 1e-9 && (failedAt < end - 1e-9 || i === rows.length - 1))) { icon = "✗"; cls = "bad"; }
       items.push(`<li class="flash-write ${cls}"><span class="fw-icon" aria-hidden="true">${cls === "run" ? `<span class="spinner"></span>` : esc(icon)}</span>` +
@@ -662,7 +667,7 @@ export function createFlashPanel(root, options = {}) {
       state.phase = "failed";
       state.connection = null;
       // Where it stopped, for the write list's cross; a cancel crosses nothing.
-      state.failed = isCancel(e) ? null : { firmware: fw, method, written: state.written };
+      state.failed = isCancel(e) ? null : { firmware: fw, method, written: state.written, address: differedAt(e) };
       progressWrap.hidden = true;
       showFailure(e, method);
     } finally {
@@ -671,6 +676,13 @@ export function createFlashPanel(root, options = {}) {
       // the result box keeps saying how the flash went.
       if (!applyPending({ keepResult: true })) renderAll();
     }
+  }
+
+  // The address a read-back differed at (dfu.js's and picoboot.js's
+  // verify-failed sentence names it), or null.
+  function differedAt(e) {
+    const m = e && e.code === "verify-failed" ? /differ from the firmware at 0x([0-9a-f]+)/i.exec(String(e.message)) : null;
+    return m ? parseInt(m[1], 16) : null;
   }
 
   function showSuccess(r) {
