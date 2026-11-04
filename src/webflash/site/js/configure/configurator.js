@@ -338,8 +338,10 @@ export class Configurator {
     if (exposedGone.length) {
       lines.push(`The board TOML exposes options this version does not have: ${exposedGone.join(", ")}.`);
     }
+    // A load with nothing to report still clears an earlier load's notice
+    // (an undo back across a switch reloads with reason "restore").
     if (!lines.length) {
-      if (reason === "switch" || reason === "open") this._setNotice(null);
+      this._setNotice(null);
       return;
     }
     const from = previous ? `${projectTitle(s.index, previous.project)} ${previous.ref.id}` : "";
