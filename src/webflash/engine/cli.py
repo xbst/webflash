@@ -365,10 +365,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 # ── inspect ──────────────────────────────────────────────────────────
 
 def cmd_inspect(args: argparse.Namespace) -> int:
+    import struct
     from .inspect import InspectError, format_report, inspect
     try:
         info = inspect(Path(args.file), Path(args.ld) if args.ld else None)
-    except (OSError, InspectError, ValueError) as e:
+    except (OSError, InspectError, ValueError, struct.error, IndexError) as e:
         return _error(e)
     if args.json:
         safe = {k: v for k, v in info.items() if k != "data"}

@@ -31,6 +31,11 @@ def _c_string(data: bytes, offset: int) -> str:
     return data[offset:end if end >= 0 else len(data)].decode("utf-8", errors="replace")
 
 
+def _need(data: bytes, offset: int, size: int, what: str) -> None:
+    if offset + size > len(data):
+        raise InspectError(f"truncated ELF ({what} at offset {offset} is beyond the end of the file)")
+
+
 def parse_elf(data: bytes) -> dict:
     """An ELF32 little-endian file: header fields, program headers, sections
     (name, address, size, flags, type) and the symbols the linker scripts and
@@ -41,17 +46,26 @@ def parse_elf(data: bytes) -> dict:
         raise InspectError("only 32-bit little-endian ELF files are supported")
     (e_type, e_machine, _e_version, e_entry, e_phoff, e_shoff, e_flags, _e_ehsize, e_phentsize, e_phnum,
      e_shentsize, e_shnum, e_shstrndx) = struct.unpack_from("<HHIIIIIHHHHHH", data, 16)
+    if e_phnum and e_phentsize < 32:
+        raise InspectError(f"malformed ELF (program header entries of {e_phentsize} bytes, at least 32 expected)")
+    if e_shnum and e_shentsize < 40:
+        raise InspectError(f"malformed ELF (section header entries of {e_shentsize} bytes, at least 40 expected)")
     segments = []
     for n in range(e_phnum):
         off = e_phoff + n * e_phentsize
+        _need(data, off, 32, f"program header {n}")
         p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align = struct.unpack_from("<IIIIIIII", data, off)
+        _need(data, p_offset, p_filesz, f"the contents of program header {n}")
         segments.append({"type": p_type, "offset": p_offset, "vaddr": p_vaddr, "paddr": p_paddr,
                          "filesz": p_filesz, "memsz": p_memsz, "flags": p_flags, "align": p_align})
     raw_sections = []
     for n in range(e_shnum):
         off = e_shoff + n * e_shentsize
+        _need(data, off, 40, f"section header {n}")
         (sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size, sh_link, sh_info,
          _sh_addralign, sh_entsize) = struct.unpack_from("<IIIIIIIIII", data, off)
+        if sh_type not in (0, SHT_NOBITS):
+            _need(data, sh_offset, sh_size, f"the contents of section {n}")
         raw_sections.append({"name_off": sh_name, "type": sh_type, "flags": sh_flags, "addr": sh_addr,
                              "offset": sh_offset, "size": sh_size, "link": sh_link, "info": sh_info,
                              "entsize": sh_entsize})
@@ -67,6 +81,8 @@ def parse_elf(data: bytes) -> dict:
     for s in raw_sections:
         if s["type"] != SHT_SYMTAB or s["entsize"] == 0:
             continue
+        if s["entsize"] < 16:
+            raise InspectError(f"malformed ELF (symbol table entries of {s['entsize']} bytes, at least 16 expected)")
         strtab = raw_sections[s["link"]] if s["link"] < len(raw_sections) else None
         strings = data[strtab["offset"]:strtab["offset"] + strtab["size"]] if strtab else b""
         for n in range(s["size"] // s["entsize"]):
@@ -177,15 +193,22 @@ def parse_ihex(text: str) -> list[dict]:
     """Intel HEX records 00, 01, 02, 04 and 05 into contiguous segments."""
     segments: list[dict] = []
     upper = 0
-    for raw in text.splitlines():
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line.startswith(":"):
             continue
-        rec = bytes.fromhex(line[1:])
+        try:
+            rec = bytes.fromhex(line[1:])
+        except ValueError:
+            rec = b""
+        if len(rec) < 5 or len(rec) != 5 + rec[0]:
+            raise InspectError(f"line {number}: malformed Intel HEX record {line!r}")
         if sum(rec) & 0xFF:
-            raise InspectError(f"Intel HEX checksum error in {line}")
+            raise InspectError(f"line {number}: Intel HEX checksum error in {line}")
         length, addr, kind = rec[0], (rec[1] << 8) | rec[2], rec[3]
         payload = rec[4:4 + length]
+        if kind in (0x02, 0x04) and length < 2:
+            raise InspectError(f"line {number}: malformed Intel HEX record {line!r}")
         if kind == 0x04:
             upper = ((payload[0] << 8) | payload[1]) << 16
         elif kind == 0x02:
@@ -205,6 +228,13 @@ def inspect(path: Union[str, Path], ld_path: Optional[Path] = None) -> dict:
     """Everything ``webflash inspect`` shows for a firmware file."""
     path = Path(path)
     data = path.read_bytes()
+    try:
+        return _inspect(path, data, ld_path)
+    except ValueError as e:
+        raise InspectError(f"{path.name}: {e}") from e
+
+
+def _inspect(path: Path, data: bytes, ld_path: Optional[Path]) -> dict:
     suffix = path.suffix.lower()
     info: dict = {"file": path.name, "size": len(data), "kind": suffix.lstrip(".") or "bin"}
     if data[:4] == b"\x7fELF":

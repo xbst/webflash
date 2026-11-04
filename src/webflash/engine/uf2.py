@@ -181,6 +181,8 @@ def uf2_blocks(data: bytes) -> list[dict]:
         end = struct.unpack_from("<I", data, off + 508)[0]
         if m0 != UF2_MAGIC_START0 or m1 != UF2_MAGIC_START1 or end != UF2_MAGIC_END:
             continue
+        if size > 476:
+            raise Uf2Error(f"UF2 block {off // 512} claims {size} bytes (at most 476)")
         blocks.append({"address": addr, "size": size, "block": block, "blocks": blocks_total,
                        "family": family if flags & UF2_FLAG_FAMILY_ID_PRESENT else None,
                        "data": data[off + 32:off + 32 + size]})
