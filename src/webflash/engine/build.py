@@ -58,7 +58,7 @@ class Build:
     """
 
     def __init__(self, tree: Path, config_text: str, *, toolchain: Any, version: str, jobs: int = 1,
-                 out: Optional[Path] = None, log: Optional[Callable[[str], None]] = None,
+                 log: Optional[Callable[[str], None]] = None,
                  progress: Optional[ProgressFn] = None, lto: str = "on", goals: Optional[list[str]] = None,
                  env: Optional[dict[str, str]] = None, trace: Optional[Callable[[list[str]], None]] = None,
                  cancelled: Optional[Callable[[], bool]] = None) -> None:
@@ -67,7 +67,6 @@ class Build:
         self.toolchain = toolchain
         self.version = version
         self.jobs = max(1, int(jobs))
-        self.out = Path(out) if out else self.tree / "out"
         self._log_fn = log
         self._trace_fn = trace
         self._cancelled_fn = cancelled
@@ -128,8 +127,9 @@ class Build:
             # the shim answers with the snapshot's version, so the firmware
             # reports it as a clean build would.
             marker.write_bytes(b"# WebFlash marker: the build engine answers 'git describe' itself\n")
-        if self.out.exists():
-            shutil.rmtree(self.out)
+        out = self.tree / "out"
+        if out.exists():
+            shutil.rmtree(out)
 
     def _make_env(self) -> dict[str, str]:
         env = dict(self.env)
@@ -199,7 +199,7 @@ class Build:
         names = ev.expand("$(target-y)").split()
         wanted = list(dict.fromkeys(names))
         for extra in ("klipper.dict", "defconfig", "katapult.withclear.uf2"):
-            path = self.out / extra
+            path = self.tree / "out" / extra
             if path.is_file():
                 wanted.append(f"out/{extra}")
         outputs: dict[str, bytes] = {}
