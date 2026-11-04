@@ -331,8 +331,17 @@ class Pair:
         def ids_of(session, items) -> set:
             return {session.node_id(n) for item in items for n in item.nodes}
 
-        fw_items = [e.fw for e in self.shared]
-        k_items = [e.katapult for e in self.shared]
+        def shown(session, item) -> bool:
+            node = _prompt_node(item)
+            entry = nodes.get(session.node_id(node)) if node is not None else None
+            return bool(entry and entry["visible"])
+
+        # A shared option the firmware hides but Katapult shows stays in
+        # Katapult's group: an RP2040 Klipper behind Katapult has no stage-2
+        # bootloader, so only Katapult's "Flash chip" counts.
+        layout = [e for e in self.shared if shown(self.fw, e.fw) or not shown(self.katapult, e.katapult)]
+        fw_items = [e.fw for e in layout]
+        k_items = [e.katapult for e in layout]
         low = self.fw.kconf.syms.get("LOW_LEVEL_OPTIONS")
         shared_fw_nodes = []
         if low is not None and _prompted(low):
@@ -341,7 +350,7 @@ class Pair:
         k_low = self.katapult.kconf.syms.get("LOW_LEVEL_OPTIONS")
         if k_low is not None:
             k_items.append(k_low)
-        shared_fw_nodes += [_prompt_node(e.fw) for e in self.shared]
+        shared_fw_nodes += [_prompt_node(e.fw) for e in layout]
         removed = ids_of(self.fw, fw_items) | ids_of(self.katapult, k_items)
 
         # A removed node keeps its own children; every other node loses the
