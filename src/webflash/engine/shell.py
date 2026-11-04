@@ -230,7 +230,7 @@ class Shell:
                   make: Optional["Evaluator"] = None) -> CommandResult:
         """Run one recipe line. In a dry run only ``$(MAKE)`` lines are run
         (as GNU make does), and the sub-make prints instead of building."""
-        if line.lstrip(" 	").startswith("#"):
+        if line.lstrip(" \t").startswith("#"):
             # A comment line of a recipe: sh ignores it.
             return CommandResult(0)
         try:
