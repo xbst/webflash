@@ -10,10 +10,12 @@
 // through webflash_js.cancelled() at its next check, so it only lands
 // between steps that await.
 //
-// "boot" comes first, with {payloadUrl, assetsOrigin, pyodideBase?}: the URL
-// of webflash.zip (the caller resolves it, since this module is also loaded
-// from /engine/v1/ by generated pages), where the toolchain and the sources
-// come from ("" for the page's own origin), and optionally another Pyodide.
+// "boot" comes first, with {payloadUrl, assetsOrigin, embedded?,
+// pyodideBase?}: the URL of webflash.zip (the caller resolves it, since this
+// module is also loaded from /engine/v1/ by generated pages), where the
+// toolchain and the sources come from ("" for the page's own origin), true
+// for a generated page (whose reader gets no advice meant for whoever serves
+// the site), and optionally another Pyodide.
 // Every other method is either one of this worker's own (fetchBlob,
 // loadSources: downloads, which JavaScript does better than Python) or a
 // function of site/py/bridge.py, called with params as its arguments:
@@ -102,7 +104,15 @@ function pyProgress(phase, detail, done, total) {
            done == null ? null : Number(done), total == null ? null : Number(total));
 }
 
-async function boot({ payloadUrl, assetsOrigin = "", pyodideBase = DEFAULT_PYODIDE_BASE } = {}) {
+// A generated page loads the payload from the WebFlash site, so a failure is
+// that site's, usually for a moment, and nothing its reader can fix.
+function siteUnreachable(payloadUrl, why) {
+  let host = payloadUrl;
+  try { host = new URL(payloadUrl).host; } catch (e) { /* keep the URL as it is */ }
+  return new Error(`Could not reach the WebFlash site (${host}, ${why}). Try again in a moment.`);
+}
+
+async function boot({ payloadUrl, assetsOrigin = "", embedded = false, pyodideBase = DEFAULT_PYODIDE_BASE } = {}) {
   if (!payloadUrl) throw new Error("boot needs the payload's URL");
   progress("runtime");
   let loadPyodide;
@@ -117,8 +127,15 @@ async function boot({ payloadUrl, assetsOrigin = "", pyodideBase = DEFAULT_PYODI
   py = await loadPyodide({ indexURL: pyodideBase });
 
   progress("package");
-  const resp = await fetch(payloadUrl, { cache: "no-store" });
+  let resp;
+  try {
+    resp = await fetch(payloadUrl, { cache: "no-store" });
+  } catch (e) {
+    if (embedded) throw siteUnreachable(payloadUrl, "no answer");
+    throw e;
+  }
   if (!resp.ok) {
+    if (embedded) throw siteUnreachable(payloadUrl, `HTTP ${resp.status}`);
     throw new Error(
       `Could not load ${payloadUrl} (HTTP ${resp.status}). If you are serving ` +
       "the site yourself, run python -m webflash.payload <site folder>/webflash.zip " +

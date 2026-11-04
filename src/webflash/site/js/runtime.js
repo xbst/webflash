@@ -144,6 +144,8 @@ export function ready() {
     const params = {
       payloadUrl: _settings.payloadUrl || new URL(PAYLOAD_NAME, document.baseURI).href,
       assetsOrigin: assetsBase(),
+      // Only a generated page names its payload (configure()).
+      embedded: Boolean(_settings.payloadUrl),
     };
     _boot = post("boot", [params]).then((about) => {
       _about = about;
