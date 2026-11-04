@@ -31,9 +31,10 @@
   <header class="top">
     <span class="brand"><span class="brand-mark" aria-hidden="true"></span>WebFlash</span>
     <span class="status-wrap">
-      <button type="button" class="status-chip" id="status-chip" aria-expanded="false" aria-controls="status-pop" aria-live="polite">
+      <button type="button" class="status-chip" id="status-chip" aria-expanded="false" aria-controls="status-pop">
         <span class="dot idle" aria-hidden="true"></span><span class="chip-text">Not loaded</span>
       </button>
+      <span class="sr-only" id="status-live" role="status" aria-live="polite"></span>
       <div class="status-pop" id="status-pop" role="group" aria-label="What is loaded" hidden>
         <div class="status-row">
           <span class="pill" id="status-python">Python</span>

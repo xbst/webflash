@@ -126,7 +126,7 @@ function setupRuntimeStatus() {
   mountStatusChip({
     chip: $("status-chip"), popover: $("status-pop"),
     pills: [$("status-python"), $("status-sources"), $("status-toolchain")],
-    retry: $("status-python-retry"), onRetry: retry,
+    retry: $("status-python-retry"), onRetry: retry, live: $("status-live"),
   });
 }
 

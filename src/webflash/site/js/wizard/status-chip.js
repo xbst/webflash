@@ -35,12 +35,25 @@ export function chipSummary(pills) {
 }
 
 /**
- * Wire the chip (button), its popover and the pills inside it. onRetry
- * is Python's Try again.
+ * What a screen reader hears of the chip: its state, and what loads by
+ * name, never how far ("Loading Sources", not "Sources: 45%").
  */
-export function mountStatusChip({ chip, popover, pills, retry = null, onRetry = null }) {
+export function chipAnnouncement(pills) {
+  const sum = chipSummary(pills);
+  if (sum.state !== "busy") return sum.text;
+  const busy = pills.find((p) => p.state === "busy");
+  return `Loading ${busy.name}`;
+}
+
+/**
+ * Wire the chip (button), its popover and the pills inside it. onRetry
+ * is Python's Try again; live, a polite live region, hears the chip's
+ * changes of state (the chip's own text follows every percent).
+ */
+export function mountStatusChip({ chip, popover, pills, retry = null, onRetry = null, live = null }) {
   const label = chip.querySelector(".chip-text");
   const dot = chip.querySelector(".dot");
+  let heard = null;
 
   const read = () => pills.map((pill) => ({
     name: NAMES[pill.id] || pill.id,
@@ -61,6 +74,10 @@ export function mountStatusChip({ chip, popover, pills, retry = null, onRetry = 
       if (detail) detail.textContent = p.title;
     }
     if (retry) retry.hidden = !list.some((p) => p.name === "Python" && p.state === "error");
+    // The first state is the page's own; the changes after it are announced.
+    const say = chipAnnouncement(list);
+    if (live && heard !== null && say !== heard) live.textContent = say;
+    heard = say;
   };
 
   const observer = new MutationObserver(render);

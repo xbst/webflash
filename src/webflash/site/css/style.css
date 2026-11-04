@@ -178,6 +178,11 @@ button.icon-btn { font-weight: 600; }
 /* The status chip and its popover, which holds one pill per thing the site
    downloads (Python, the sources, the compiler). */
 .status-wrap { position: relative; display: inline-flex; margin-right: 4px; }
+/* Read by screen readers, never shown: the chip's changes of state. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 .status-chip {
   display: inline-flex;
   align-items: center;
