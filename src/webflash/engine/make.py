@@ -361,8 +361,9 @@ class Evaluator:
                     body = body + "\n" + (nxt[1:] if nxt.startswith("\t") else nxt)
                 i += 1
                 if all(c[0] for c in cond):
-                    stripped = body.strip()
-                    if stripped and not stripped.startswith("#"):
+                    # A "#" line stays a recipe line: GNU make echoes it and
+                    # hands it to the shell, which ignores it.
+                    if body.strip():
                         current_rule.recipe.append(RecipeLine(body, fname, lineno))
                 continue
             # A makefile line: join continuations, condensing the whitespace.
@@ -1140,6 +1141,9 @@ class Evaluator:
                 always = True
             if dry_run or not silent:
                 self.transcript.append(text)
+            if text.startswith("#"):
+                # A comment for the shell: echoed, never run.
+                continue
             if dry_run and not always:
                 continue
             self.commands.append(text)

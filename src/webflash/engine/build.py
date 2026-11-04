@@ -167,6 +167,9 @@ class Build:
                 continue
             if not silent:
                 self.log(text)
+            if text.startswith("#"):
+                # A comment for the shell: echoed, never run.
+                continue
             result = await shell.run(text, env, where=where, make=ev)
             self.commands.append(list(result.argv) if result.argv else text.split())
             if result.argv and self._trace_fn:
