@@ -732,7 +732,11 @@ export class FirmwareSection {
       if (changed !== "sources" || st.state !== "loading") return;
       if (st.phase === "kconfig") what("reading the Kconfig files");
       else if (st.phase === "extract") what("unpacking the sources");
-      else if (Number.isFinite(st.total) && st.total > 0) row.progress(st.done || 0, st.total);
+      else if (Number.isFinite(st.total) && st.total > 0) {
+        row.progress(st.done || 0, st.total);
+        // The sources are in; they unpack once Python is up.
+        if ((st.done || 0) >= st.total && !runtime.isReady()) what("starting Python");
+      }
     });
     let ok;
     try {

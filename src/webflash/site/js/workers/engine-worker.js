@@ -49,6 +49,7 @@ const PKG_DIR = `${ROOT_DIR}/pkg`;
 let py = null;
 let bridge = null;
 let booting = null;
+let booted = false;
 let toBytes = null;
 
 // The call whose code is running (best effort once Python awaits: progress
@@ -163,6 +164,7 @@ if "${PKG_DIR}" not in sys.path:
   bridge = py.pyimport("bridge");
   toBytes = py.runPython("lambda data: data.to_bytes()");
   const about = JSON.parse(bridge.init(assetsOrigin));
+  booted = true;
   return { ...about, pyodide: py.version };
 }
 
@@ -236,9 +238,13 @@ const OWN = {
   async loadSources(id, [project, ref, url, size = null]) {
     const label = `${project} ${ref && ref.id ? ref.id : ""}`.trim();
     const blob = await fetchBlob(url, { size, onProgress: (done, total) => progress("sources", label, done, total, id) });
-    progress("extract", label, null, null, id);
+    // "extract" only once Python is up: until then the page says it is
+    // starting Python, and the gunzip runs while the boot finishes.
+    const waiting = !booted;
+    if (!waiting) progress("extract", label, null, null, id);
     const tar = await gunzip(blob.bytes);
     await booting;
+    if (waiting) progress("extract", label, null, null, id);
     const out = JSON.parse(await callBridge("load_sources", [project, JSON.stringify(ref), tar]));
     return JSON.stringify({ ...out, size: blob.size, cached: blob.cached });
   },

@@ -77,10 +77,13 @@ function setupRuntimeStatus() {
     const st = session.sources;
     if (st.state === "loading") {
       const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
+      // A download that finished before Python is up waits for it.
+      const waiting = pct === 100 && !runtime.isReady();
       const what = st.phase === "extract" ? "unpacking" : st.phase === "kconfig" ? "reading Kconfig"
-        : pct !== null ? `${pct}%` : "loading";
+        : waiting ? "waiting for Python" : pct !== null ? `${pct}%` : "loading";
       pillState(sources, "busy", `Sources: ${what}`, `${st.detail}: ${st.phase === "kconfig" ? "loading the Kconfig files"
-        : st.phase === "extract" ? "unpacking the sources" : `downloading${st.total ? ` ${formatBytes(st.total)}` : ""}`}…`);
+        : st.phase === "extract" ? "unpacking the sources" : waiting ? "downloaded, waiting for the Python runtime"
+        : `downloading${st.total ? ` ${formatBytes(st.total)}` : ""}`}…`);
     } else if (st.state === "ready") {
       pillState(sources, "ready", "Sources", `${st.detail}${st.ref ? ` (${st.ref.describe})` : ""}: ` +
         `${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ", downloaded"}`);
@@ -260,7 +263,7 @@ async function renderStart() {
   if (st.state === "loading") {
     const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
     const what = st.phase === "extract" ? "Unpacking the sources…" : st.phase === "kconfig" ? "Reading the Kconfig files…"
-      : !runtime.isReady() ? "Starting the Python runtime and downloading the sources…"
+      : !runtime.isReady() ? (pct === 100 ? "Starting the Python runtime…" : "Starting the Python runtime and downloading the sources…")
       : `Downloading the sources${pct !== null ? ` (${pct}%)` : ""}…`;
     el.innerHTML = `<p class="kc-loading"><span class="spinner" aria-hidden="true"></span>${esc(st.detail)}: ${esc(what)}</p>` +
       (st.total ? `<progress max="${st.total}" value="${st.done || 0}"></progress>` : "");
