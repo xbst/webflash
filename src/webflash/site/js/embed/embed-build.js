@@ -92,7 +92,7 @@ export class FirmwareFlow {
     this.initial = initialPicks(config);
     this.picks = { ...this.initial };
     this.choices = new Map();       // setup index -> Map(option symbol -> value): the reader's choices
-    this.optionErrors = new Map();  // option symbol -> why the engine refused the value
+    this.optionErrors = new Map();  // setup index -> Map(option symbol -> why the value was refused)
     this.indexError = "";
     this.started = false;           // Next (or Change) agreed to the downloads
     this.dirty = false;             // the engine is behind the picks or the choices
@@ -146,6 +146,12 @@ export class FirmwareFlow {
   choicesFor(i = this.picks.setupIndex) {
     if (!this.choices.has(i)) this.choices.set(i, new Map());
     return this.choices.get(i);
+  }
+
+  /** Why an option's value was refused, by symbol, for a setup (default: the one picked). */
+  errorsFor(i = this.picks.setupIndex) {
+    if (!this.optionErrors.has(i)) this.optionErrors.set(i, new Map());
+    return this.optionErrors.get(i);
   }
 
   /** The options the reader sets for the setup picked. */
@@ -263,7 +269,8 @@ export class FirmwareFlow {
    */
   async setOption(option, value) {
     const choices = this.choicesFor();
-    this.optionErrors.delete(option.symbol);
+    const errors = this.errorsFor();
+    errors.delete(option.symbol);
     const base = optionModel(option, this.baseDefconfig());
     if (value === "" || (base.known && isCurrent(base, value))) choices.delete(option.symbol);
     else choices.set(option.symbol, value);
@@ -275,7 +282,7 @@ export class FirmwareFlow {
         try {
           await c.set(model.set, value);
         } catch (e) {
-          this.optionErrors.set(option.symbol, runtime.pythonMessage(e));
+          errors.set(option.symbol, runtime.pythonMessage(e));
         }
       }
     } else if (this.started) {
@@ -376,6 +383,7 @@ export class FirmwareFlow {
   async _applyChoices() {
     const s = this.session;
     const left = new Map(this.choicesFor());
+    const errors = this.errorsFor();
     let applied = true;
     while (applied && left.size) {
       applied = false;
@@ -388,10 +396,10 @@ export class FirmwareFlow {
         if (isCurrent(model, value)) continue;
         try {
           await this.configurator.set(model.set, value);
-          this.optionErrors.delete(option.symbol);
+          errors.delete(option.symbol);
           applied = true;
         } catch (e) {
-          this.optionErrors.set(option.symbol, runtime.pythonMessage(e));
+          errors.set(option.symbol, runtime.pythonMessage(e));
         }
       }
     }
@@ -719,7 +727,7 @@ export class FirmwareFlow {
     }
     const [label, control, noteEl, helpEl] = row.children;
     label.textContent = model.label;
-    const error = this.optionErrors.get(option.symbol) || "";
+    const error = this.errorsFor().get(option.symbol) || "";
     const shows = live || model.locked;
     const enabled = shows ? model.enabled : true;
     noteEl.hidden = !(error || (shows && model.note));
@@ -759,7 +767,7 @@ export class FirmwareFlow {
         input.addEventListener("change", () => {
           const checked = checkNumber({ type: input.dataset.type, range: input.dataset.range ? JSON.parse(input.dataset.range) : null }, input.value);
           if (checked.error) {
-            this.optionErrors.set(option.symbol, checked.error);
+            this.errorsFor().set(option.symbol, checked.error);
             this.renderOptions();
             return;
           }
