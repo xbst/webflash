@@ -42,6 +42,10 @@ export const DFU_PROTOCOL_DFU_MODE = 0x02;
 export const DT_DFU_FUNCTIONAL = 0x21;
 export const DEFAULT_TRANSFER_SIZE = 2048;    // when the functional descriptor cannot be read; the F4 ROMs say 2048, the G0B1 ROM 1024
 export const DFU_TIMEOUT_MS = 5000;
+// How long one step (an address set, a page erase, a write) may keep the
+// bootloader busy: an ST ROM erases its largest sector (128 KiB on an F4 or
+// F7) in a few seconds, so a device still busy after this is stuck.
+export const DFU_SETTLE_MS = 30000;
 
 const STATE_NAMES = Object.fromEntries(Object.entries(DFU_STATE).map(([k, v]) => [v, k]));
 const STATUS_NAMES = Object.fromEntries(Object.entries(DFU_STATUS).map(([k, v]) => [v, k]));
@@ -124,12 +128,14 @@ export function parseFunctionalDescriptor(bytes) {
 export class DfuDevice {
   /**
    * @param {import("./usb.js").UsbDevice} usb an opened or closed UsbDevice
-   * @param {{altSetting?: number|null, log?: Function}} options altSetting picks
-   *        the alternate when no name says "Internal Flash"
+   * @param {{altSetting?: number|null, log?: Function, settleMs?: number}} options
+   *        altSetting picks the alternate when no name says "Internal Flash";
+   *        settleMs bounds how long one step may stay busy
    */
-  constructor(usb, { altSetting = null, log = null } = {}) {
+  constructor(usb, { altSetting = null, log = null, settleMs = DFU_SETTLE_MS } = {}) {
     this.usb = usb;
     this.altSetting = altSetting;
+    this.settleMs = settleMs;
     this.logFn = log;
     this.transferSize = DEFAULT_TRANSFER_SIZE;
     this.memoryMap = null;
@@ -259,11 +265,23 @@ export class DfuDevice {
     if (state !== DFU_STATE.dfuIDLE) fail("protocol", `The bootloader did not return to idle (it is in ${stateName(state)}).`);
   }
 
-  /** Poll GETSTATUS, sleeping the reported time, until the state leaves the busy states. */
-  async pollUntilSettled() {
+  /**
+   * Poll GETSTATUS, sleeping the reported time, until the state leaves the
+   * busy states. A device still busy after settleMs fails with a "timeout"
+   * naming the step (what), after an attempt to bring it back to idle.
+   */
+  async pollUntilSettled(what = "command") {
+    const deadline = Date.now() + this.settleMs;
     for (;;) {
       const st = await this.getStatus();
       if (st.state === DFU_STATE.dfuDNBUSY || st.state === DFU_STATE.dfuDNLOAD_SYNC || st.state === DFU_STATE.dfuMANIFEST_SYNC) {
+        if (Date.now() >= deadline) {
+          try { await this.abortToIdle(); } catch (e) { /* it is stuck; the error below says so */ }
+          fail("timeout", `The bootloader stayed busy (${stateName(st.state)}) for over ${Math.round(this.settleMs / 1000)} s during the ${what}.`, {
+            fix: "Unplug the board, put it back in its bootloader and click Connect, then flash again.",
+            details: st,
+          });
+        }
         await sleep(Math.max(st.pollTimeout, 1));
         continue;
       }
@@ -284,7 +302,7 @@ export class DfuDevice {
       await this._raiseStatus(first, what);
     }
     await sleep(Math.max(first.pollTimeout, 1));
-    const second = await this.pollUntilSettled();
+    const second = await this.pollUntilSettled(what);
     if (second.status !== DFU_STATUS.OK) await this._raiseStatus(second, what);
     if (command === DFUSE_CMD.READ_UNPROTECT) return;
     await this.abort();
@@ -315,7 +333,7 @@ export class DfuDevice {
   /** One data block at the address pointer: DNLOAD block 2 and the status poll. */
   async downloadChunk(data, blockNum = 2) {
     await this.download(data, blockNum);
-    const st = await this.pollUntilSettled();
+    const st = await this.pollUntilSettled("write");
     if (st.status !== DFU_STATUS.OK) await this._raiseStatus(st, "write");
     if (st.state !== DFU_STATE.dfuDNLOAD_IDLE && st.state !== DFU_STATE.dfuMANIFEST && st.state !== DFU_STATE.dfuIDLE) {
       fail("protocol", `Unexpected state ${stateName(st.state)} after a write.`);
@@ -400,8 +418,8 @@ export class DfuDevice {
  * progress(phase, done, total). Returns {verified, transferSize, device,
  * serial}.
  */
-export async function flashDfu(usb, image, { verify = true, leave = true, altSetting = null } = {}, { log = null, progress = null } = {}) {
-  const dfu = new DfuDevice(usb, { altSetting, log });
+export async function flashDfu(usb, image, { verify = true, leave = true, altSetting = null, settleMs = DFU_SETTLE_MS } = {}, { log = null, progress = null } = {}) {
+  const dfu = new DfuDevice(usb, { altSetting, log, settleMs });
   await dfu.open();
   if (image.isEmpty) fail("address", "The firmware image is empty.");
   // Every byte must land in writable flash before anything is erased.
