@@ -386,6 +386,8 @@ select option.unchecked { color: var(--warn); }
 .kc-start p { margin: 0 0 10px; }
 .kc-start code { color: var(--text); }
 .kc-start progress { max-width: 320px; }
+.kc-start .kc-start-compiler { display: flex; align-items: flex-start; font-size: 13px; line-height: 1.5; }
+.kc-start .kc-start-compiler input { margin-top: 3px; flex: none; }
 .kc-loading { display: flex; align-items: center; gap: 8px; }
 .kc-error-text { color: var(--danger); white-space: pre-wrap; }
 .kc-warn-text { color: var(--warn); }

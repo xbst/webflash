@@ -62,6 +62,9 @@ export class Builder {
     this.attached = -1;      // the generation the engine has ports to
     this.crash = "";         // why a worker died during a build
     this._discovering = null;
+    this._fetching = null;   // fetchToolchain's download, while it runs
+    this._fetchingId = null;
+    this._fetchListeners = new Set();
     this._abort = null;
   }
 
@@ -88,6 +91,38 @@ export class Builder {
       });
     }
     return this._discovering;
+  }
+
+  /**
+   * Download the release's files (through Cache Storage) without starting
+   * the workers, so the build that follows starts at once: the site does it
+   * while the user configures, a generated page while Python starts. Calls
+   * made while one runs share it; onProgress({done, total}) follows it in
+   * bytes. Resolves to {files, cached}.
+   */
+  fetchToolchain(tc, { onProgress = null } = {}) {
+    if (this.files && this.filesId === tc.id) return Promise.resolve({ files: this.files, cached: true });
+    if (onProgress) this._fetchListeners.add(onProgress);
+    if (!this._fetching || this._fetchingId !== tc.id) {
+      this._fetchingId = tc.id;
+      this._fetching = loadToolchainFiles(tc, {
+        onProgress: (p) => { for (const cb of this._fetchListeners) cb(p); },
+      }).then((got) => {
+        this.files = got.files;
+        this.filesId = tc.id;
+        this.cached = true;
+        return got;
+      }).finally(() => {
+        this._fetching = null;
+        this._fetchListeners.clear();
+      });
+    }
+    return this._fetching;
+  }
+
+  /** Whether fetchToolchain is downloading the release now. */
+  get fetching() {
+    return Boolean(this._fetching);
   }
 
   /** The bytes a release's files take ({files} from discover()). */
@@ -166,15 +201,13 @@ export class Builder {
     if (!this.files || this.filesId !== tc.id) {
       const size = Builder.size(tc);
       const row = step("Loading the compiler");
-      const got = await loadToolchainFiles(tc, {
+      // Joins a download fetchToolchain already started.
+      const got = await this.fetchToolchain(tc, {
         onProgress: ({ done, total }) => {
           row.progress(done, total);
           if (onDownload) onDownload(done, total);
         },
       });
-      this.files = got.files;
-      this.filesId = tc.id;
-      this.cached = true;
       row.finish(got.cached ? "from this browser's cache" : formatBytes(size));
       this._check();
     }

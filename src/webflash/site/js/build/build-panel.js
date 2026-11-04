@@ -96,6 +96,7 @@ export class BuildPanel {
       onCrash: () => this.renderPill(),
     });
     this.toolchainError = "";
+    this.consented = false;        // the Configure tab's first-visit box agreed to the build's downloads
     this.running = false;
     this.cancelled = false;
     this.last = null;              // {config, project, ref} of the last build that worked
@@ -183,6 +184,42 @@ export class BuildPanel {
     }
   }
 
+  /** For the Configure tab's first-visit box: {size} of the compiler when this browser does not have it yet, else null. */
+  async compilerToFetch() {
+    try {
+      const tc = await this.discover();
+      if ((this.builder.files && this.builder.filesId === tc.id) || this.builder.cached || this.builder.fetching) return null;
+      return { size: Builder.size(tc) };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Get the compiler ready while the user configures: the release's files
+   * into the cache, the workers left for the first build. The Configure
+   * tab's first-visit box asks for it (it lists the size), so the first
+   * build asks no more. A failure is left for the build, which says why.
+   */
+  async prefetch() {
+    this.consented = true;
+    try {
+      const tc = await this.discover();
+      if (this.running) return;
+      await this.builder.fetchToolchain(tc, {
+        onProgress: ({ done, total }) => {
+          if (this.running) return;
+          this.renderPill({
+            busy: true, text: `Toolchain: ${Math.round((100 * done) / (total || 1))}%`,
+            title: `downloading while you configure, ${formatBytes(done)} of ${formatBytes(total)}`,
+          });
+        },
+      });
+    } catch (e) { /* the build loads it again and says why */ } finally {
+      if (!this.running) this.renderPill();
+    }
+  }
+
   renderPill(state = null) {
     const pill = this.els.pill;
     if (!pill) return;
@@ -229,7 +266,7 @@ export class BuildPanel {
     try {
       list = await this.builder.downloads(tc, { project: s.project, ref: s.ref, libs: (s.plan && s.plan.libs) || [] });
     } catch (e) { /* the build lists what it loads anyway */ }
-    if (list.some((d) => !d.cached) && remembered(AUTO_KEY) !== "1") {
+    if (list.some((d) => !d.cached) && remembered(AUTO_KEY) !== "1" && !this.consented) {
       this.showStart(tc, list);
       return;
     }

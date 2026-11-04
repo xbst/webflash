@@ -286,6 +286,9 @@ async function renderStart() {
   const url = blobUrl(ref.core);
   const cached = await isCached(url);
   if (size === null) size = await headSize(url);
+  // The compiler, when this browser does not have it: it can download while
+  // the user configures, so the first build does not wait for it.
+  const compiler = buildPanel ? await buildPanel.compilerToFetch() : null;
   if (el.dataset.ref !== mine || session.sources.state !== "idle") return;
   const downloads = [];
   if (!runtime.isReady()) downloads.push("the Python runtime (about 7 MB, from cdn.jsdelivr.net, once per browser)");
@@ -296,8 +299,16 @@ async function renderStart() {
     `${ref.date ? ` (${esc(ref.date)})` : ""}.</p>` +
     (note ? `<p class="kc-warn-text">${esc(note)}</p>` : "") +
     `<p>This downloads ${downloads.map(esc).join(" and ")}. Nothing you configure leaves the browser.</p>` +
+    (compiler ? `<p><label class="check kc-start-compiler"><input type="checkbox" id="kconfig-start-compiler" checked> ` +
+      `Then download the compiler while I configure (${esc(formatBytes(compiler.size))}, kept in this browser's cache), ` +
+      `so the first build starts at once</label></p>` : "") +
     `<button class="primary" id="kconfig-start-btn">Load the configuration</button>`;
-  $("kconfig-start-btn").addEventListener("click", () => startConfigure("start"));
+  $("kconfig-start-btn").addEventListener("click", async () => {
+    const box = $("kconfig-start-compiler");
+    const compilerToo = Boolean(box && box.checked);
+    const ok = await startConfigure("start");
+    if (ok && compilerToo && buildPanel) buildPanel.prefetch();
+  });
 }
 
 // Whether the TOML is as it was last saved or opened, so a load that only

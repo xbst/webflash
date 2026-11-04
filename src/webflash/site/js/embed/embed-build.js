@@ -644,6 +644,10 @@ export class FirmwareSection {
     this.resetView();
     this.startClock(build ? "Building" : "Loading");
     this.render();
+    // The compiler downloads while Python starts and the sources load, rather
+    // than after them; prepare() below joins that download. A failure there
+    // is left to prepare(), which loads it again and says why.
+    if (build && !this.loaded) this.builder.discover().then((tc) => this.builder.fetchToolchain(tc)).catch(() => {});
     try {
       if (!this.loaded) await this.loadConfiguration();
       else await this.applyPending();
