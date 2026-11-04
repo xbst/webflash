@@ -16,7 +16,7 @@ import { METHODS, PROJECTS, PROJECT_TITLES } from "../state.js";
 import { esc } from "../dialogs.js";
 import { inferMethods } from "../flash/devices.js";
 import { KconfigTree, checkNumber } from "./kconfig-tree.js";
-import { versionOptions } from "./version-picker.js";
+import { mountVersionPicker } from "./version-picker.js";
 import { groupRefs } from "./sources.js";
 import {
   addSetup, retitleSetup, describeSetup, removeSetup, moveSetup, setSetupMethods, setupSummary, setupTitle,
@@ -79,7 +79,7 @@ export function behaviorLine(behavior) {
 
 // The version controls of one project's table ([firmware] or [katapult]).
 const versionControls = (p) =>
-  `<label class="form-row">Starts with<select id="${p}-version"></select></label>` +
+  `<div class="form-row"><span>Starts with</span><div class="opt-vp" id="${p}-version"></div></div>` +
   `<div class="form-row"><span>The reader may pick</span>` +
   `<div class="opt-checks" id="${p}-versions-mode">` +
   `<label class="check"><input type="radio" name="${p}-versions" value="all"> All</label>` +
@@ -109,6 +109,8 @@ export class OptionsPanel {
     this._adding = new Set();   // methods whose instructions box was opened but is still empty
     this._methodTarget = -1;    // whose methods the Flashing fold edits: -1 [flash], else a setup index
     this._configs = new Map();  // a setup's full .config, by project and defconfig, once it was configured
+    this._picks = new Map();    // a "Starts with" host → what a pick there does
+    this.pickers = new Map();   // a "Starts with" host → its version picker
     this._build();
     this._bind();
     this.render();
@@ -470,7 +472,7 @@ export class OptionsPanel {
   // ── Versions ───────────────────────────────────────────────────────
 
   _bindVersions({ select, mode, list, table, project, set, pick }) {
-    select.addEventListener("change", () => pick(select.value));
+    this._picks.set(select, pick);
     mode.addEventListener("change", () => {
       const m = mode.querySelector("input:checked").value;
       const t = table();
@@ -494,15 +496,28 @@ export class OptionsPanel {
     });
   }
 
-  // TODO(U07/U09): U04's mountVersionPicker (configure/version-picker.js)
-  // replaces the two "Starts with" selects once it lands.
+  // "Starts with" is U04's version picker (older commits, a pasted Mainsail
+  // version), made in its host on first use.
   _renderVersions({ select, mode, list }, t, project) {
-    const opts = this.session.index ? versionOptions(this.session.index, project, t.version) : { groups: [] };
-    const html = (opts.value === null ? `<option value="${esc(t.version)}">${esc(t.version)} (not in the index)</option>` : "") +
-      opts.groups.map((g) => `<optgroup label="${esc(g.label)}">${g.options.map((o) =>
-        `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("")}</optgroup>`).join("");
-    fill(select, html || `<option value="${esc(t.version)}">${esc(t.version)}</option>`);
-    select.value = t.version;
+    const opts = {
+      project, index: this.session.index || null, value: t.version, disabled: Boolean(this.session.locked),
+      label: `${PROJECT_TITLES[project] || project} version the card starts with`,
+    };
+    const picker = this.pickers.get(select);
+    if (!picker) {
+      const pick = this._picks.get(select);
+      // The renders a pick causes would set the picker back to the old
+      // version (dropping its "Closest kept" note) until the session has it.
+      const onChange = (v) => {
+        this._picking = true;
+        try { pick(v); } finally { this._picking = false; }
+        this.render();
+      };
+      this.pickers.set(select, mountVersionPicker(select, { ...opts, onChange }));
+    } else if (!this._picking) {
+      const o = picker.opts;
+      if (o.project !== opts.project || o.index !== opts.index || o.value !== opts.value || o.disabled !== opts.disabled) picker.update(opts);
+    }
 
     const m = Array.isArray(t.versions) ? "list" : t.versions || "all";
     for (const r of mode.querySelectorAll("input")) r.checked = r.value === m;

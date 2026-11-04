@@ -13,8 +13,8 @@
 // what that downloads and its size, from the sources index and the compiler's
 // manifest, or says everything is in this browser already.
 
-import { versionOptions } from "../configure/version-picker.js";
-import { blobUrl, formatBytes, projectTitle, resolveVersion, isChecked, uncheckedText } from "../configure/sources.js";
+import { mountVersionPicker } from "../configure/version-picker.js";
+import { blobUrl, formatBytes, resolveVersionAsync } from "../configure/sources.js";
 import { isCached } from "../workers/blob-cache.js";
 import * as runtime from "../runtime.js";
 
@@ -46,57 +46,24 @@ export function picksFor(project, katapult) {
   return { fw: project || "klipper", katapult: Boolean(katapult) };
 }
 
+const PROJECT_NAMES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult" };
+
 /**
- * Fill a version select (and its "unchecked" badge) for a project. The one
- * place the page calls versionOptions, for U04's mountVersionPicker to replace.
+ * Mount or update a version picker (U04's combobox: older commits, a pasted
+ * Mainsail version) in host. Returns the picker.
  */
-export function renderVersionSelect(select, badge, { index, error = "", project, version, busy = false }) {
-  select.replaceChildren();
-  select.title = "";
-  const noBadge = () => { if (badge) badge.hidden = true; };
-  if (!index) {
-    select.append(new Option(error ? "Versions unavailable" : "Loading versions…", ""));
-    select.disabled = true;
-    select.title = error || "Loading the list of versions…";
-    return noBadge();
-  }
-  const { groups, value } = versionOptions(index, project, version);
-  if (!groups.length) {
-    select.append(new Option(`No ${projectTitle(index, project)} versions`, ""));
-    select.disabled = true;
-    return noBadge();
-  }
-  for (const g of groups) {
-    const group = document.createElement("optgroup");
-    group.label = g.label;
-    for (const o of g.options) {
-      const opt = new Option(o.label, o.value);
-      if (o.title) opt.title = o.title;
-      if (o.unchecked) opt.className = "unchecked";
-      group.append(opt);
-    }
-    select.append(group);
-  }
-  if (value === null) {
-    // A version the index does not have (a TOML pinned to an old ref).
-    const missing = new Option(`${version} (not in the index)`, version);
-    missing.disabled = true;
-    select.prepend(missing);
-  }
-  select.value = version;
-  select.disabled = busy;
-  const resolved = resolveVersion(index, project, version);
-  select.title = resolved.ref ? `${resolved.ref.describe || resolved.ref.id}${resolved.note ? `\n${resolved.note}` : ""}` : resolved.error;
-  if (!badge) return;
-  const show = Boolean(resolved.ref) && !isChecked(resolved.ref);
-  badge.hidden = !show;
-  if (show) badge.title = `This snapshot ${uncheckedText(resolved.ref)}. It may still build.`;
+function renderPicker(picker, host, { index, project, version, busy, onChange }) {
+  const opts = { project, index: index || null, value: version, disabled: busy, label: `${PROJECT_NAMES[project] || project} version` };
+  if (!picker) return mountVersionPicker(host, { ...opts, onChange });
+  const o = picker.opts || {};
+  if (o.project !== opts.project || o.index !== opts.index || o.value !== opts.value || o.disabled !== opts.disabled) picker.update(opts);
+  return picker;
 }
 
 export class FirmwarePage {
   /**
-   * els: {fwButtons (the switch's buttons, data-fw), fwVersion, fwBadge,
-   * fwVersionRow, katapult (the checkbox), katVersion, katBadge,
+   * els: {fwButtons (the switch's buttons, data-fw), fwVersion (the
+   * version picker's host), fwVersionRow, katapult (the checkbox), katVersion,
    * katVersionRow, prebuilt, hint}. actions: {switchProject(project,
    * version?), switchVersion(version), loadKatapult(reason) (load
    * session.katapult once configuring has started), start() (load the
@@ -119,8 +86,8 @@ export class FirmwarePage {
 
     for (const b of els.fwButtons) b.addEventListener("click", () => this.pickFirmware(b.dataset.fw));
     els.katapult.addEventListener("change", () => this.pickKatapult(els.katapult.checked));
-    els.fwVersion.addEventListener("change", () => { if (els.fwVersion.value) actions.switchVersion(els.fwVersion.value); });
-    els.katVersion.addEventListener("change", () => this.pickKatapultVersion(els.katVersion.value));
+    this.fwPicker = null;
+    this.katPicker = null;
     session.on("change", ({ what }) => {
       if (["project", "open", "undo", "katapult", "setup"].includes(what)) this.sync();
       if (["index", "project", "version", "firmware", "ref", "open", "lock", "prebuilt", "sources", "undo",
@@ -233,13 +200,23 @@ export class FirmwarePage {
     }
 
     const index = s.index;
-    if (!prebuilt && this.fw !== "none") {
-      renderVersionSelect(e.fwVersion, e.fwBadge, { index, error: this.indexError, project: s.project, version: s.version, busy });
+    // While a picker's own pick reaches the session, the renders it causes
+    // would set it back to the old version (and drop its "Closest kept" note).
+    const picking = (fn) => (v) => {
+      this._picking = true;
+      try { fn(v); } finally { this._picking = false; }
+      this.render();
+    };
+    if (!prebuilt && this.fw !== "none" && s.project !== "katapult" && !this._picking) {
+      this.fwPicker = renderPicker(this.fwPicker, e.fwVersion, {
+        index, project: s.project, version: s.version, busy,
+        onChange: picking((v) => { if (v && v !== s.version) this.actions.switchVersion(v); }),
+      });
     }
-    if (!prebuilt && this.katapult) {
+    if (!prebuilt && this.katapult && !this._picking) {
       const version = s.project === "katapult" ? s.version : s.katapult ? s.katapult.version : this.katapultVersion;
-      renderVersionSelect(e.katVersion, e.katBadge, {
-        index, error: this.indexError, project: "katapult", version, busy,
+      this.katPicker = renderPicker(this.katPicker, e.katVersion, {
+        index, project: "katapult", version, busy, onChange: picking((v) => this.pickKatapultVersion(v)),
       });
     }
 
@@ -265,7 +242,9 @@ export class FirmwarePage {
     if (k) parts.push(["katapult", k.version, k.sources]);
     const sources = [];
     for (const [project, version, st] of parts) {
-      const { ref } = resolveVersion(s.index, project, version);
+      // An older commit's size is in its history file: wait for it.
+      const { ref } = await resolveVersionAsync(s.index, project, version);
+      if (mine !== this._hintCount) return;
       if (!ref) continue;
       const on = st.ref;
       const loaded = Boolean(on) && on.id === ref.id && ["loading", "ready"].includes(st.state);

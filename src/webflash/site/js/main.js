@@ -406,8 +406,8 @@ function setupAbout() {
 function setupFirmwarePage() {
   firmwarePage = new FirmwarePage(session, configurator, wizard, {
     fwButtons: [...document.querySelectorAll("[data-fw]")],
-    fwVersion: $("version-select"), fwBadge: $("version-badge"), fwVersionRow: $("fw-version-row"),
-    katapult: $("katapult-check"), katVersion: $("katapult-version"), katBadge: $("katapult-badge"),
+    fwVersion: $("fw-version"), fwVersionRow: $("fw-version-row"),
+    katapult: $("katapult-check"), katVersion: $("katapult-version"),
     katVersionRow: $("katapult-version-row"), prebuilt: $("fw-prebuilt"),
   }, {
     switchProject,

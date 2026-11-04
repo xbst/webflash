@@ -301,9 +301,9 @@ h3.sec { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; col
 .fw .name { font-weight: 500; color: var(--text); font-size: 14px; }
 .fw .sub { color: var(--text-dim); font-size: 12.5px; }
 .fw .check.name input { width: 15px; height: 15px; }
-.fw .ver { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
-.fw .ver label { color: var(--text-dim); font-size: 12.5px; min-width: 52px; }
-.fw .ver select { flex: 1; min-width: 0; text-overflow: ellipsis; }
+.fw .ver { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.fw .ver .ver-label { color: var(--text-dim); font-size: 12.5px; min-width: 52px; line-height: 32px; }
+.fw .ver .ver-picker { flex: 1; min-width: 0; }
 .seg2 { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
 .seg2 button { border: 0; border-radius: 0; padding: 6px 13px; background: none; }
 .seg2 button + button { border-left: 1px solid var(--border); }

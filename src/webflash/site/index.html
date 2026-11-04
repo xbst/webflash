@@ -75,9 +75,8 @@
               <button type="button" role="radio" data-fw="klipper">Klipper</button><button type="button" role="radio" data-fw="kalico">Kalico</button><button type="button" role="radio" data-fw="none">None</button>
             </span>
             <div class="ver" id="fw-version-row">
-              <label for="version-select">Version</label>
-              <select id="version-select" disabled><option value="latest">Loading versions…</option></select>
-              <span class="ref-badge" id="version-badge" hidden>unchecked</span>
+              <span class="ver-label" aria-hidden="true">Version</span>
+              <div class="ver-picker" id="fw-version"></div>
             </div>
           </div>
           <div class="fw">
@@ -87,9 +86,8 @@
             </div>
             <span></span>
             <div class="ver" id="katapult-version-row" hidden>
-              <label for="katapult-version">Version</label>
-              <select id="katapult-version" disabled></select>
-              <span class="ref-badge" id="katapult-badge" hidden>unchecked</span>
+              <span class="ver-label" aria-hidden="true">Version</span>
+              <div class="ver-picker" id="katapult-version"></div>
             </div>
           </div>
           <div class="alts">
