@@ -681,11 +681,23 @@ export function writeBoardToml(data) {
  * The TOML a "#toml=" fragment carries (what a generated page's link sends),
  * or null when the hash holds none. The data is base64url (RFC 4648 section
  * 5, without padding) of the UTF-8 text, as webflash's renderer writes it.
+ * Standard base64 (a link made with another tool) is read too, padded or not
+ * and with its + and / percent-encoded or not; any other character throws
+ * rather than cutting the TOML short.
  */
 export function tomlFromHash(hash) {
-  const m = /(?:^#|&)toml=([A-Za-z0-9_-]*)/.exec(hash || "");
+  const m = /(?:^#|&)toml=([^&]*)/.exec(hash || "");
   if (!m) return null;
-  let b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+  let data;
+  try {
+    data = decodeURIComponent(m[1]);
+  } catch {
+    throw new Error("it holds a broken percent escape.");
+  }
+  if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(data)) throw new Error("it holds characters that are not base64.");
+  if (/[+/]/.test(data) && /[_-]/.test(data)) throw new Error("it mixes the base64 and base64url alphabets.");
+  let b64 = data.replace(/=+$/, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (b64.length % 4 === 1) throw new Error("its base64 data has the wrong length.");
   while (b64.length % 4) b64 += "=";
   const bin = atob(b64);
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
