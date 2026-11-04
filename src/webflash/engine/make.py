@@ -180,8 +180,15 @@ _UNSUPPORTED_FUNCTIONS = {"file", "let", "intcmp", "guile"}
 
 _ASSIGN_OPS = ("::=", ":::=", ":=", "?=", "+=", "!=", "=")
 
+# GNU make's built-in .SUFFIXES list, which $* of an explicit rule's target
+# drops a suffix of.
+_DEFAULT_SUFFIXES = (
+    ".out .a .ln .o .c .cc .C .cpp .p .f .F .m .r .y .l .ym .yl .s .S .mod .sym .def .h"
+    " .info .dvi .tex .texinfo .texi .txinfo .w .ch .web .sh .elc .el"
+).split()
+
 _SPECIAL_TARGETS_IGNORED = {
-    ".SUFFIXES", ".PRECIOUS", ".SECONDARY", ".INTERMEDIATE", ".NOTINTERMEDIATE",
+    ".PRECIOUS", ".SECONDARY", ".INTERMEDIATE", ".NOTINTERMEDIATE",
     ".SECONDEXPANSION", ".IGNORE", ".SILENT", ".EXPORT_ALL_VARIABLES",
     ".NOTPARALLEL", ".ONESHELL", ".POSIX", ".LOW_RESOLUTION_TIME", ".WAIT",
 }
@@ -259,6 +266,7 @@ class Evaluator:
         self.explicit: dict[str, list[Rule]] = {}
         self.phony: set[str] = set()
         self.delete_on_error = False
+        self.suffixes: list[str] = list(_DEFAULT_SUFFIXES)
         self.default_goal: Optional[str] = None
         self.included: list[tuple[str, bool]] = []
         self.makefiles: list[str] = []
@@ -279,6 +287,7 @@ class Evaluator:
         self.explicit = {}
         self.phony = set()
         self.delete_on_error = False
+        self.suffixes = list(_DEFAULT_SUFFIXES)
         self.default_goal = None
         self.included = []
         self.makefiles = []
@@ -558,6 +567,14 @@ class Evaluator:
             return None
         if targets[0] == ".DELETE_ON_ERROR":
             self.delete_on_error = True
+            return None
+        if targets[0] == ".SUFFIXES":
+            # With no prerequisites the list is cleared; with some, they are
+            # appended to it.
+            if prereqs:
+                self.suffixes.extend(p for p in prereqs if p not in self.suffixes)
+            else:
+                self.suffixes = []
             return None
         if targets[0] in _SPECIAL_TARGETS_IGNORED:
             return None
@@ -1013,10 +1030,19 @@ class Evaluator:
             "<": prereqs[0] if prereqs else "",
             "^": " ".join(dict.fromkeys(prereqs)),
             "+": " ".join(prereqs),
-            "*": target.stem,
+            "*": target.stem if target.rule is not None and target.rule.pattern else self._suffix_stem(target.name),
             "?": " ".join(prereqs),
             "|": "",
         }
+
+    def _suffix_stem(self, name: str) -> str:
+        """$* of a target an explicit rule builds: the name without the first
+        .SUFFIXES entry it ends with (GNU make commands.c,
+        set_file_variables), else empty."""
+        for suffix in self.suffixes:
+            if len(name) > len(suffix) and name.endswith(suffix):
+                return name[:-len(suffix)]
+        return ""
 
     def _recipe_env(self) -> dict[str, str]:
         """The environment of a recipe or a ``$(shell)``: the exported
