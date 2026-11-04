@@ -243,6 +243,16 @@ export class Session {
   /** The setup Configure edits, or null ([prebuilt]). */
   get setup() { return this._t.setups[this.setupIndex] || null; }
 
+  // The index of the setup an engine answer was asked for (the setup's id
+  // when the request was made; null: the one edited now), or -1 when it is
+  // gone. The lone setup of a [config] table, which Add and a title rename,
+  // is still the first.
+  _setupIndexFor(id) {
+    if (id === null || id === undefined) return this.setupIndex;
+    const i = this._t.setups.findIndex((s) => s.id === id);
+    return i >= 0 ? i : id === CONFIG_SETUP_ID && this._t.setups.length ? 0 : -1;
+  }
+
   /** The firmware's last build (builds.fw). */
   get build() { return this.builds.fw; }
   set build(record) { this.builds = { ...this.builds, fw: record }; }
@@ -603,16 +613,27 @@ export class Session {
 
   /**
    * Katapult's .config and defconfig after a change; the defconfig becomes
-   * the configured setup's katapult defconfig. The undo point was taken
-   * before the change (checkpoint).
+   * the katapult defconfig of the setup the change was asked for (at: its
+   * id when the request was made; default the configured setup). An answer
+   * for a setup no longer edited keeps only its defconfig: what is shown is
+   * the edited setup's, which the configure code loads after it. The undo
+   * point was taken before the change (checkpoint).
    */
-  setKatapultConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
+  setKatapultConfig({ configText, defconfigText }, { origin = "engine", at = null } = {}) {
+    const i = this._setupIndexFor(at);
+    const setup = i >= 0 ? this._t.setups[i] : null;
+    if (!setup || typeof setup.katapult !== "string" || !this._t.katapult || this.project === "katapult") return;
+    if (i !== this.setupIndex) {
+      if (setup.katapult === defconfigText) return;
+      this._t.setups[i] = { ...setup, katapult: defconfigText };
+      this._changed("katapult-config", origin);
+      this._sync(origin);
+      return;
+    }
     const k = this.katapult;
-    if (!k || (k.configText === configText && k.defconfigText === defconfigText)) return;
+    if (k.configText === configText && k.defconfigText === defconfigText) return;
     this._katapultEngine = { ...this._katapultEngine, configText };
-    const at = this.setupIndex;
-    const setup = this._t.setups[at];
-    if (setup) this._t.setups[at] = { ...setup, katapult: defconfigText };
+    this._t.setups[i] = { ...setup, katapult: defconfigText };
     this._changed("katapult-config", origin);
     this._sync(origin);
   }
@@ -647,16 +668,27 @@ export class Session {
 
   /**
    * The configuration the engine reports after a change: the full .config
-   * and the defconfig, which becomes the configured setup's defconfig. The
-   * undo point was taken before the change (checkpoint).
+   * and the defconfig, which becomes the defconfig of the setup the change
+   * was asked for (at: its id when the request was made; default the
+   * configured setup). An answer for a setup no longer edited keeps only its
+   * defconfig (see setKatapultConfig). The undo point was taken before the
+   * change (checkpoint).
    */
-  setConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
-    const at = this.setupIndex;
-    const setup = this._t.setups[at];
+  setConfig({ configText, defconfigText }, { origin = "engine", at = null } = {}) {
+    const i = this._setupIndexFor(at);
+    if (i < 0) return;
+    const setup = this._t.setups[i];
+    if (i !== this.setupIndex) {
+      if (!setup || setup.defconfig === defconfigText) return;
+      this._t.setups[i] = { ...setup, defconfig: defconfigText };
+      this._changed("config", origin);
+      this._sync(origin);
+      return;
+    }
     const changed = configText !== this.configText || (setup && defconfigText !== setup.defconfig);
     if (!changed) return;
     this.configText = configText;
-    if (setup) this._t.setups[at] = { ...setup, defconfig: defconfigText };
+    if (setup) this._t.setups[i] = { ...setup, defconfig: defconfigText };
     this._changed("config", origin);
     this._sync(origin);
   }

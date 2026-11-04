@@ -350,8 +350,11 @@ export class OptionsPanel {
     const s = this.session;
     const e = this.el;
     e.add.addEventListener("click", () => {
+      // A load still in flight was asked for the setup copied: the copy loads after it.
+      const loading = s.sources.state === "loading" || Boolean(s.katapult && s.katapult.sources.state === "loading");
       const out = addSetup(s.tables(), s.setupIndex);
-      s.setSetups(out, { selected: out.selected });
+      const { reload } = s.setSetups(out, { selected: out.selected });
+      if (reload || loading) this.loadSetup(out.selected);
       this._note(`Added “${out.setups[out.selected].title}”; Configure now edits it.`);
       // Name it at once: the title is selected for typing over.
       const input = e.setups.querySelector(`li[data-i="${out.selected}"] [data-f="title"]`);

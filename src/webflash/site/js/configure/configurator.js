@@ -167,6 +167,10 @@ export class Configurator {
     this._indexPromise = null;
     // {project, ref, version} in the engine now, by slot (null: nothing loaded).
     this.slots = { fw: null, katapult: null };
+    // Loads of each slot still queued or running, and what the newest one
+    // loads ({project, version}): what a reapply made meanwhile follows.
+    this._loading = { fw: 0, katapult: 0 };
+    this._target = { fw: null, katapult: null };
     this.notice = null;         // what the last load or switch could not carry over (both slots')
     this._notices = { fw: null, katapult: null };
     this._noticeListeners = [];
@@ -194,8 +198,17 @@ export class Configurator {
     return Boolean(this.slots.fw && this.slots.katapult && this.slots.fw.project !== "katapult");
   }
 
+  // The setup the session edits now, by id: what an engine call is asked
+  // for, so its answer lands there even when another setup is picked before
+  // it comes (the session keeps an answer for another setup as its defconfig).
+  _setupId() {
+    const setup = this.session.setup;
+    return setup ? setup.id : null;
+  }
+
   // The session's side of a slot: what it configures and where the engine's
   // answers go. "fw" is the session's own fields, "katapult" session.katapult.
+  // setConfig takes the id of the setup the answer was asked for.
   _view(slot) {
     const s = this.session;
     if (slot === "fw") {
@@ -205,7 +218,7 @@ export class Configurator {
         title: (index, project = s.project) => projectTitle(index, project),
         setRef: (ref) => s.setRef(ref),
         setTree: (tree) => s.setTree(tree),
-        setConfig: (texts) => s.setConfig(texts),
+        setConfig: (texts, at) => s.setConfig(texts, { at }),
         setSources: (state, detail, extra) => s.setSources(state, detail, extra),
         setPlan: (plan) => s.setPlan(plan),
       };
@@ -218,7 +231,7 @@ export class Configurator {
       title: (index) => projectTitle(index, "katapult"),
       setRef: (ref) => s.setKatapultState({ ref }, "ref"),
       setTree: (tree) => s.setKatapultState({ tree }, "tree"),
-      setConfig: (texts) => s.setKatapultConfig(texts),
+      setConfig: (texts, at) => s.setKatapultConfig(texts, { at }),
       setSources: (state, detail = "", extra = {}) => s.setKatapultState({ sources: { state, detail, ...extra } }, "sources"),
       setPlan: (plan) => s.setKatapultState({ plan }, "plan"),
     };
@@ -356,65 +369,77 @@ export class Configurator {
     const generation = ++this._generations[slot];
     const s = this.session;
     const start = this._view(slot);
+    const at = this._setupId();
     if (carry === undefined) {
       if (slot === "katapult" && !start.defconfigText) carry = carryText("", s.tree);
       else carry = reason === "switch" ? carryText(start.defconfigText, start.tree) : start.defconfigText;
     }
+    this._loading[slot]++;
+    this._target[slot] = { project: start.project, version: start.version };
     return this._enqueue(async () => {
-      if (generation !== this._generations[slot]) return false;
-      const view = this._view(slot);
-      const project = view.project;
-      const version = view.version;
-      if (!project || !view.on) return false;
-      const previous = this.slots[slot];
-      // A new project starts with the low-level options shown (SPEC 3.5);
-      // Katapult has them on anyway, and hides the switch.
-      if (slot === "fw" && reason === "switch" && previous && previous.project !== project && project !== "katapult") {
-        carry = withLowLevel(carry);
-      }
-      // A branch's old bundles stay published for a short while only: a 404
-      // means the index this page holds is out of date, so read it again
-      // once and resolve the version anew.
-      for (let attempt = 0; ; attempt++) {
-        let index;
-        try {
-          index = await this.loadIndex({ fresh: attempt > 0 });
-        } catch (e) {
-          view.setSources("error", e.message);
-          return false;
-        }
-        // An older commit (a history id) waits for its project's history file.
-        const { ref, error, note } = await resolveVersionAsync(index, project, version);
-        if (!ref) {
-          view.setSources("error", error);
-          this._setNotice({ kind: "error", title: `This ${view.title(index)} version is not available`, lines: [error] }, slot);
-          return false;
-        }
-        const label = `${projectTitle(index, project)} ${ref.id}`;
-        const size = this.coreSize(ref);
-        view.setSources("loading", label, { ref, total: size, done: 0 });
-        let out;
-        try {
-          out = await runtime.loadSources(project, ref, blobUrl(ref.core), {
-            size, slot,
-            onProgress: ({ phase, done, total }) => {
-              if (generation !== this._generations[slot]) return;
-              if (phase === "sources") view.setSources("loading", label, { ref, done, total: total || size });
-              else if (phase === "extract") view.setSources("loading", label, { ref, phase: "extract" });
-            },
-          });
-        } catch (e) {
-          if (attempt === 0 && /\(HTTP 404\)/.test(e.message) && generation === this._generations[slot]) continue;
-          if (generation === this._generations[slot]) {
-            view.setSources("error", e.message, { ref });
-            this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] }, slot);
-          }
-          return false;
-        }
-        if (generation !== this._generations[slot]) return false;
-        return this._configure({ slot, generation, reason, carry, project, version, ref, label, note, previous, out });
+      try {
+        return await this._load({ slot, generation, reason, carry, at });
+      } finally {
+        this._loading[slot]--;
       }
     });
+  }
+
+  // The queued part of load.
+  async _load({ slot, generation, reason, carry, at }) {
+    if (generation !== this._generations[slot]) return false;
+    const view = this._view(slot);
+    const project = view.project;
+    const version = view.version;
+    if (!project || !view.on) return false;
+    const previous = this.slots[slot];
+    // A new project starts with the low-level options shown (SPEC 3.5);
+    // Katapult has them on anyway, and hides the switch.
+    if (slot === "fw" && reason === "switch" && previous && previous.project !== project && project !== "katapult") {
+      carry = withLowLevel(carry);
+    }
+    // A branch's old bundles stay published for a short while only: a 404
+    // means the index this page holds is out of date, so read it again
+    // once and resolve the version anew.
+    for (let attempt = 0; ; attempt++) {
+      let index;
+      try {
+        index = await this.loadIndex({ fresh: attempt > 0 });
+      } catch (e) {
+        view.setSources("error", e.message);
+        return false;
+      }
+      // An older commit (a history id) waits for its project's history file.
+      const { ref, error, note } = await resolveVersionAsync(index, project, version);
+      if (!ref) {
+        view.setSources("error", error);
+        this._setNotice({ kind: "error", title: `This ${view.title(index)} version is not available`, lines: [error] }, slot);
+        return false;
+      }
+      const label = `${projectTitle(index, project)} ${ref.id}`;
+      const size = this.coreSize(ref);
+      view.setSources("loading", label, { ref, total: size, done: 0 });
+      let out;
+      try {
+        out = await runtime.loadSources(project, ref, blobUrl(ref.core), {
+          size, slot,
+          onProgress: ({ phase, done, total }) => {
+            if (generation !== this._generations[slot]) return;
+            if (phase === "sources") view.setSources("loading", label, { ref, done, total: total || size });
+            else if (phase === "extract") view.setSources("loading", label, { ref, phase: "extract" });
+          },
+        });
+      } catch (e) {
+        if (attempt === 0 && /\(HTTP 404\)/.test(e.message) && generation === this._generations[slot]) continue;
+        if (generation === this._generations[slot]) {
+          view.setSources("error", e.message, { ref });
+          this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] }, slot);
+        }
+        return false;
+      }
+      if (generation !== this._generations[slot]) return false;
+      return this._configure({ slot, generation, reason, carry, at, project, version, ref, label, note, previous, out });
+    }
   }
 
   /** Load session.katapult's version beside the firmware (Katapult ticked). */
@@ -424,7 +449,7 @@ export class Configurator {
 
   // The second half of load: the sources are in the engine; read the
   // configuration into them and report.
-  async _configure({ slot, generation, reason, carry, project, version, ref, label, note, previous, out }) {
+  async _configure({ slot, generation, reason, carry, at, project, version, ref, label, note, previous, out }) {
     const view = this._view(slot);
     try {
       view.setSources("loading", label, { ref, phase: "kconfig" });
@@ -438,11 +463,11 @@ export class Configurator {
       this.slots[slot] = { project, ref, version };
       view.setRef(ref);
       view.setTree(tree);
-      view.setConfig({ configText, defconfigText });
+      view.setConfig({ configText, defconfigText }, at);
       view.setSources("ready", label, { ref, size: out.size, cached: out.cached });
       remember(AUTO_KEY, "1");
       // What the other tree refused shows under the shared options (session.katapult.notes).
-      await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
+      await this._afterPairing(slot, loaded && loaded.pair, { sync: true, at });
       this._report(slot, reason, { result, carry, configText, previous, ref, note });
       this.schedulePlan(0, slot);
       return true;
@@ -458,18 +483,18 @@ export class Configurator {
   // After an engine call in a paired session: bring the other slot's tree
   // (and texts) up to date from the answer's pair block, and keep the link
   // and the notes in session.katapult. With sync (after a load), the
-  // firmware's shared options are copied into Katapult first. Runs inside
-  // the queue. Returns the notes.
-  async _afterPairing(slot, pair, { sync = false } = {}) {
+  // firmware's shared options are copied into Katapult first. at is the
+  // setup the call was asked for. Runs inside the queue. Returns the notes.
+  async _afterPairing(slot, pair, { sync = false, at = null } = {}) {
     if (!this.paired) return [];
     let block = pair || null;
     if (sync) {
       const synced = await runtime.pairSync();
-      for (const s of ["fw", "katapult"]) await this._refresh(s, synced.trees[s], { plan: s !== slot });
+      for (const s of ["fw", "katapult"]) await this._refresh(s, synced.trees[s], { plan: s !== slot, at });
       block = { notes: synced.notes, offset: synced.offset, trees: {} };
     } else if (block) {
       for (const [other, tree] of Object.entries(block.trees || {})) {
-        if (other !== slot && this.slots[other]) await this._refresh(other, tree);
+        if (other !== slot && this.slots[other]) await this._refresh(other, tree, { at });
       }
     }
     if (!block) return [];
@@ -543,12 +568,13 @@ export class Configurator {
     return Boolean(this.slots[slot]) && view.on && view.sources.state === "ready";
   }
 
-  async _refresh(slot, tree, { plan = true } = {}) {
+  // at: the setup the call was asked for (_setupId when it was queued).
+  async _refresh(slot, tree, { plan = true, at = null } = {}) {
     const view = this._view(slot);
     view.setTree(normalizeTree(tree || await runtime.kconfigTree({ slot })));
     const configText = await runtime.kconfigConfig({ slot });
     const defconfigText = await runtime.kconfigDefconfig({ slot });
-    view.setConfig({ configText, defconfigText });
+    view.setConfig({ configText, defconfigText }, at);
     if (plan) this.schedulePlan(undefined, slot);
   }
 
@@ -563,16 +589,17 @@ export class Configurator {
   set(name, value, { slot } = {}) {
     const s = this.session;
     const which = slot || runtime.slotOf(name);
+    const at = this._setupId();
     return this._enqueue(async () => {
       if (!this.readySlot(which) || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       s.checkpoint();
       try {
         const out = await runtime.kconfigSet(name, value, { slot: which });
-        await this._refresh(which, out);
-        await this._afterPairing(which, out && out.pair);
+        await this._refresh(which, out, { at });
+        await this._afterPairing(which, out && out.pair, { at });
         return out && out.pair ? out.pair.notes : [];
       } catch (e) {
-        await this._refresh(which).catch(() => {});
+        await this._refresh(which, null, { at }).catch(() => {});
         throw e;
       }
     });
@@ -586,12 +613,13 @@ export class Configurator {
    */
   apply(text, { title = "Loaded the configuration", slot = "fw", checkpoint = true } = {}) {
     const s = this.session;
+    const at = this._setupId();
     return this._enqueue(async () => {
       if (!this.readySlot(slot) || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
       if (checkpoint) s.checkpoint();
       const loaded = await runtime.kconfigLoad(text, { slot });
-      await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null);
-      await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
+      await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null, { at });
+      await this._afterPairing(slot, loaded && loaded.pair, { sync: true, at });
       const view = this._view(slot);
       const result = loadReport(loaded, text, view.tree);
       const missing = result.missing;
@@ -606,10 +634,17 @@ export class Configurator {
     });
   }
 
-  /** After undo or redo: bring the engine to the session's restored configuration, both slots. */
+  /**
+   * After undo or redo, or another setup picked: bring the engine to the
+   * session's configuration, both slots. A load of a slot still in flight
+   * is followed when it loads the same project and version (the setup's
+   * defconfig is loaded after it), else superseded. Resolves to false when
+   * nothing is loaded or loading.
+   */
   reapply() {
     const s = this.session;
-    if (!this.loaded || !s.firmware) return Promise.resolve(false);
+    if ((!this.loaded && !this._loading.fw) || !s.firmware) return Promise.resolve(false);
+    const at = this._setupId();
     const fw = this._reapplySlot("fw");
     const k = this._view("katapult");
     let kat;
@@ -618,20 +653,22 @@ export class Configurator {
     // Both restored: pair them again, which changes nothing in a restored
     // pair but brings back the notes of what Katapult refuses.
     return Promise.all([fw, kat]).then(async ([a]) => {
-      if (this.paired) await this._enqueue(() => this._afterPairing("fw", null, { sync: true }));
+      if (this.paired) await this._enqueue(() => this._afterPairing("fw", null, { sync: true, at }));
       return a;
     });
   }
 
   _reapplySlot(slot) {
     const view = this._view(slot);
-    const now = this.slots[slot];
+    const now = this._loading[slot] ? this._target[slot] : this.slots[slot];
     if (!now || now.project !== view.project || now.version !== view.version) return this.load({ reason: "restore", slot });
     const text = view.defconfigText;
+    const at = this._setupId();
     return this._enqueue(async () => {
+      if (!this.slots[slot]) return false;     // the load it followed failed
       const loaded = await runtime.kconfigLoad(text, { slot });
-      await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null);
-      await this._afterPairing(slot, loaded && loaded.pair);
+      await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null, { at });
+      await this._afterPairing(slot, loaded && loaded.pair, { at });
       return true;
     });
   }

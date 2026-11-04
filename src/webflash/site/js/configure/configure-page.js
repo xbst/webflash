@@ -279,11 +279,11 @@ export class ConfigurePage {
     setup.title = desc || "";
   }
 
-  /** Edit another setup: its defconfigs load into the engine. */
+  /** Edit another setup: its defconfigs load into the engine (after a load still in flight). */
   async pickSetup(i) {
     const s = this.session;
     s.setSetupIndex(i);
-    if (this.configurator.loaded) await this.configurator.reapply();
+    await this.configurator.reapply();
   }
 
   // The line above the tree: what is loaded, and whether its snapshot passed the check.
