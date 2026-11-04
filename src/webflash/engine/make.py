@@ -776,7 +776,8 @@ class Evaluator:
 
         args = [ex(a) for a in raw]
         if name == "subst":
-            return args[2].replace(args[0], args[1]) if args[0] else args[2]
+            # An empty from-string matches once, at the end (function.c, subst_expand).
+            return args[2].replace(args[0], args[1]) if args[0] else args[2] + args[1]
         if name == "patsubst":
             pattern, repl, text = args
             if "%" not in pattern:
