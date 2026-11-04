@@ -239,17 +239,25 @@ const shaMatches = (ref, hash) => typeof ref.sha === "string" && ref.sha.startsW
  * kept (exact), else the closest older kept commit on the same tag (the
  * largest commit count not above it), with a one-line note. Returns {ref,
  * exact, note} or {ref: null, error}; null when the text is no version string.
+ * accept(ref), when given, narrows the refs to those a board offers, and
+ * the notes and errors say "offered" rather than "kept".
  */
-export function findVersion(index, project, text) {
+export function findVersion(index, project, text, accept = null) {
   const parsed = parseVersionString(text);
   if (!parsed) return null;
   const p = index && index.projects && index.projects[project];
-  const refs = [...((p && p.refs) || []), ...(historyRefs(index, project) || [])];
+  let refs = [...((p && p.refs) || []), ...(historyRefs(index, project) || [])];
+  if (accept) refs = refs.filter(accept);
+  const title = projectTitle(index, project);
   const dirty = parsed.dirty ? "The host has local changes (-dirty); this is the clean commit." : "";
   const hit = refs.find((r) => shaMatches(r, parsed.hash));
   if (hit) return { ref: hit, exact: true, note: dirty };
   if (parsed.tag === undefined) {
-    return { ref: null, error: `No kept ${projectTitle(index, project)} commit starts with ${parsed.hash}.` };
+    return {
+      ref: null,
+      error: accept ? `No ${title} version this board offers starts with ${parsed.hash}.`
+        : `No kept ${title} commit starts with ${parsed.hash}.`,
+    };
   }
   let best = null;
   let bestCount = -1;
@@ -260,14 +268,19 @@ export function findVersion(index, project, text) {
       bestCount = d.count;
     }
   }
-  if (best) return { ref: best, exact: false, note: `Closest kept: ${best.describe}.${dirty ? ` ${dirty}` : ""}` };
+  if (best) {
+    return { ref: best, exact: false, note: `Closest ${accept ? "offered" : "kept"}: ${best.describe}.${dirty ? ` ${dirty}` : ""}` };
+  }
   const sameTag = refs.some((r) => { const d = parseVersionString(r.describe); return d && d.tag === parsed.tag; });
-  return {
-    ref: null,
-    error: sameTag
-      ? `${String(text).trim()} is older than every kept ${parsed.tag} commit.`
-      : `No kept ${projectTitle(index, project)} commit is on ${parsed.tag}.`,
-  };
+  let error;
+  if (accept) {
+    error = sameTag ? `${String(text).trim()} is older than every ${parsed.tag} version this board offers.`
+      : `No ${title} version this board offers is on ${parsed.tag}.`;
+  } else {
+    error = sameTag ? `${String(text).trim()} is older than every kept ${parsed.tag} commit.`
+      : `No kept ${title} commit is on ${parsed.tag}.`;
+  }
+  return { ref: null, error };
 }
 
 export function uncheckedText(ref) {

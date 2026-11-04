@@ -359,6 +359,9 @@ export function picksTitle(picks) {
  * Katapult away, and None keeps only the setups with Katapult.
  */
 export function cardTables(config, picks, { link = false, choices = null } = {}) {
+  // A pinned version must be one of the versions the reader picks from, as the session keeps it.
+  const pin = (t) => (Array.isArray(t.versions) && t.version && t.version !== "latest" && t.version !== "release" &&
+    !t.versions.includes(t.version) ? { ...t, versions: [...t.versions, t.version] } : t);
   const f = config.firmware;
   const k = config.katapult;
   const at = Math.max(0, Math.min(picks.setupIndex || 0, config.setups.length - 1));
@@ -394,6 +397,8 @@ export function cardTables(config, picks, { link = false, choices = null } = {})
       return kept.length ? [{ ...o, setups: kept }] : [];
     });
   }
+  firmware = pin(firmware);
+  if (katapult) katapult = pin(katapult);
   return {
     board: config.board, firmware, katapult, setups, setups_form: config.setups_form,
     options, flash: config.flash, prebuilt: null,

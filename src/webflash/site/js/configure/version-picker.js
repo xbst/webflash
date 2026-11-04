@@ -33,6 +33,21 @@ function offered(versions, tags, value, current) {
   return Array.isArray(versions) && versions.includes(value);
 }
 
+/** Whether a versions setting narrows what the reader picks from. */
+const restricts = (versions) => Boolean(versions) && versions !== "all";
+
+/**
+ * findVersion among the versions offered: a pasted Mainsail/Fluidd version
+ * never picks a ref the TOML's versions leave out, so a card restricted to
+ * some versions builds only those.
+ */
+export function matchVersion(index, project, text, { value = "latest", versions = "all" } = {}) {
+  if (!restricts(versions)) return findVersion(index, project, text);
+  const g = groupRefs(index, project);
+  const tags = new Set(g ? g.releases.map((r) => r.id) : []);
+  return findVersion(index, project, text, (ref) => offered(versions, tags, ref.id, value));
+}
+
 /**
  * The combobox's list for a query, pure, for tests: {groups: [{label,
  * options: [{value, label, detail, unchecked, title, ref?}]}], match,
@@ -93,13 +108,14 @@ export function pickerList(index, project, { value = "latest", versions = "all",
     }
     if (options.length) groups.push({ label: "Older commits", options });
   }
-  const match = q && parseVersionString(query) ? findVersion(index, project, query) : null;
+  const match = q && parseVersionString(query) ? matchVersion(index, project, query, { value, versions }) : null;
   // The match leads the list, unless the filter already shows it (a hash typed whole).
   if (match && match.ref && !groups.some((grp) => grp.options.some((o) => o.value === match.ref.id))) {
     const ref = match.ref;
     groups.unshift({
       label: "Match",
-      options: [{ value: ref.id, label: describeOf(ref), detail: match.exact ? "this commit" : "closest kept",
+      options: [{ value: ref.id, label: describeOf(ref),
+        detail: match.exact ? "this commit" : restricts(versions) ? "closest offered" : "closest kept",
         unchecked: !isChecked(ref), ref, note: match.note, title: match.note || "" }],
     });
   }
@@ -306,9 +322,15 @@ class VersionCombobox {
     // A version pasted from Mainsail or Fluidd is picked at once: the commit
     // when it is kept, else the closest older kept one, with a note.
     if (loading) await loading;
-    const found = findVersion(this.opts.index, this.opts.project, this.query);
+    const found = this._find(this.query);
     if (found && found.ref) this._pick(found.ref.id, found.note || "");
     else if (found) { this._setNote(found.error, true); this.render(); }
+  }
+
+  /** What a typed or pasted version string picks, among the versions offered. */
+  _find(text) {
+    const { index, project, value, versions } = this.opts;
+    return matchVersion(index, project, text, { value, versions });
   }
 
   _pick(value, note = "") {
@@ -359,7 +381,7 @@ class VersionCombobox {
       e.preventDefault();
       const o = this.active >= 0 ? this.flat[this.active] : null;
       if (o) return this._pick(o.value, o.note || "");
-      const found = this.query && findVersion(this.opts.index, this.opts.project, this.query);
+      const found = this.query && this._find(this.query);
       if (found && found.ref) return this._pick(found.ref.id, found.note || "");
       if (found) { this._setNote(found.error, true); this.render(); }
       return;
