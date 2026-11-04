@@ -120,6 +120,23 @@ export function addSetup(tables, selected, { title = "" } = {}) {
   return { setups, options: fixOptions(options, setups).options, selected: setups.length - 1 };
 }
 
+// Setup i untitled, as the writers would see it: a lone setup whose id
+// follows its title goes back to the [config] table's id.
+function untitled(tables, i) {
+  const s = tables.setups[i];
+  return { ...s, id: isAutoId(s) ? CONFIG_SETUP_ID : s.id, title: "" };
+}
+
+/**
+ * Whether setup i may be untitled: only a lone setup that the writers then
+ * write as a [config] table again (a TOML that has [[setup]] tables keeps
+ * them, and a [[setup]] table needs a title).
+ */
+export function titleOptional(tables, i) {
+  if (tables.setups.length !== 1 || !tables.setups[i]) return false;
+  return asConfigTable(tables.setups_form, [untitled(tables, i)]);
+}
+
 /**
  * A new title for setup i; its id follows when it is one made here. Empty
  * is allowed only for a lone setup that then fits a [config] table again.
@@ -133,8 +150,8 @@ export function retitleSetup(tables, i, title) {
   const rename = {};
   let id = s.id;
   if (!t) {
-    if (setups.length > 1 || s.description || s.methods) return { error: "A setup needs a title." };
-    if (isAutoId(s)) id = CONFIG_SETUP_ID;
+    if (!titleOptional(tables, i)) return { error: "A setup needs a title." };
+    id = untitled(tables, i).id;
   } else if (isAutoId(s)) {
     id = setupIdFor(t, setups.filter((_, k) => k !== i));
   }

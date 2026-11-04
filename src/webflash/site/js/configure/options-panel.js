@@ -19,7 +19,7 @@ import { KconfigTree, checkNumber } from "./kconfig-tree.js";
 import { mountVersionPicker } from "./version-picker.js";
 import { groupRefs } from "./sources.js";
 import {
-  addSetup, retitleSetup, describeSetup, removeSetup, moveSetup, setSetupMethods, setupSummary, setupTitle,
+  addSetup, retitleSetup, describeSetup, removeSetup, moveSetup, setSetupMethods, setupSummary, setupTitle, titleOptional,
 } from "./setups.js";
 
 export const METHOD_TITLES = {
@@ -443,7 +443,7 @@ export class OptionsPanel {
       `</div>` +
       `<div class="setup-what">` +
       `<div class="setup-head"><input type="text" class="setup-title" data-f="title" autocomplete="off" ` +
-      `placeholder="${n > 1 ? "Title" : "Title (optional)"}" aria-label="Setup ${i + 1}: title">` +
+      `placeholder="${titleOptional(t, i) ? "Title (optional)" : "Title"}" aria-label="Setup ${i + 1}: title">` +
       (i === sel ? `<span class="setup-badge" title="Configure edits this setup">In Configure</span>` : "") +
       `</div>` +
       `<div class="setup-sub" data-f="summary"></div>` +
