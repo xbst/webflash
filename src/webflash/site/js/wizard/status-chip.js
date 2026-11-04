@@ -35,6 +35,16 @@ export function chipSummary(pills) {
 }
 
 /**
+ * A pill's line in the chip's tooltip, after its name: the words after
+ * "Name:" in its text ("45%", "failed"), else its state, with its badge.
+ */
+export function pillDetail({ state, text, badge = "" }) {
+  const words = text.includes(":") ? text.split(":").slice(1).join(":").trim() : "";
+  const detail = words || (state === "ready" ? "ready" : state === "error" ? "failed" : state === "busy" ? "loading" : "not loaded");
+  return badge ? `${detail} (${badge})` : detail;
+}
+
+/**
  * What a screen reader hears of the chip: its state, and what loads by
  * name, never how far ("Loading Sources", not "Sources: 45%").
  */
@@ -55,20 +65,21 @@ export function mountStatusChip({ chip, popover, pills, retry = null, onRetry = 
   const dot = chip.querySelector(".dot");
   let heard = null;
 
-  const read = () => pills.map((pill) => ({
-    name: NAMES[pill.id] || pill.id,
-    state: stateOf(pill.className),
-    text: pill.textContent.trim(),
-    title: pill.title || "",
-    pill,
-  }));
+  // A pill's text without its badge (the Compiler's "cached"), and the badge.
+  const read = () => pills.map((pill) => {
+    const el = pill.querySelector && pill.querySelector(".pill-badge");
+    const badge = el ? el.textContent.trim() : "";
+    let text = pill.textContent.trim();
+    if (badge && text.endsWith(badge)) text = text.slice(0, -badge.length).trim();
+    return { name: NAMES[pill.id] || pill.id, state: stateOf(pill.className), text, badge, title: pill.title || "", pill };
+  });
 
   const render = () => {
     const list = read();
     const sum = chipSummary(list);
     label.textContent = sum.text;
     dot.className = `dot ${sum.state}`;
-    chip.title = list.map((p) => `${p.name}: ${p.text.replace(/^[^:]*:\s*/, "") || "not loaded"}`).join("\n");
+    chip.title = list.map((p) => `${p.name}: ${pillDetail(p)}`).join("\n");
     for (const p of list) {
       const detail = p.pill.parentElement && p.pill.parentElement.querySelector(".status-detail");
       if (detail) detail.textContent = p.title;
