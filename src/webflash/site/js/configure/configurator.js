@@ -524,13 +524,17 @@ export class Configurator {
   _report(slot, reason, { result, carry, configText, previous, ref, note, copied = [] }) {
     const s = this.session;
     const view = this._view(slot);
-    const missing = result.missing || [];
+    let missing = result.missing || [];
     let lost = notApplied(carry, configText, missing);
     // An opened .config also holds what its tree worked out (the MCU's name,
     // its clock, a feature the chip has): only what has a prompt is a setting.
+    // Its "is not set" lines for symbols this version lacks drop nothing
+    // (off is what an absent symbol is), unlike a defconfig's, which say
+    // what was turned off on purpose.
     if (reason === "config") {
       const settable = promptedNames(view.tree);
       lost = lost.filter((l) => settable.has(l.name));
+      missing = missing.filter(([, v]) => v !== "n" && v !== "" && v !== '""');
     }
     const warnings = result.warnings || [];
     const lines = [];
