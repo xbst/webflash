@@ -171,6 +171,7 @@ export class Configurator {
     // loads ({project, version}): what a reapply made meanwhile follows.
     this._loading = { fw: 0, katapult: 0 };
     this._target = { fw: null, katapult: null };
+    this._failed = { fw: null, katapult: null };   // the reason of a slot's last load, when it failed
     this.notice = null;         // what the last load or switch could not carry over (both slots')
     this._notices = { fw: null, katapult: null };
     this._noticeListeners = [];
@@ -371,11 +372,13 @@ export class Configurator {
    * tree shown so far has picked, see carryText; a fresh Katapult, with no
    * defconfig yet, takes the firmware's chip). reason is "start", "switch"
    * (project or version changed: report what did not carry over), "open" (a
-   * board TOML), "config" (Open .config) or "restore" (undo). slot is "fw" (the session's project) or
-   * "katapult" (session.katapult). Once both slots are loaded, the
-   * firmware's shared options are copied into Katapult (pairSync). Resolves
-   * to true when it loaded, false when a newer load of the slot replaced it
-   * or it failed (the slot's sources state then says why).
+   * board TOML), "config" (Open .config) or "restore" (undo); a "start"
+   * after a failed load (Try again) is that load's reason again. slot is
+   * "fw" (the session's project) or "katapult" (session.katapult). Once
+   * both slots are loaded, the firmware's shared options are copied into
+   * Katapult (pairSync). Resolves to true when it loaded, false when a
+   * newer load of the slot replaced it or it failed (the slot's sources
+   * state then says why).
    */
   load({ reason = "start", carry, slot = "fw" } = {}) {
     const generation = ++this._generations[slot];
@@ -383,6 +386,7 @@ export class Configurator {
     const start = this._view(slot);
     const at = this._setupId();
     const own = Boolean(start.defconfigText);
+    if (reason === "start" && this._failed[slot]) reason = this._failed[slot];
     if (carry === undefined) {
       if (slot === "katapult" && !own) carry = carryText("", s.tree);
       else carry = reason === "switch" ? carryText(start.defconfigText, start.tree) : start.defconfigText;
@@ -390,11 +394,16 @@ export class Configurator {
     this._loading[slot]++;
     this._target[slot] = { project: start.project, version: start.version };
     return this._enqueue(async () => {
+      let ok = false;
       try {
-        return await this._load({ slot, generation, reason, carry, at, own });
+        ok = await this._load({ slot, generation, reason, carry, at, own });
       } finally {
         this._loading[slot]--;
+        // The reason of a load that failed, for the retry; a superseded load is no failure.
+        if (ok) this._failed[slot] = null;
+        else if (generation === this._generations[slot] && this._view(slot).sources.state === "error") this._failed[slot] = reason;
       }
+      return ok;
     });
   }
 
@@ -486,6 +495,14 @@ export class Configurator {
       const block = await this._afterPairing(slot, loaded && loaded.pair, { sync: "fw", at });
       const copied = slot === "katapult" && reason === "config" && own && block ? block.copied || [] : [];
       this._report(slot, reason, { result, carry, configText, previous, ref, note, copied });
+      // An opened .config pins every symbol it names as the user's: the
+      // defconfig it became loads again, so later edits follow the defaults
+      // and the tree shows no mark on what the file merely spelled out.
+      if (reason === "config") {
+        const again = await runtime.kconfigLoad(defconfigText, { slot });
+        if (generation !== this._generations[slot]) return false;
+        view.setTree(normalizeTree(again && again.tree ? again.tree : await runtime.kconfigTree({ slot })));
+      }
       this.schedulePlan(0, slot);
       return true;
     } catch (e) {
