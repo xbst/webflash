@@ -859,6 +859,11 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); }
 
 /* --- Flash panel (js/flash/flash-ui.js) --- */
 
+/* The Method select is as wide as its longest label ("UF2 file onto the
+   BOOTSEL drive (not here)"): the field may shrink, and the select with it,
+   rather than set the card's width on a phone. */
+.flash-panel .card-head .field { min-width: 0; }
+.flash-panel #flash-method { max-width: 100%; text-overflow: ellipsis; }
 .flash-panel .flash-firmware { font-size: 12px; line-height: 1.6; color: var(--text-dim); word-break: break-word; }
 .flash-panel .flash-firmware strong { color: var(--text); font-weight: 500; }
 .flash-panel .flash-reason { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
@@ -867,7 +872,7 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); }
 .flash-panel .flash-instructions { color: var(--text-dim); line-height: 1.55; font-size: 12.5px; }
 .flash-panel .flash-instructions p { margin: 0 0 6px; }
 .flash-panel .flash-instructions strong { color: var(--text); font-weight: 500; }
-.flash-panel .flash-needs { font-size: 11.5px; color: var(--text-muted); }
+.flash-panel .flash-needs { font-size: 11.5px; color: var(--text-dim); }
 .flash-panel .flash-notice {
   padding: 8px 10px;
   border: 1px solid var(--warn);
@@ -904,7 +909,7 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); }
   font-size: 12.5px;
   line-height: 1.55;
 }
-.flash-result p { margin: 0 0 6px; }
+.flash-result p { margin: 0 0 6px; overflow-wrap: anywhere; }
 .flash-result.ok { border-color: var(--ok); }
 .flash-result.ok strong { color: var(--ok); }
 .flash-result.error { border-color: var(--danger); background: var(--danger-bg); }
@@ -961,6 +966,8 @@ progress { width: 100%; height: 8px; accent-color: var(--accent); }
   .field { flex: 1 1 auto; }
   .field select { flex: 1; min-width: 0; }
   #version-select { max-width: none; }
+  /* The Method field takes a row of its own when it does not fit beside the title. */
+  .flash-panel .card-head { flex-wrap: wrap; }
 
   /* The tree is one column: prompt, then its control on the next line when
      they do not fit; names wrap; help opens inline. */

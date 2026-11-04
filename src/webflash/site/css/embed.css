@@ -156,6 +156,7 @@
 .wf-app .flash-notice { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
 .wf-app .flash-notice p, .wf-app .flash-prompt p, .wf-app .flash-confirm p, .wf-app .flash-result p { margin: 0 0 .45em; }
 .wf-app .flash-notice p:last-child { margin-bottom: 0; }
+.wf-app .flash-result p { overflow-wrap: anywhere; }
 .wf-app .flash-prompt input[type="text"] { font-family: var(--mono-font); width: 11em; }
 .wf-app .flash-prompt input.bad { border-color: var(--error); }
 .wf-app .flash-table { border-collapse: collapse; margin-bottom: .45em; }
