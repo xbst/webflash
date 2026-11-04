@@ -518,28 +518,39 @@ export class FirmwareSection {
     this.renderLink();
   }
 
-  // The choices made before the configuration loaded, set in the engine. An
-  // aborted signal stops between choices: the rest stay for the next run.
+  // The choices made before the configuration loaded, set in the engine. A
+  // choice the tree hides may be shown by a later one (a bitrate listed before
+  // the interface that needs it), so they go in passes, in the TOML's order,
+  // until a pass sets nothing; only the ones still hidden then are reported.
+  // An aborted signal stops between choices: the rest stay for the next run.
   async applyPending(signal = null) {
     const s = this.session;
+    let applied = true;
+    while (applied && this.pending.size) {
+      applied = false;
+      for (const option of this.config.options) {
+        if (signal && signal.aborted) return;
+        if (!this.pending.has(option.symbol)) continue;
+        const model = liveOption(option, s.tree);
+        if (!model.enabled) continue;
+        const value = this.pending.get(option.symbol);
+        this.pending.delete(option.symbol);
+        if (isCurrent(model, value)) continue;
+        try {
+          await this.configurator.set(model.set, value);
+          this.optionsChanged = true;
+          applied = true;
+        } catch (e) {
+          this.optionErrors.set(option.symbol, runtime.pythonMessage(e));
+          throw new Error(`${model.label}: ${runtime.pythonMessage(e)}`);
+        }
+      }
+    }
     for (const option of this.config.options) {
-      if (signal && signal.aborted) return;
       if (!this.pending.has(option.symbol)) continue;
-      const value = this.pending.get(option.symbol);
-      this.pending.delete(option.symbol);
       const model = liveOption(option, s.tree);
-      if (!model.enabled) {
-        this.appendLog(`${model.label}: ${value} was not applied: ${model.note}`);
-        continue;
-      }
-      if (isCurrent(model, value)) continue;
-      try {
-        await this.configurator.set(model.set, value);
-        this.optionsChanged = true;
-      } catch (e) {
-        this.optionErrors.set(option.symbol, runtime.pythonMessage(e));
-        throw new Error(`${model.label}: ${runtime.pythonMessage(e)}`);
-      }
+      this.appendLog(`${model.label}: ${this.pending.get(option.symbol)} was not applied: ${model.note}`);
+      this.pending.delete(option.symbol);
     }
   }
 
