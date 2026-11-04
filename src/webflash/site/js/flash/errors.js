@@ -101,7 +101,7 @@ export function capabilities(nav = typeof navigator !== "undefined" ? navigator 
 // ── Fix texts ───────────────────────────────────────────────────────
 
 const ZADIG_STEPS = (deviceName) => [
-  `On Windows, install the WinUSB driver for the device once with Zadig (zadig.akeo.ie): start Zadig, open Options and tick List All Devices, pick "${deviceName}" in the list, choose WinUSB as the driver and click Replace Driver (or Install Driver).`,
+  `On Windows, install the WinUSB driver for the device once with Zadig (zadig.akeo.ie): start Zadig, open Options and tick List All Devices, pick ${deviceName} in the list, choose WinUSB as the driver and click Replace Driver (or Install Driver).`,
   "Unplug and replug the board, then click Connect again.",
 ];
 
@@ -130,10 +130,11 @@ const DISCONNECTED_FIXES = [
   "Otherwise put it back in its bootloader and click Connect again, with a different USB cable or port if it keeps dropping out.",
 ];
 
+// The device a fix names: a ROM bootloader in quotes as Zadig lists it, else a description.
 function deviceLabel(method) {
   switch (method) {
     case "dfu": return "\"DFU in FS Mode\" or \"STM32 BOOTLOADER\"";
-    case "picoboot": return "RP2 Boot (Interface 1)";
+    case "picoboot": return "\"RP2 Boot (Interface 1)\"";
     case "katapult-can": return "candleLight USB to CAN adapter";
     default: return "the board";
   }

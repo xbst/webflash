@@ -468,7 +468,8 @@ export function createFlashPanel(root, options = {}) {
     }
     progressWrap.hidden = true;
     if (outcome.device) {
-      log(`${outcome.expect.label} appeared`);
+      const found = outcome.expect.label;
+      log(`${found.charAt(0).toUpperCase()}${found.slice(1)} appeared`);
       await adoptConnection(connectionFor(method, outcome.device));
       return;
     }
@@ -558,7 +559,8 @@ export function createFlashPanel(root, options = {}) {
     } else if (r.method === "uf2") {
       parts.push(`<p><strong>${r.disappeared ? "The board took the file and restarted." : "The .uf2 was written."}</strong> ${r.disappeared ? "" : "The board restarts once its bootloader has read the last block; if the drive is still there after a few seconds, eject it."} Check that it enumerates as Klipper (or Katapult) now.</p>`);
     } else {
-      parts.push(`<p><strong>Flashed and verified.</strong> ${esc(r.deviceText || "")}${r.restarted ? " The board has restarted into the new firmware." : ""}</p>`);
+      const device = r.deviceText ? `${r.deviceText}${/[.!?]$/.test(r.deviceText) ? "" : "."}` : "";
+      parts.push(`<p><strong>Flashed and verified.</strong> ${esc(device)}${r.restarted ? " The board has restarted into the new firmware." : ""}</p>`);
     }
     if (r.hint) {
       // What the hint does not know, it says in a # line of its own.

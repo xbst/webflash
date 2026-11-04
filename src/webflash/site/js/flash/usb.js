@@ -505,7 +505,7 @@ function mapClaimError(e) {
   // Chrome: "NetworkError: Unable to claim interface." on Windows when the
   // driver is not WinUSB, on Linux when a kernel driver or another program
   // holds it, and when another tab holds it.
-  return new FlashError(`The browser could not claim the device's interface (${msg}).`, { code: "claim-failed", cause: e });
+  return new FlashError(`The browser could not claim the device's interface (${msg.replace(/\.$/, "")}).`, { code: "claim-failed", cause: e });
 }
 
 function wrapTransferError(e, what) {

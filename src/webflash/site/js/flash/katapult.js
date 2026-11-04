@@ -411,7 +411,7 @@ export class KatapultFlasher {
   checkMcu(expected) {
     if (!expected || !this.mcu) return;
     if (expected.toLowerCase() !== this.mcu.toLowerCase()) {
-      fail("wrong-mcu", `The MCU returned by Katapult does not match the firmware.\nKatapult MCU: ${this.mcu}\nFirmware MCU: ${expected}`);
+      fail("wrong-mcu", `The MCU returned by Katapult does not match the firmware.\nKatapult MCU: ${this.mcu}.\nFirmware MCU: ${expected}.`);
     }
   }
 

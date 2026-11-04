@@ -38,7 +38,7 @@ export async function touch1200(link, { log = null } = {}) {
     await link.setSignals({ dataTerminalReady: true });
     await link.setSignals({ dataTerminalReady: false });
   } catch (e) {
-    if (log) log(`The board reset during the touch (${e.message}); that is expected`);
+    if (log) log(`The board reset during the touch (${String(e.message).replace(/\.$/, "")}); that is expected`);
   } finally {
     try { await link.close(); } catch (e) { /* the device is gone */ }
   }

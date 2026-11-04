@@ -640,7 +640,7 @@ export function defaultInstructions(method, family = null, { fromKlipper = true,
     case "picoboot":
       return "Hold BOOTSEL while plugging the board in (or while tapping RESET), then click Connect and pick \"RP2 Boot\". On Windows the RP2040's \"RP2 Boot (Interface 1)\" needs the WinUSB driver once (Zadig).";
     case "uf2":
-      return `Hold BOOTSEL while plugging the board in; it shows up as a drive named ${family === "rp2350" ? "RP2350" : "RPI-RP2"}. Click Connect and pick that drive; WebFlash writes the .uf2 onto it and the board restarts by itself.`;
+      return `Hold BOOTSEL while plugging the board in; it shows up as a drive named ${family === "rp2350" ? "RP2350" : "RPI-RP2"}. Then click Pick the drive and choose that drive in the folder picker; WebFlash writes the .uf2 onto it and the board restarts by itself.`;
     case "download":
       switch (family) {
         case "lpc176x": return "Download klipper.bin, copy it to the board's SD card as firmware.bin, and power the board up with the card in.";

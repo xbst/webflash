@@ -176,7 +176,7 @@ export class DfuDevice {
         for (const [setting, text] of read.names) if (names.get(setting) === null && text) names.set(setting, text);
         for (const f of read.failures) this.log(`Could not read ${f}`);
       } catch (e) {
-        this.log(`Could not read the interface names from the device (${e.message}).`);
+        this.log(`Could not read the interface names from the device (${String(e.message).replace(/\.$/, "")}).`);
       }
     }
     // The string index goes into the log because the STM32G0B1 ROM answered

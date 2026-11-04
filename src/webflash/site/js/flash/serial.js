@@ -331,14 +331,14 @@ function mapOpenError(e) {
   if (e instanceof FlashError) return e;
   const msg = String(e && e.message ? e.message : e);
   if (e && e.name === "InvalidStateError") {
-    return new FlashError(`The port is already open (${msg}).`, { code: "busy", cause: e });
+    return new FlashError(`The port is already open (${msg.replace(/\.$/, "")}).`, { code: "busy", cause: e });
   }
   if (e && e.name === "SecurityError") {
     return new FlashError(`The browser may not open the port: ${msg}`, { code: "permission", cause: e });
   }
   // Chrome: "NetworkError: Failed to open serial port." when another program
   // holds it (Klipper, a monitor) or, on Linux, the user lacks dialout.
-  return new FlashError(`The serial port could not be opened (${msg}).`, { code: "busy", cause: e });
+  return new FlashError(`The serial port could not be opened (${msg.replace(/\.$/, "")}).`, { code: "busy", cause: e });
 }
 
 // More non-fatal errors than this within the window end the reader loop.

@@ -186,7 +186,7 @@ export async function writeUf2ToDrive(handle, bytes, { name = "firmware.uf2", lo
     if (written > 0) {
       const fix = "Hold BOOTSEL while plugging the board back in, pick its drive again and flash again; if it keeps dropping out, try another USB cable or port.";
       if (e && (e.name === "NotFoundError" || e.name === "NetworkError" || e.name === "InvalidStateError")) {
-        throw new FlashError(`The drive went away after ${formatSize(written)} of ${formatSize(bytes.length)}, before the board had the whole file (${why}).`, { code: "disconnected", fix, cause: e });
+        throw new FlashError(`The drive went away after ${formatSize(written)} of ${formatSize(bytes.length)}, before the board had the whole file (${why.replace(/\.$/, "")}).`, { code: "disconnected", fix, cause: e });
       }
       throw new FlashError(`Writing to the drive stopped after ${formatSize(written)} of ${formatSize(bytes.length)}${last ? "" : ", before the board had the whole file"}: ${why}`, { code: "flash", fix, cause: e });
     }
