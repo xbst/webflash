@@ -12,7 +12,7 @@ name: Deploy the site to GitHub Pages
 
 on:
   push:
-    branches: [master, dev, "wf/**"]
+    branches: [master]
     paths:
       - "src/**"
       - "sources.toml"
