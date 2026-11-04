@@ -1699,13 +1699,13 @@ def _check_folders(out: Path, cache: Path) -> None:
 
 
 def _build_history(policy: Policy, project: ProjectPolicy, head: str, cache: Path, repos: _Repos,
-                   state: dict, today: _dt.date, now: _dt.datetime, *, gate: bool, matrix: Path,
-                   run: str | None, deadline: float | None, gate_minutes: float | None, log,
-                   warnings: list[str]) -> list[str]:
-    """Snapshot and gate a project's history: the first-parent commits of
-    the default branch in its window. The commit list is kept in the state
-    with the head it was listed from, so a run whose default branch has not
-    moved needs no clone. Returns the snapshots that failed the gate."""
+                   state: dict, today: _dt.date, *, gate: bool, matrix: Path, run: str | None, log,
+                   warnings: list[str]) -> list[tuple[int, dict]]:
+    """Snapshot a project's history: the first-parent commits of the default
+    branch in its window. The commit list is kept in the state with the head
+    it was listed from, so a run whose default branch has not moved needs no
+    clone. Returns the snapshots due for the gate, as ``(commit time,
+    manifest)``, for ``_gate_history``."""
     name = project.name
     project_state = _project_state(state, name)
     if not project.history_days:
@@ -1721,49 +1721,69 @@ def _build_history(policy: Policy, project: ProjectPolicy, head: str, cache: Pat
                                          "commits": [[sha, ct] for sha, ct in commits]}
     kept = select_history(project, commits, head, since)
     window = _dt.datetime.fromtimestamp(since, _dt.timezone.utc).strftime("%Y-%m-%d")
-    new = gated = reused = 0
-    failed: list[str] = []
-    verdicts = None
-    for sha, _ct in kept:
+    new = 0
+    due: list[tuple[int, dict]] = []
+    for sha, ct in kept:
         manifest = snapshot_current(policy, cache, name, sha)
         if manifest is None:
             manifest = build_snapshot(policy, project, sha, cache, repos.get(project), lambda _m: None,
                                       warnings)
             new += 1
             log(f"{name} history {manifest['describe']}: new snapshot")
-        report = _read_json(snapshot_dir(cache, name, sha) / REPORT_FILE)
-        if gate and gate_needed(report, matrix, gate=gate, run=run):
+        if gate_needed(_read_json(snapshot_dir(cache, name, sha) / REPORT_FILE), matrix, gate=gate, run=run):
+            due.append((ct, manifest))
+    record_history(state, name, kept, today)
+    log(f"{name}: {len(kept)} history snapshots since {window} ({new} new)")
+    return due
+
+
+def _gate_history(policy: Policy, due: list[tuple[int, dict]], cache: Path, now: _dt.datetime, *,
+                  gate: bool, matrix: Path, run: str | None, deadline: float | None,
+                  gate_minutes: float | None, log) -> list[str]:
+    """Gate the history snapshots ``_build_history`` found due, every
+    project's together, newest first, so each project's recent commits are
+    checked before anyone's old ones. Once ``deadline`` has passed, the rest
+    are published ungated and a later run gates them. Returns the snapshots
+    that failed."""
+    failed: list[str] = []
+    verdicts: dict[str, dict] = {}
+    counts: dict[str, list[int]] = {}
+    for _ct, manifest in sorted(due, key=lambda d: (-d[0], d[1]["project"], d[1]["sha"])):
+        name = manifest["project"]
+        count = counts.setdefault(name, [0, 0, 0])       # gated, reused, left
+        if gate:
             # Most commits change only what no bundle holds (the host's
             # klippy/, docs/, config/): a snapshot with the same bundles as
             # one already gated builds the same firmware but for the version
             # string, so it takes that verdict.
-            if verdicts is None:
-                verdicts = _gate_verdicts(cache, name, matrix, run, policy.history_gate)
-            same = verdicts.get(_bundle_key(manifest))
+            if name not in verdicts:
+                verdicts[name] = _gate_verdicts(cache, name, matrix, run, policy.history_gate)
+            same = verdicts[name].get(_bundle_key(manifest))
             if same:
                 report = _reuse_gate(cache, manifest, same, now=now, run=run)
-                reused += 1
+                count[1] += 1
                 if report["checked"] is False:
                     failed.append(f"{name} {manifest['describe']}")
                 continue
-        if gate_needed(report, matrix, gate=gate, run=run):
-            skip = None if gate else "it was skipped (--no-gate)"
-            if skip is None and deadline is not None and time.monotonic() > deadline:
-                skip = (f"this run's {gate_minutes:g} minutes for the gate ran out; "
-                        "a later run gates it")
-            if skip is None:
-                log(f"{name} history {manifest['describe']}: gate")
-                gated += 1
-            report = run_gate(cache, manifest, manifest["describe"], matrix,
-                              log if skip is None else (lambda _m: None), now=now, skip=skip,
-                              run=run, mode=policy.history_gate)
-            if report["checked"] is False:
-                failed.append(f"{name} {manifest['describe']}")
-            if skip is None and verdicts is not None and report.get("rows"):
-                verdicts[_bundle_key(manifest)] = report
-    record_history(state, name, kept, today)
-    log(f"{name}: {len(kept)} history snapshots since {window} ({new} new, {gated} gated"
-        + (f", {reused} with the verdict of the same bundles" if reused else "") + ")")
+        skip = None if gate else "it was skipped (--no-gate)"
+        if skip is None and deadline is not None and time.monotonic() > deadline:
+            skip = f"this run's {gate_minutes:g} minutes for the gate ran out; a later run gates it"
+        if skip is None:
+            log(f"{name} history {manifest['describe']}: gate")
+            count[0] += 1
+        else:
+            count[2] += 1
+        report = run_gate(cache, manifest, manifest["describe"], matrix,
+                          log if skip is None else (lambda _m: None), now=now, skip=skip,
+                          run=run, mode=policy.history_gate)
+        if report["checked"] is False:
+            failed.append(f"{name} {manifest['describe']}")
+        if skip is None and report.get("rows"):
+            verdicts[name][_bundle_key(manifest)] = report
+    for name, (gated, reused, left) in counts.items():
+        if gate:
+            log(f"{name} history gate: {gated} gated, {reused} with the verdict of the same bundles, "
+                f"{left} left for a later run")
     return failed
 
 
@@ -1870,11 +1890,12 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
             raise ValueError(f"the policy selects no ref named {', '.join(missing)}")
     history_ran = [] if refs or not history else names
     deadline = None if gate_minutes is None else started + gate_minutes * 60
+    due: list[tuple[int, dict]] = []
     for name in history_ran:
-        failed_now += _build_history(policy, policy.projects[name], heads[name], cache, repos, state,
-                                     today, now, gate=gate, matrix=matrix, run=run,
-                                     deadline=deadline, gate_minutes=gate_minutes, log=log,
-                                     warnings=warnings)
+        due += _build_history(policy, policy.projects[name], heads[name], cache, repos, state, today,
+                              gate=gate, matrix=matrix, run=run, log=log, warnings=warnings)
+    failed_now += _gate_history(policy, due, cache, now, gate=gate, matrix=matrix, run=run,
+                                deadline=deadline, gate_minutes=gate_minutes, log=log)
     dropped = age_out(state, today, policy.age_days, policy.superseded_days,
                       [] if refs else names, history_ran)
     for line in dropped:
