@@ -240,9 +240,15 @@ export class Configurator {
     };
   }
 
-  /** Forget both loaded configurations (the session no longer builds from source). */
+  /**
+   * Forget both loaded configurations (the session no longer builds from
+   * source). The engine lets go of Katapult too, so the next firmware
+   * loaded alone is not paired with it; a firmware's sources stay, since the
+   * next load of that slot replaces them.
+   */
   unload() {
     const s = this.session;
+    this.dropKatapult();
     for (const slot of ["fw", "katapult"]) {
       this._generations[slot]++;
       clearTimeout(this._planTimers[slot]);
