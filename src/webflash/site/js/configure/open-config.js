@@ -1,8 +1,9 @@
 // Open .config: a Klipper, Kalico or Katapult .config (or defconfig) as the
 // start of a new board. One file configures that project; a firmware's and
 // Katapult's together configure the firmware with Katapult beside it. What
-// each file is for comes from its symbols (a full .config always tells), else
-// from its name; a short defconfig that names neither is asked about.
+// each file is for comes from its symbols (a full .config always tells); a
+// short defconfig they cannot place is asked about, its name preselecting the
+// answer.
 
 import { defaultTables } from "../state.js";
 import { esc, openModal } from "../dialogs.js";
@@ -20,24 +21,36 @@ const FIRMWARE_SYMBOL = /^(# )?CONFIG_(WANT_[A-Z0-9_]+|HAVE_GPIO[A-Z0-9_]*|HAVE_
 // not a setting.
 const STAMP = /^CONFIG_(KATAPULT_VERSION|CANBOOT_VERSION)=/;
 
+// The firmware a file's name names: "klipper", "kalico" or null.
+function namedFirmware(name) {
+  const n = String(name || "").toLowerCase();
+  return /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
+}
+
 /**
- * Which project a .config is for, from its text and file name: "katapult",
- * "klipper", "kalico", "firmware" (Klipper or Kalico; the symbols cannot
- * tell them apart) or null when neither says.
+ * The project a file's name names: "katapult", "klipper", "kalico", or null.
+ * A name that mentions a firmware and Katapult ("klipper_for_canboot") is as
+ * often a firmware's file named after its bootloader: it names nothing.
+ */
+export function nameHint(name) {
+  const katapult = /katapult|canboot|deployer/.test(String(name || "").toLowerCase());
+  const firmware = namedFirmware(name);
+  return katapult && firmware ? null : katapult ? "katapult" : firmware;
+}
+
+/**
+ * Which project a .config is for: "katapult", "klipper", "kalico",
+ * "firmware" (Klipper or Kalico; the symbols cannot tell them apart) or null
+ * when its symbols do not say. The name never decides alone: it only tells
+ * Klipper from Kalico once the symbols say firmware.
  */
 export function classifyConfig(text, name = "") {
   const t = String(text || "");
   const katapult = KATAPULT_SYMBOL.test(t);
   const firmware = FIRMWARE_SYMBOL.test(t);
-  const n = String(name || "").toLowerCase();
-  // A name that mentions a firmware and Katapult ("klipper_for_canboot") is
-  // as often a firmware's file named after its bootloader: it decides nothing.
-  const namedKatapult = /katapult|canboot|deployer/.test(n);
-  const namedFirmware = /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
-  const named = namedKatapult && namedFirmware ? null : namedKatapult ? "katapult" : namedFirmware;
   if (katapult && !firmware) return "katapult";
-  if (firmware && !katapult) return namedFirmware || "firmware";
-  return katapult && firmware ? null : named;
+  if (firmware && !katapult) return namedFirmware(name) || "firmware";
+  return null;
 }
 
 /**
@@ -119,12 +132,6 @@ export function configTables({ project, firmwareText = null, katapultText = null
   return t;
 }
 
-// The firmware a file's name names: "klipper", "kalico" or null.
-function namedFirmware(name) {
-  const n = String(name || "").toLowerCase();
-  return /kalico|danger/.test(n) ? "kalico" : /klipper/.test(n) ? "klipper" : null;
-}
-
 /**
  * The files sortConfigs left to the reader, placed by asking: one file is
  * asked which project it is for; of two, the reader picks Katapult's, and
@@ -136,7 +143,13 @@ export async function placeConfigs(sorted, { project: askProject = askConfigProj
   let { firmware, katapult } = sorted;
   const [first, second] = sorted.ask;
   if (second) {
-    const which = await askKatapult(first.name, second.name);
+    // Preselected: the one file whose name names Katapult, else the other
+    // of the one whose name names a firmware.
+    const hints = sorted.ask.map((f) => nameHint(f.name));
+    const firmwares = hints.filter((h) => h && h !== "katapult");
+    const named = hints.filter((h) => h === "katapult").length === 1 ? hints.indexOf("katapult")
+      : firmwares.length === 1 ? 1 - hints.indexOf(firmwares[0]) : null;
+    const which = await askKatapult(first.name, second.name, { preselect: named });
     if (which === null) return null;
     if (which === "neither") {
       return { error: `${first.name}, ${second.name}: both are firmware configurations; open one, or a firmware's with Katapult's.` };
@@ -147,7 +160,7 @@ export async function placeConfigs(sorted, { project: askProject = askConfigProj
     if (!project) return null;
     firmware = { ...fw, project };
   } else if (first) {
-    const project = await askProject(first.name);
+    const project = await askProject(first.name, { preselect: nameHint(first.name) });
     if (!project) return null;
     if (project === "katapult") katapult = { ...first };
     else firmware = { ...first, project };
@@ -157,10 +170,11 @@ export async function placeConfigs(sorted, { project: askProject = askConfigProj
 
 /**
  * Ask which project a .config is for, when its symbols do not say (katapult:
- * false offers Klipper and Kalico only, for the firmware's file of a pair).
- * Resolves to "klipper", "kalico", "katapult", or null when cancelled.
+ * false offers Klipper and Kalico only, for the firmware's file of a pair;
+ * preselect: the answer its name suggests). Resolves to "klipper", "kalico",
+ * "katapult", or null when cancelled.
  */
-export function askConfigProject(name, { katapult = true } = {}) {
+export function askConfigProject(name, { katapult = true, preselect = null } = {}) {
   return new Promise((resolve) => {
     const { body, close, onClose } = openModal(katapult ? "Which firmware is this .config for?" : "Klipper or Kalico?");
     let answer = null;
@@ -178,15 +192,18 @@ export function askConfigProject(name, { katapult = true } = {}) {
         close();
       });
     }
-    body.querySelector("[data-project=klipper]").focus();
+    const pick = body.querySelector(`[data-project=${preselect || "klipper"}]`) || body.querySelector("[data-project=klipper]");
+    if (preselect) pick.classList.add("primary");
+    pick.focus();
   });
 }
 
 /**
- * Ask which of two .configs is Katapult's, when neither one's symbols say.
- * Resolves to 0 or 1 (a file), "neither", or null when cancelled.
+ * Ask which of two .configs is Katapult's, when neither one's symbols say
+ * (preselect: the file, 0 or 1, the names suggest). Resolves to 0 or 1 (a
+ * file), "neither", or null when cancelled.
  */
-export function askKatapultFile(a, b) {
+export function askKatapultFile(a, b, { preselect = null } = {}) {
   return new Promise((resolve) => {
     const { body, close, onClose } = openModal("Which is Katapult's?");
     let answer = null;
@@ -202,6 +219,8 @@ export function askKatapultFile(a, b) {
         close();
       });
     }
-    body.querySelector("[data-file='0']").focus();
+    const pick = body.querySelector(`[data-file='${preselect === 1 ? 1 : 0}']`);
+    if (preselect !== null) pick.classList.add("primary");
+    pick.focus();
   });
 }
