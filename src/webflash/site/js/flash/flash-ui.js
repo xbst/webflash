@@ -26,8 +26,10 @@ const SLOT_RE = /\u0000(\d+)\u0000/g;
 
 const strip = (s) => s.replace(STRIP_RE, "");
 const escapeText = (s) => esc(s).replace(/'/g, "&#39;");
-// http(s) and relative links only: no javascript:, data: or other schemes.
-const safeUrl = (url) => /^https?:\/\//i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url);
+// http(s) and relative links only: no javascript:, data: or other schemes, and
+// no C0 control or DEL, since a browser drops the leading ones before it reads
+// the scheme ("\u0001javascript:" would pass the scheme test and still run).
+const safeUrl = (url) => !/[\u0000-\u001f\u007f]/.test(url) && (/^https?:\/\//i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url));
 
 function renderSpans(text) {
   const codes = [];

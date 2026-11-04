@@ -46,6 +46,9 @@ def _escape(text: str) -> str:
 
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*:", re.IGNORECASE)
 _HTTP_RE = re.compile(r"^https?://", re.IGNORECASE)
+# C0 controls and DEL: a browser drops the leading ones before it reads the
+# scheme, so "\x01javascript:" would pass the scheme test and still run.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)")
@@ -53,7 +56,10 @@ _SLOT_RE = re.compile("\u0000(\\d+)\u0000")
 
 
 def _safe_url(url: str) -> bool:
-    """http(s) and relative links only: no javascript:, data: or other schemes."""
+    """http(s) and relative links only: no javascript:, data: or other schemes,
+    and no control characters to hide one behind."""
+    if _CONTROL_RE.search(url):
+        return False
     return bool(_HTTP_RE.match(url)) or not _SCHEME_RE.match(url)
 
 
