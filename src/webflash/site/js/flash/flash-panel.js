@@ -247,8 +247,10 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   function firmwareKey(firmware) {
     if (!firmware) return { origin: null, text: `null ${refusal}\n${notes.join("\n")}` };
     const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? (firmware.pair ? session.builds : session.build) : (firmware.artifacts[0] || {}).bytes;
-    const skip = new Set(["image", "artifacts", "onClear"]);
-    const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "");
+    // The images hold the bytes (a pair's appImage too), which origin stands for: only their ranges go in.
+    const skip = new Set(["image", "appImage", "artifacts", "onClear"]);
+    const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "") +
+      (firmware.appImage ? ` ${describeImage(firmware.appImage).rangeText}` : "");
     return { origin, text };
   }
 
