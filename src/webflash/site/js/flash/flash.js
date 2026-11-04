@@ -213,6 +213,11 @@ async function flashOverCan(image, options, { log, progress, status, pickNode })
   await adapter.open({ bitrate });
   try {
     status("Looking for nodes on the bus");
+    // A Katapult node keeps the id an earlier attempt gave it until it
+    // resets, and an assigned node does not answer the query: clear the ids
+    // first, as flashtool.py does (Klipper nodes ignore the command).
+    await clearNodeIds(adapter);
+    await sleep(settle);
     let nodes = await queryNodes(adapter, { timeoutMs: queryMs, log });
     let uuidHex = options.uuid ? uuidToHex(uuidFromHex(options.uuid)) : null;
     if (!uuidHex) {
