@@ -166,7 +166,10 @@ def _required_text(table: dict, key: str, where: str, hint: str = "") -> str:
 # ── .config text ─────────────────────────────────────────────────────
 
 _SET_RE = re.compile(r"CONFIG_([A-Za-z0-9_]+)=(.*)")
-_UNSET_RE = re.compile(r"#\s*CONFIG_([A-Za-z0-9_]+) is not set")
+# kconfiglib's own form, one space after the "#"; it takes "#CONFIG_X is not
+# set" for a comment and leaves X as it was.
+_UNSET_RE = re.compile(r"# CONFIG_([A-Za-z0-9_]+) is not set")
+_LOOSE_UNSET_RE = re.compile(r"#\s*CONFIG_[A-Za-z0-9_]+\s+is\s+not\s+set.*")
 # What a .config line may hold: a bool or tristate, a decimal or hex number,
 # or a quoted string with backslash escapes.
 _VALUE_RE = re.compile(r'[ymn]|-?[0-9]+|0[xX][0-9a-fA-F]+|"(?:[^"\\]|\\.)*"')
@@ -178,20 +181,36 @@ def parse_defconfig(text: str) -> list[tuple[str, str | None]]:
     Each entry is ``(symbol, value)``: the symbol without ``CONFIG_`` and the
     value as written (``"y"``, ``"1000000"``, ``"0x8000"``, ``'"PA13"'`` with its
     quotes), or None for ``# CONFIG_X is not set``. Blank lines and other
-    comments are skipped. Raises ValueError naming the line for anything else,
-    and for a symbol set twice, which kconfiglib would take the last of without
-    a word. Symbols are not checked against a Kconfig: there is none here.
+    comments are skipped. Raises ValueError naming the line for anything else:
+    an indented setting, which kconfiglib skips (it reads only lines that start
+    at column 0), an unset line not written exactly as kconfiglib writes it,
+    and a symbol set twice, which kconfiglib would take the last of without a
+    word. Symbols are not checked against a Kconfig: there is none here.
     """
     entries: list[tuple[str, str | None]] = []
     seen: dict[str, int] = {}
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for number, raw in enumerate(lines, 1):
-        line = raw.strip()
+        # kconfiglib drops trailing whitespace, as the C tools do.
+        line = raw.rstrip()
         if not line:
             continue
+        if line[0].isspace():
+            body = line.lstrip()
+            if body.startswith("#") and not _LOOSE_UNSET_RE.fullmatch(body):
+                continue
+            raise ValueError(
+                f"line {number}: {body!r} starts with whitespace; Kconfig ignores an "
+                "indented line, so start each .config line at column 0"
+            )
         unset = _UNSET_RE.fullmatch(line)
         if unset:
             name, value = unset.group(1), None
+        elif _LOOSE_UNSET_RE.fullmatch(line):
+            raise ValueError(
+                f"line {number}: {line!r} is not read by Kconfig; "
+                "write it as # CONFIG_NAME is not set"
+            )
         elif line.startswith("#"):
             continue
         else:
