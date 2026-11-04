@@ -14,7 +14,7 @@
 import { Session, PROJECTS, fetchBoardToml } from "./state.js";
 import * as runtime from "./runtime.js";
 import { tomlFromHash, parseToml, openInSiteUrl } from "./toml-io.js";
-import { openGenerate, openAbout, renderAbout, showError, siteEngineUrl } from "./dialogs.js";
+import { openGenerate, openAbout, openModal, renderAbout, showError, siteEngineUrl } from "./dialogs.js";
 import { mountFlashPanel } from "./flash/flash-panel.js";
 import { explainError } from "./flash/errors.js";
 import { Configurator } from "./configure/configurator.js";
@@ -714,6 +714,46 @@ async function openFromUrl({ hashOnly = false } = {}) {
   return openToml(text, { name, files: new Map() });
 }
 
+// The hash of the address the session's board came from: Back and Forward
+// to an entry of that link only move between steps.
+const link = { hash: null };
+
+// A later change of the hash: a #toml= pasted or followed in this tab, or the
+// browser's Back and Forward across one. Another link's TOML replaces the
+// board, after asking when that loses unsaved changes.
+async function onHashChange() {
+  const hash = location.hash;
+  if (hash === link.hash) return;
+  let named = true;
+  try {
+    named = tomlFromHash(hash) !== null;
+  } catch (e) { /* damaged: openFromUrl says so */ }
+  if (!named) return;
+  if (hasUnsavedChanges() && !(await askOpenLink())) return;
+  link.hash = hash;
+  await openFromUrl({ hashOnly: true });
+}
+
+// Whether the link's board TOML may replace a board with unsaved changes.
+function askOpenLink() {
+  return new Promise((resolve) => {
+    const { body, close, onClose } = openModal("Open the board TOML in the link?");
+    let answer = false;
+    onClose(() => resolve(answer));
+    body.innerHTML =
+      "<p>The board you are working on has unsaved changes, which the link's board TOML replaces.</p>" +
+      `<div class="modal-actions"><button class="primary" data-open="1">Open the link</button>` +
+      `<span class="gen-spacer"></span><button data-open="">Keep my board</button></div>`;
+    for (const b of body.querySelectorAll("[data-open]")) {
+      b.addEventListener("click", () => {
+        answer = Boolean(b.dataset.open);
+        close();
+      });
+    }
+    body.querySelector("[data-open='']").focus();
+  });
+}
+
 // ── Keys ─────────────────────────────────────────────────────────────
 
 function setupKeys() {
@@ -806,7 +846,8 @@ async function init() {
     if (session.sources.state === "idle") session.setSources("error", e.message);
   });
   const opened = await openFromUrl();
-  addEventListener("hashchange", () => openFromUrl({ hashOnly: true }));
+  link.hash = location.hash;
+  addEventListener("hashchange", () => onHashChange());
   // A returning visitor's configuration loads at once, behind page 1.
   if (opened !== true && configurator.autoStart) startConfigure("start");
 }
