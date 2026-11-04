@@ -214,20 +214,27 @@ export async function loadHistory(index, project, base = sourcesBase()) {
 
 const DESCRIBE_RE = /^(.+)-(\d+)-g([0-9a-f]{4,40})(?:-dirty)?$/i;
 const HASH_RE = /^g?([0-9a-f]{7,40})(?:-dirty)?$/i;
+// The build stamp Klipper's buildcommands.py appends to an MCU's version
+// when its tree was dirty or the tools gave no version: "-%Y%m%d_%H%M%S-<host>".
+const STAMP_RE = /-\d{8}_\d{6}-\S*$/;
 
 /**
  * What Mainsail or Fluidd shows as a Klipper version, read: a git describe
  * string ("v0.13.0-245-g61c0c8d", "-dirty" or not) gives {tag, count, hash,
- * dirty}; a bare commit hash (7 to 40 hex digits) gives {hash, dirty}. null
- * for anything else.
+ * dirty}; a bare commit hash (7 to 40 hex digits) gives {hash, dirty}. An
+ * MCU version's build stamp is dropped, with stamped: true. null for anything else.
  */
 export function parseVersionString(text) {
-  const s = String(text || "").trim();
+  let s = String(text || "").trim();
+  const bare = s.replace(STAMP_RE, "");
+  const stamped = bare !== s;
+  s = bare;
   const dirty = /-dirty$/i.test(s);
+  const mark = (v) => (stamped ? { ...v, stamped } : v);
   let m = DESCRIBE_RE.exec(s);
-  if (m) return { tag: m[1], count: Number(m[2]), hash: m[3].toLowerCase(), dirty };
+  if (m) return mark({ tag: m[1], count: Number(m[2]), hash: m[3].toLowerCase(), dirty });
   m = HASH_RE.exec(s);
-  if (m) return { hash: m[1].toLowerCase(), dirty };
+  if (m) return mark({ hash: m[1].toLowerCase(), dirty });
   return null;
 }
 
@@ -249,9 +256,11 @@ export function findVersion(index, project, text, accept = null) {
   let refs = [...((p && p.refs) || []), ...(historyRefs(index, project) || [])];
   if (accept) refs = refs.filter(accept);
   const title = projectTitle(index, project);
-  const dirty = parsed.dirty ? "The host has local changes (-dirty); this is the clean commit." : "";
+  // What the paste said that the pick leaves out: -dirty, then the build stamp.
+  const ignored = [parsed.dirty ? "The host has local changes (-dirty); this is the clean commit." : "",
+    parsed.stamped ? "The build stamp (date and host) was ignored." : ""].filter(Boolean).join(" ");
   const hit = refs.find((r) => shaMatches(r, parsed.hash));
-  if (hit) return { ref: hit, exact: true, note: dirty };
+  if (hit) return { ref: hit, exact: true, note: ignored };
   if (parsed.tag === undefined) {
     return {
       ref: null,
@@ -272,7 +281,7 @@ export function findVersion(index, project, text, accept = null) {
     // A describe string names no branch, so the closest count may be on
     // another line of development: the note names a branch other than the default.
     const branch = best.kind === "branch" && best.id !== (p && p.default_branch) ? ` (the ${best.id} branch)` : "";
-    return { ref: best, exact: false, note: `Closest ${accept ? "offered" : "kept"}: ${best.describe}${branch}.${dirty ? ` ${dirty}` : ""}` };
+    return { ref: best, exact: false, note: `Closest ${accept ? "offered" : "kept"}: ${best.describe}${branch}.${ignored ? ` ${ignored}` : ""}` };
   }
   const sameTag = refs.some((r) => { const d = parseVersionString(r.describe); return d && d.tag === parsed.tag; });
   let error;
