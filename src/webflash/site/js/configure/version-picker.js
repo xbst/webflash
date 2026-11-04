@@ -289,14 +289,22 @@ class VersionCombobox {
 
   /** Start loading the older commits if they are not here yet; resolves when settled. */
   _history() {
-    if (this.loading) return this.loading;
     const { index, project } = this.opts;
+    // A load started for another project or index (a switch, a reloaded
+    // index) is left to settle alone: this one is the one waited for.
+    if (this.loading && this.loadingFor.index === index && this.loadingFor.project === project) return this.loading;
     if (!index || !historyInfo(index, project) || historyRefs(index, project)) return null;
     this.loadError = "";
-    this.loading = loadHistory(index, project, this.opts.base || sourcesBase())
-      .then(() => {}, (e) => { this.loadError = e.message; })
-      .then(() => { this.loading = null; if (this.opts.index === index) this.render(); });
-    return this.loading;
+    this.loadingFor = { index, project };
+    const p = loadHistory(index, project, this.opts.base || sourcesBase())
+      .then(() => {}, (e) => { if (this.loading === p) this.loadError = e.message; })
+      .then(() => {
+        if (this.loading !== p) return;
+        this.loading = null;
+        this.render();
+      });
+    this.loading = p;
+    return p;
   }
 
   _open() {
@@ -502,7 +510,10 @@ class VersionCombobox {
     const showsOlder = history && (versions === "all" || !versions || Array.isArray(versions));
     if (showsOlder && !data.older) {
       if (this.loadError) info(this.loadError, true);
-      else info(`Loading ${history.count} older commits…`);
+      else {
+        info(`Loading ${history.count} older commits…`);
+        this._history();     // a switch or a new index while the list is open
+      }
     }
     if (data.more) info(`${data.more} more older commits: type to narrow the list.`);
     // A match waiting for the older commits: the row above says they load, or why they did not.
