@@ -202,9 +202,14 @@ export class BuildPanel {
     return slots.some((slot) => !buildMatches(this.session, this.lastBuilds[slot], slot));
   }
 
-  /** Whether a build of every slot is on record and still matches. */
+  /**
+   * Whether a build of every slot is in session.builds and still matches:
+   * the rows' records (lastBuilds) outlive an opened TOML, which drops
+   * session.builds, so a reopened board builds again, as Next and Flash ask.
+   */
   get current() {
-    return this.slots.every((slot) => buildMatches(this.session, this.lastBuilds[slot], slot));
+    const builds = this.session.builds || {};
+    return this.slots.every((slot) => buildMatches(this.session, builds[slot], slot));
   }
 
   render() {
@@ -232,7 +237,8 @@ export class BuildPanel {
       const job = this.job(slot);
       const build = this.lastBuilds[slot];
       if (job.state !== "failed" && job.state !== "cancelled") job.state = build ? "done" : "idle";
-      job.stale = Boolean(build) && !buildMatches(this.session, build, slot);
+      // A record an opened TOML dropped from session.builds is from an earlier configuration too.
+      job.stale = Boolean(build) && (build !== (this.session.builds || {})[slot] || !buildMatches(this.session, build, slot));
       this.drawJob(job);
     }
   }
