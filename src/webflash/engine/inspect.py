@@ -254,6 +254,32 @@ def linker_memory(ld_text: str) -> dict[str, dict[str, int]]:
     return regions
 
 
+def image_memory(memory: dict[str, dict[str, int]], elf: dict,
+                 regions: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    """The linker's memory table (``{region: {"used", "size"}}``) with each
+    region's use taken from the image where that is more. The linker counts
+    sections by their run address, so a section loaded from flash with
+    ``AT (address)`` and run from RAM is not counted in flash: the RP2040 and
+    RP2350 run all their code from RAM, which leaves their flash region with
+    the boot code alone, and every build leaves out the initial values of
+    ``.data``. The image's use of a region runs from its origin to the end of
+    the last load segment whose load address is in it, as the linker counts
+    its own. A region corrected so keeps the linker's figure as ``linker``.
+    ``regions`` is :func:`linker_memory` of the script the link used."""
+    segments = _content_segments(elf)
+    out: dict[str, dict[str, int]] = {}
+    for name, use in memory.items():
+        out[name] = dict(use)
+        region = regions.get(name)
+        if not region:
+            continue
+        lo, hi = region["origin"], region["origin"] + region["length"]
+        ends = [s["paddr"] + s["filesz"] for s in segments if lo <= s["paddr"] < hi]
+        if ends and max(ends) - lo > use["used"]:
+            out[name] = {**use, "used": max(ends) - lo, "linker": use["used"]}
+    return out
+
+
 def parse_ihex(text: str) -> list[dict]:
     """Intel HEX records 00, 01, 02, 04 and 05 into contiguous segments."""
     segments: list[dict] = []

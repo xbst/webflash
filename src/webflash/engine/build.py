@@ -6,7 +6,8 @@ writes ``.config``, ``klippy/.version`` and the ``.git`` marker that keeps
 reads the Makefiles through the interpreter (which creates ``out/board``),
 plans the targets of ``all`` into waves and runs them: compiles of a wave
 concurrently through the toolchain, everything else in make's order. The
-result holds every output file, the memory table from the link, the log,
+result holds every output file, the memory table from the link (with the
+flash region's use taken from the image where the linker counts less), the log,
 the commands and the duration.
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .driver import Driver, parse_memory_usage
+from .inspect import image_memory, linker_memory, parse_elf
 from .kconfig import Session
 from .make import Evaluator, MakeError, Target, run_sync
 from .pyrun import PyRunner
@@ -79,6 +81,8 @@ class Build:
         self.log_lines: list[str] = []
         self.commands: list[list[str]] = []
         self.memory: Optional[dict[str, dict[str, int]]] = None
+        # The link that printed the memory table: its target and command.
+        self._memory_link: Optional[tuple[str, list[str]]] = None
         self.driver = Driver(toolchain.kind, getattr(toolchain, "sysroot", None), lto=lto,
                              version=getattr(toolchain, "version", "0"), label=getattr(toolchain, "label", "webflash"))
 
@@ -166,6 +170,7 @@ class Build:
                     table = parse_memory_usage(result.stdout)
                     if table:
                         self.memory = table
+                        self._memory_link = (target.name, list(result.argv) if result.argv else text.split())
             if result.stderr.strip():
                 self.log(result.stderr.rstrip("\n"))
             if result.code != 0 and not ignore:
@@ -209,6 +214,30 @@ class Build:
                 outputs[path.name] = path.read_bytes()
         return outputs
 
+    def _correct_memory(self) -> None:
+        """Takes each region's use from the linked image where the linker's
+        table, which counts run addresses, shows less (inspect.image_memory):
+        the RP2040's code runs from RAM, so its flash region would hold the
+        boot code alone."""
+        if not self.memory or not self._memory_link:
+            return
+        target, argv = self._memory_link
+        output = argv[argv.index("-o") + 1] if "-o" in argv[:-1] else target
+        script = argv[argv.index("-T") + 1] if "-T" in argv[:-1] else None
+        elf_path, ld_path = self.tree / output, self.tree / script if script else None
+        if ld_path is None or not elf_path.is_file() or not ld_path.is_file():
+            return
+        try:
+            regions = linker_memory(ld_path.read_text(encoding="utf-8", errors="replace"))
+            memory = image_memory(self.memory, parse_elf(elf_path.read_bytes()), regions)
+        except (OSError, ValueError):
+            return
+        for name, use in memory.items():
+            if "linker" in use:
+                self.log(f"{name}: {use['used']:,} bytes of the image (the linker's {use['linker']:,} "
+                         f"counts only the sections that run from {name})")
+        self.memory = memory
+
     # ── Running ───────────────────────────────────────────────────────
 
     async def run_async(self) -> BuildResult:
@@ -231,6 +260,7 @@ class Build:
         except (MakeError, ShellError) as e:
             raise BuildError(str(e)) from None
         outputs = self._collect(ev)
+        self._correct_memory()
         outputs[".config"] = config.encode("utf-8")
         outputs.setdefault("defconfig", defconfig.encode("utf-8"))
         duration = time.perf_counter() - started

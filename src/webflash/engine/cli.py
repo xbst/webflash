@@ -314,7 +314,10 @@ def print_memory(memory: Optional[dict]) -> None:
     print("Memory:")
     for region, use in memory.items():
         pct = 100.0 * use["used"] / use["size"] if use["size"] else 0.0
-        print(f"  {region:>6}: {use['used']:>9,} of {use['size']:>9,} bytes ({pct:.1f}%)")
+        # A region the image fills further than the linker counts (code
+        # loaded from flash and run from RAM) says so.
+        note = f", the image; the linker counts {use['linker']:,}" if "linker" in use else ""
+        print(f"  {region:>6}: {use['used']:>9,} of {use['size']:>9,} bytes ({pct:.1f}%{note})")
 
 
 def cmd_build(args: argparse.Namespace) -> int:
