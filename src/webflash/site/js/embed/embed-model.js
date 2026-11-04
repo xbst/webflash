@@ -358,6 +358,19 @@ export function picksTitle(picks) {
   return parts.length === 2 ? `${parts[0]} and ${parts[1]}` : parts[0] || "";
 }
 
+// The commit hash a version names (a describe string's g<hash>, or a bare hash), else null.
+const commitOf = (v) => {
+  const m = /-g([0-9a-f]{4,40})(?:-dirty)?$/i.exec(v) || /^g?([0-9a-f]{7,40})$/i.exec(v);
+  return m ? m[1].toLowerCase() : null;
+};
+
+/** Whether two versions name the same commit by its hash, in any abbreviation. */
+function sameCommit(a, b) {
+  const x = commitOf(String(a));
+  const y = commitOf(String(b));
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+}
+
 /**
  * The board TOML's tables (board_data's shape) for the reader's picks.
  * For the card's session (link false) every setup stays, by index: with
@@ -370,9 +383,14 @@ export function picksTitle(picks) {
  * Katapult away, and None keeps only the setups with Katapult.
  */
 export function cardTables(config, picks, { link = false, choices = null } = {}) {
-  // A pinned version must be one of the versions the reader picks from, as the session keeps it.
-  const pin = (t) => (Array.isArray(t.versions) && t.version && t.version !== "latest" && t.version !== "release" &&
-    !t.versions.includes(t.version) ? { ...t, versions: [...t.versions, t.version] } : t);
+  // A pinned version must be one of the versions the reader picks from, as the session keeps it;
+  // a commit the list names in another abbreviation keeps the list's spelling.
+  const pin = (t) => {
+    if (!Array.isArray(t.versions) || !t.version || t.version === "latest" || t.version === "release" ||
+        t.versions.includes(t.version)) return t;
+    const same = t.versions.find((w) => sameCommit(w, t.version));
+    return same ? { ...t, version: same } : { ...t, versions: [...t.versions, t.version] };
+  };
   const f = config.firmware;
   const k = config.katapult;
   const at = Math.max(0, Math.min(picks.setupIndex || 0, config.setups.length - 1));
