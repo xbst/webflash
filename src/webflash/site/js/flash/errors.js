@@ -133,7 +133,7 @@ const EMBED_ALLOW = "Embedded in another site? Its iframe needs allow=\"usb; ser
 
 const UART_BAUD = "Over UART, Katapult must use the same baud rate as the firmware.";
 
-const PICKER_NOTE ="Put the board in the right mode and plug it straight into this computer (not a hub).";
+const PICKER_NOTE = "Put the board in the right mode and plug it straight into this computer (not a hub).";
 
 const DISCONNECTED_FIXES = [
   "Just flashed? Then the restart is expected: check that the board shows up as Klipper (or Katapult).",
