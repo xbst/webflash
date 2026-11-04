@@ -32,7 +32,9 @@ bundles, a manifest per snapshot, a record per bundled ``lib/<dir>`` tree
 (``trees/``, so an unchanged vendor tree is never read or compressed again) and
 ``state.json``, which remembers what each ref pointed at and when the policy
 last selected it. A ref whose commit already has a snapshot costs one
-``git ls-remote``; nothing is cloned unless something is new.
+``git ls-remote``; nothing is cloned unless something is new, or the upstream
+tags changed: a tag can change the ``git describe`` label of a commit already
+snapshotted, so then every cached snapshot is described again.
 
 Bundles are built from git's objects, never from a checkout, so line-ending
 settings cannot change a byte: entries are sorted, regular files only (a
@@ -788,6 +790,46 @@ def snapshot_current(policy: Policy, cache: Path, project: str, sha: str) -> dic
     if not all((cache / blob).is_file() for blob in blobs):
         return None
     return manifest
+
+
+def _tags_key(remote: list[RemoteRef]) -> str:
+    """What the upstream tags are, as one digest: a ``git describe`` label can
+    change only when they do."""
+    tags = sorted((r.name, r.sha) for r in remote if r.kind == "tag")
+    return hashlib.sha256(json.dumps(tags).encode()).hexdigest()
+
+
+def refresh_describes(cache: Path, project: ProjectPolicy, state: dict, remote: list[RemoteRef],
+                      repos: _Repos, log) -> int:
+    """Bring the cached snapshots' ``git describe`` labels up to date when the
+    upstream tags changed since the last run: a tag placed on a commit already
+    snapshotted (Kalico tags existing commits of its default branch) changes
+    the label of that commit and of every snapshotted commit after it. Each
+    manifest the state keeps is described again in the fetched clone and
+    rewritten when its label differs. Returns how many changed."""
+    project_state = _project_state(state, project.name)
+    key = _tags_key(remote)
+    if project_state.get("tags") == key:
+        return 0
+    shas = sorted({ref["sha"] for ref in project_state["refs"].values()}
+                  | set(project_state["superseded"]) | set(project_state.get("history", {})))
+    cached = [(sha, m) for sha in shas
+              if (m := _read_json(snapshot_dir(cache, project.name, sha) / REF_FILE)) is not None]
+    changed = 0
+    if cached:
+        repo = repos.get(project)
+        for sha, manifest in cached:
+            if not _has_commit(repo, sha):
+                continue        # gone upstream (a force-pushed branch): it keeps its label
+            describe = _git(["describe", "--tags", "--long", "--always", sha], cwd=repo).decode().strip()
+            if describe != manifest.get("describe"):
+                manifest["describe"] = describe
+                _write_json(snapshot_dir(cache, project.name, sha) / REF_FILE, manifest)
+                changed += 1
+    if changed:
+        log(f"{project.name}: the tags changed upstream, and {changed} describe labels with them")
+    project_state["tags"] = key
+    return changed
 
 
 def build_snapshot(policy: Policy, project: ProjectPolicy, sha: str, cache: Path, repo: Path,
@@ -1861,7 +1903,10 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
     heads: dict[str, str] = {}
     for name in names:
         project = policy.projects[name]
-        selected = select_refs(project, list_refs(project), warnings)
+        remote = list_refs(project)
+        if not refs:
+            refresh_describes(cache, project, state, remote, repos, log)
+        selected = select_refs(project, remote, warnings)
         heads[name] = selected[0].sha
         if refs:
             matched_refs.update(r.name for r in selected if r.name in refs)
