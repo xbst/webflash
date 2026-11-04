@@ -30,7 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 class MakeError(Exception):
     """A construct the interpreter does not support, or a failure GNU make
-    would report (no rule for a target, a recipe that failed, a cycle)."""
+    would report (no rule for a target, a recipe that failed)."""
 
 
 # How deep ``$(MAKE)`` may nest: the projects' Makefiles go one level down.
@@ -280,6 +280,7 @@ class Evaluator:
         self._building_env = False
         self._done: dict[str, bool] = {}
         self._updating: list[str] = []
+        self._dropped: set[tuple[str, str]] = set()
         self._mentioned_cache: Optional[set[str]] = None
         self._loaded = False
 
@@ -1095,8 +1096,6 @@ class Evaluator:
         run, would be) remade."""
         if name in self._done:
             return self._done[name]
-        if name in self._updating:
-            raise MakeError(f"Circular {self._updating[-1]} <- {name} dependency dropped")
         target = self._resolve(name)
         if target is None:
             if self._exists(name):
@@ -1108,7 +1107,10 @@ class Evaluator:
         try:
             remade_prereq = False
             newest: Optional[float] = None
-            for p in target.prereqs:
+            for p in list(target.prereqs):
+                if p in self._updating:
+                    self._drop_cycle(target, p)
+                    continue
                 if await self._update(p, dry_run, remaking_makefiles):
                     remade_prereq = True
                 m = self._mtime(p)
@@ -1123,6 +1125,18 @@ class Evaluator:
             return bool(needs)
         finally:
             self._updating.pop()
+
+    def _drop_cycle(self, target: Target, name: str) -> None:
+        """A prerequisite that is itself being updated, as GNU make answers
+        it (remake.c, update_file_1): the edge leaves the target's
+        prerequisites (and so ``$^``) and a warning goes to the log, once per
+        edge however often the graph is walked."""
+        target.prereqs[:] = [p for p in target.prereqs if p != name]
+        if (target.name, name) in self._dropped:
+            return
+        self._dropped.add((target.name, name))
+        prefix = f"make[{self.level}]" if self.level else "make"
+        self.log(f"{prefix}: Circular {target.name} <- {name} dependency dropped.")
 
     async def _run_recipe(self, target: Target, dry_run: bool) -> None:
         auto = self._auto(target)
@@ -1202,15 +1216,14 @@ class Evaluator:
 
     def graph(self, goals: list[str]) -> dict[str, Target]:
         """Every target reachable from the goals, with its prerequisites and
-        rule; a prerequisite with no rule that does not exist is an error."""
+        rule; a prerequisite with no rule that does not exist is an error, and
+        a cycle's back-edge is dropped with a warning, as GNU make drops it."""
         nodes: dict[str, Target] = {}
         stack: list[str] = []
 
         def visit(name: str, parent: str) -> None:
             if name in nodes:
                 return
-            if name in stack:
-                raise MakeError(f"Circular {parent} <- {name} dependency dropped")
             t = self._resolve(name)
             if t is None:
                 if self._exists(name):
@@ -1218,7 +1231,10 @@ class Evaluator:
                     return
                 raise MakeError(f"No rule to make target '{name}', needed by '{parent}'.  Stop.")
             stack.append(name)
-            for p in t.prereqs:
+            for p in list(t.prereqs):
+                if p in stack:
+                    self._drop_cycle(t, p)
+                    continue
                 visit(p, name)
             stack.pop()
             nodes[name] = t

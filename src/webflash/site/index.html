@@ -25,152 +25,220 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div class="app">
+<div class="site">
 
-  <!-- Top toolbar -->
-  <header class="toolbar" role="toolbar" aria-label="WebFlash">
-    <span class="toolbar-title"><span class="brand-mark" aria-hidden="true"></span>WebFlash</span>
-    <label class="field">
-      Project
-      <select id="project-select" title="The firmware to build">
-        <option value="klipper">Klipper</option>
-        <option value="kalico">Kalico</option>
-        <option value="katapult">Katapult</option>
-      </select>
-    </label>
-    <label class="field">
-      Version
-      <select id="version-select" disabled title="The version to configure, from the source snapshots">
-        <option value="latest">Loading versions…</option>
-      </select>
-      <span class="ref-badge" id="version-badge" hidden>unchecked</span>
-    </label>
-    <span class="separator"></span>
-    <label class="file-btn" id="open-toml-label" title="Open a board TOML, with its image and firmware file if it names them">
-      Open TOML
+  <!-- Top bar -->
+  <header class="top">
+    <span class="brand"><span class="brand-mark" aria-hidden="true"></span>WebFlash</span>
+    <span class="status-wrap">
+      <button type="button" class="status-chip" id="status-chip" aria-expanded="false" aria-controls="status-pop">
+        <span class="dot idle" aria-hidden="true"></span><span class="chip-text">Not loaded</span>
+      </button>
+      <span class="sr-only" id="status-live" role="status" aria-live="polite"></span>
+      <div class="status-pop" id="status-pop" role="group" aria-label="What is loaded" hidden>
+        <div class="status-row">
+          <span class="pill" id="status-python">Python</span>
+          <span class="status-detail"></span>
+          <button type="button" class="mini" id="status-python-retry" hidden>Try again</button>
+        </div>
+        <div class="status-row">
+          <span class="pill" id="status-sources">Sources</span>
+          <span class="status-detail"></span>
+        </div>
+        <div class="status-row">
+          <span class="pill off" id="status-toolchain">Compiler</span>
+          <span class="status-detail"></span>
+        </div>
+      </div>
+    </span>
+    <label class="file-btn ghost" id="open-toml-label" title="Open a board TOML, with its image and firmware file if it names them">
+      Open<span class="wide-only">&nbsp;TOML</span>
       <input type="file" id="open-toml" accept=".toml,image/*,.bin,.hex,.uf2,.elf" multiple>
     </label>
-    <button id="save-toml" title="Save the board TOML (Ctrl+S)">Save TOML</button>
-    <button id="upload-firmware" disabled title="Flash a firmware file you upload">Upload firmware</button>
-    <span class="separator"></span>
-    <label class="field">
-      Theme
-      <select id="theme-select" title="The theme of the generated page"></select>
+    <label class="file-btn ghost" id="open-config-label" title="Start from a Klipper, Kalico or Katapult .config; pick Katapult's with the firmware's to set up both">
+      <span class="wide-only">Open&nbsp;</span>.config
+      <input type="file" id="open-config" multiple>
     </label>
-    <button id="generate-btn" class="primary" title="Generate the embeddable page from the board TOML">Generate</button>
-    <span class="toolbar-spacer"></span>
-    <span class="runtime" id="runtime" aria-live="polite">
-      <span class="pill" id="status-python" title="The Python runtime (Pyodide), loaded when it is first needed">Python</span>
-      <span class="pill off" id="status-toolchain" title="The compiler (clang and lld for Arm, in WebAssembly), downloaded with the first build">Toolchain</span>
-      <span class="pill" id="status-sources" title="The source snapshots, loaded when a version is configured">Sources</span>
-    </span>
-    <button id="about-btn" class="icon-btn" title="About WebFlash" aria-label="About WebFlash">?</button>
+    <button type="button" class="ghost" id="upload-firmware" disabled title="Flash a firmware file you have (.bin, .hex, .uf2 or .elf)">Upload<span class="wide-only">&nbsp;firmware</span></button>
+    <button type="button" class="ghost icon-btn" id="about-btn" title="About WebFlash" aria-label="About WebFlash">?</button>
   </header>
 
-  <!-- Panels -->
-  <main class="panels">
+  <main class="center">
+    <div class="wiz" id="wizard">
+      <ol class="steps" id="wizard-steps" aria-label="Steps"></ol>
 
-    <!-- Left: configuration -->
-    <section class="panel panel-left" aria-label="Configuration">
-      <div class="panel-tabs" role="tablist" aria-label="Configuration views">
-        <button id="tab-configure" class="panel-tab" role="tab" aria-selected="true" aria-controls="configure-panel">Configure</button>
-        <button id="tab-config" class="panel-tab" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1">.config</button>
-        <button id="tab-embed" class="panel-tab" role="tab" aria-selected="false" aria-controls="embed-panel" tabindex="-1">Embed options</button>
-        <button id="tab-toml" class="panel-tab" role="tab" aria-selected="false" aria-controls="toml-panel" tabindex="-1">TOML</button>
-      </div>
-
-      <div id="configure-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-configure">
-        <div class="panel-bar">
-          <input type="search" id="kconfig-search" placeholder="Search options (/)" aria-label="Search the options" disabled>
-          <span class="kc-count" id="kconfig-count"></span>
-          <button id="kconfig-reset" disabled title="Set every option back to its Kconfig default (Ctrl+Z undoes it)">Reset to defaults</button>
-          <button id="kconfig-load" disabled title="Paste or open a .config or defconfig and apply it">Load .config</button>
-        </div>
-        <div class="kc-status" id="kconfig-status" hidden></div>
-        <div class="kc-notice" id="kconfig-notice" role="status" hidden></div>
-        <div class="kc-scroll" id="kconfig-scroll">
-          <div class="kc-start" id="kconfig-start"></div>
-          <div id="kconfig-tree"></div>
-        </div>
-      </div>
-
-      <div id="config-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-config" hidden>
-        <div class="panel-bar">
-          <label class="check" title="The defconfig: only what differs from the defaults, as a board TOML's [config] holds it"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
-          <span class="bar-note" id="config-note"></span>
-          <span class="bar-spacer"></span>
-          <button id="config-copy" disabled>Copy</button>
-          <button id="config-download" disabled>Download</button>
-        </div>
-        <textarea id="config-text" class="code" readonly spellcheck="false" aria-label="The configuration"></textarea>
-      </div>
-
-      <div id="embed-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-embed" hidden>
-        <div class="opt-panel" id="embed-options"></div>
-      </div>
-
-      <div id="toml-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-toml" hidden>
-        <div class="panel-bar">
-          <span class="file-name" id="toml-name">board.toml</span>
-          <span class="toml-files" id="toml-files"></span>
-          <span class="bar-spacer"></span>
-          <button id="toml-copy" title="Copy the board TOML">Copy</button>
-        </div>
-        <textarea id="toml-text" class="code" readonly spellcheck="false" aria-label="Board TOML: what Save TOML writes"></textarea>
-        <div class="toml-status" id="toml-status" role="status"></div>
-      </div>
-    </section>
-
-    <!-- Right: build and flash -->
-    <section class="panel panel-right" aria-label="Build and flash">
-      <div class="card" id="build-card">
-        <div class="card-head">
-          <h2>Build</h2>
-          <span class="build-status" id="build-status" aria-live="polite"></span>
-          <span class="card-spacer"></span>
-          <button id="build-cancel" hidden title="Stop the build">Cancel</button>
-          <button id="build-btn" class="primary" disabled title="Load the configuration first (the Configure tab).">Build</button>
-        </div>
-        <div class="build-start" id="build-start" hidden></div>
-        <progress class="build-bar" id="build-bar" hidden aria-label="Build progress"></progress>
-        <ol class="progress-list" id="build-progress" aria-label="Build steps"></ol>
-        <div class="build-error" id="build-error" role="alert" hidden></div>
-        <table class="memory" id="build-memory" hidden aria-label="Memory use"></table>
-        <div class="artifacts" id="build-artifacts"></div>
-        <details class="log-box" id="build-log-box">
-          <summary>Log <span class="log-count" id="build-log-count"></span><button id="build-log-copy" class="mini" disabled title="Copy the build log">Copy</button></summary>
-          <pre class="log" id="build-log" tabindex="0" aria-label="Build log"></pre>
-        </details>
-        <p class="card-note build-plan" id="build-plan" hidden></p>
-        <p class="card-note">Builds run in this browser: clang and lld compiled to WebAssembly, driven by the project's own Makefiles.</p>
-      </div>
-
-      <div class="card" id="flash-card">
-        <div class="card-head">
-          <h2>Flash</h2>
-          <span class="card-spacer"></span>
-          <label class="field">Method
-            <select id="flash-method" disabled title="How to write the firmware to the board">
-              <option>Download</option>
-            </select>
-          </label>
-        </div>
-        <div class="flash-step" id="flash-step">
-          <p class="flash-instructions" id="flash-instructions">Pick a method once a firmware is built or uploaded.</p>
-          <div class="flash-actions">
-            <button id="flash-connect" class="primary" disabled title="Pick the board in the browser's device list">Connect</button>
-            <button id="flash-write" disabled title="Write and verify the firmware">Flash</button>
+      <!-- 1. Firmware -->
+      <section class="wiz-step" data-step="firmware" aria-labelledby="firmware-title">
+        <div class="wiz-body">
+          <h2 class="page" id="firmware-title" tabindex="-1" data-wiz-title>Flash your board</h2>
+          <p class="lead">Pick the firmware, set it up for your board, then build and flash it, all in this browser.</p>
+          <p class="wiz-note" id="fw-prebuilt" hidden></p>
+          <h3 class="sec">What to flash</h3>
+          <div class="fw">
+            <div class="what"><span class="name" id="fw-label">Firmware</span><span class="sub">Runs the printer; Kalico is a Klipper fork.</span></div>
+            <span class="seg2" role="radiogroup" aria-labelledby="fw-label">
+              <button type="button" role="radio" data-fw="klipper">Klipper</button><button type="button" role="radio" data-fw="kalico">Kalico</button><button type="button" role="radio" data-fw="none">None</button>
+            </span>
+            <div class="ver" id="fw-version-row">
+              <span class="ver-label" aria-hidden="true">Version</span>
+              <div class="ver-picker" id="fw-version"></div>
+            </div>
           </div>
-          <progress id="flash-progress" max="100" value="0" hidden></progress>
-          <div class="flash-result" id="flash-result" hidden></div>
+          <div class="fw">
+            <div class="what">
+              <label class="check name"><input type="checkbox" id="katapult-check"> Katapult bootloader</label>
+              <span class="sub">Lets you update the firmware later without pressing buttons.</span>
+            </div>
+            <span></span>
+            <div class="ver" id="katapult-version-row" hidden>
+              <span class="ver-label" aria-hidden="true">Version</span>
+              <div class="ver-picker" id="katapult-version"></div>
+            </div>
+          </div>
+          <div class="alts">
+            <button type="button" class="link" id="fw-open-toml">Open a board TOML</button>
+            <button type="button" class="link" id="fw-open-config">Open a .config</button>
+            <button type="button" class="link" id="fw-upload">Flash a file you have</button>
+          </div>
+          <details class="spoiler" id="about-fold">
+            <summary>Versions and licenses</summary>
+            <div class="about-inline" id="about-inline"></div>
+          </details>
         </div>
-        <details class="help-box" id="flash-help">
-          <summary>What went wrong?</summary>
-          <p>Common problems and their fixes appear here: drivers on Windows, permissions on Linux, a board that is not in its bootloader.</p>
-        </details>
-      </div>
-    </section>
+        <div class="wiz-foot">
+          <span class="hint" data-wiz-hint></span>
+          <button type="button" class="primary" data-wiz-next>Next</button>
+        </div>
+      </section>
+
+      <!-- 2. Configure -->
+      <section class="wiz-step" data-step="configure" aria-labelledby="configure-title" hidden>
+        <div class="wiz-body" id="configure-panel">
+          <h2 class="page" id="configure-title" tabindex="-1" data-wiz-title>Set up Klipper</h2>
+          <p class="lead" id="configure-lead">Match your board.</p>
+          <div class="kc-setup" id="kconfig-setup-row" hidden>
+            <label for="kconfig-setup">Setup</label>
+            <select id="kconfig-setup"></select>
+          </div>
+          <div class="cfg-bar">
+            <input type="search" id="kconfig-search" placeholder="Search options (/)" aria-label="Search the options" disabled>
+            <span class="kc-count" id="kconfig-count"></span>
+            <button type="button" class="mini" id="kconfig-undo" disabled title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+            <button type="button" class="mini" id="kconfig-redo" disabled title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
+            <button type="button" class="mini" id="kconfig-load" disabled title="Paste or open a .config or defconfig">Load .config</button>
+            <button type="button" class="mini" id="kconfig-reset" disabled title="Every option back to its default, keeping the chip and the low-level options (Ctrl+Z undoes it)">Reset</button>
+          </div>
+          <div class="kc-status" id="kconfig-status" hidden></div>
+          <div class="kc-notice" id="kconfig-notice" role="status" hidden></div>
+          <div class="kc-scroll" id="kconfig-scroll">
+            <div class="kc-start" id="kconfig-start"></div>
+            <div id="kconfig-tree"></div>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="ghost" data-wiz-back>Back</button>
+          <span class="hint" data-wiz-hint></span>
+          <button type="button" id="configure-to-embed" title="Back to the setups, without building" hidden>Back to Embed</button>
+          <button type="button" class="primary" data-wiz-next>Build</button>
+        </div>
+      </section>
+
+      <!-- 3. Build -->
+      <section class="wiz-step" data-step="build" aria-labelledby="build-title" hidden>
+        <div class="wiz-body">
+          <h2 class="page" id="build-title" tabindex="-1" data-wiz-title>Build</h2>
+          <p class="lead build-clock" id="build-clock" aria-live="polite"></p>
+          <div id="build-card">
+            <ul class="build-pre" id="build-pre" aria-label="What the build needs"></ul>
+            <div class="build-start" id="build-start" hidden></div>
+            <div class="build-jobs" id="build-jobs"></div>
+            <div class="build-error" id="build-error" role="alert" hidden></div>
+            <details class="spoiler" id="build-memory-box" hidden>
+              <summary>Memory</summary>
+              <div class="build-memory" id="build-memory"></div>
+            </details>
+            <details class="spoiler log-box" id="build-log-box">
+              <summary>Log <span class="log-count" id="build-log-count"></span><button type="button" id="build-log-copy" class="mini" disabled title="Copy the build log">Copy</button></summary>
+              <ol class="progress-list" id="build-progress" aria-label="Build steps"></ol>
+              <pre class="log" id="build-log" tabindex="0" aria-label="Build log"></pre>
+            </details>
+            <p class="card-note build-plan" id="build-plan" hidden></p>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="ghost" data-wiz-back>Back</button>
+          <span class="hint" data-wiz-hint></span>
+          <button type="button" id="build-cancel" hidden title="Stop the build">Cancel</button>
+          <button type="button" id="build-btn" class="ghost" disabled title="Load the configuration first.">Build</button>
+          <button type="button" class="primary" data-wiz-next disabled>Next</button>
+        </div>
+      </section>
+
+      <!-- 4. Flash -->
+      <section class="wiz-step" data-step="flash" aria-labelledby="flash-title" hidden>
+        <div class="wiz-body">
+          <h2 class="page" id="flash-title" tabindex="-1" data-wiz-title>Flash</h2>
+          <p class="lead">Pick a method, then follow its steps.</p>
+          <div class="card" id="flash-card">
+            <p class="flash-instructions">Build a firmware or upload a file first.</p>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="ghost" data-wiz-back>Back</button>
+          <span class="hint" data-wiz-hint></span>
+          <button type="button" class="muted" data-wiz-next>Make an embed</button>
+        </div>
+      </section>
+
+      <!-- 5. Embed -->
+      <section class="wiz-step" data-step="embed" aria-labelledby="embed-title" hidden>
+        <div class="wiz-body">
+          <h2 class="page" id="embed-title" tabindex="-1" data-wiz-title>Embed this board</h2>
+          <p class="lead">Turn this board into a card for your docs.</p>
+          <div class="tabs" role="tablist" aria-label="Embed views">
+            <button type="button" id="tab-embed" class="panel-tab" role="tab" aria-selected="true" aria-controls="embed-panel">Embed options</button>
+            <button type="button" id="tab-config" class="panel-tab" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1">.config</button>
+            <button type="button" id="tab-toml" class="panel-tab" role="tab" aria-selected="false" aria-controls="toml-panel" tabindex="-1">TOML</button>
+          </div>
+
+          <div id="embed-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-embed">
+            <div class="opt-panel" id="embed-options"></div>
+          </div>
+
+          <div id="config-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-config" hidden>
+            <div class="cfg-bar">
+              <select id="config-project" aria-label="Which project's configuration" hidden></select>
+              <label class="check" title="Only what differs from the defaults, as [config] holds it"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
+              <span class="bar-note" id="config-note"></span>
+              <span class="bar-spacer"></span>
+              <button type="button" class="mini" id="config-copy" disabled>Copy</button>
+              <button type="button" class="mini" id="config-download" disabled>Download</button>
+            </div>
+            <textarea id="config-text" class="code" readonly spellcheck="false" aria-label="The configuration"></textarea>
+          </div>
+
+          <div id="toml-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-toml" hidden>
+            <div class="cfg-bar">
+              <span class="file-name" id="toml-name">board.toml</span>
+              <span class="toml-files" id="toml-files"></span>
+              <span class="bar-spacer"></span>
+              <button type="button" class="mini" id="toml-copy-link" title="Copy a link that opens this TOML in WebFlash">Copy link</button>
+              <button type="button" class="mini" id="toml-copy" title="Copy the board TOML">Copy</button>
+            </div>
+            <textarea id="toml-text" class="code" readonly spellcheck="false" aria-label="Board TOML: what Save TOML writes"></textarea>
+            <div class="toml-status" id="toml-status" role="status"></div>
+          </div>
+        </div>
+        <div class="wiz-foot">
+          <button type="button" class="ghost" data-wiz-back>Back</button>
+          <span class="hint" data-wiz-hint></span>
+          <button type="button" id="save-toml" title="Save the board TOML (Ctrl+S)">Save TOML</button>
+          <button type="button" id="generate-btn" class="primary" title="Make the embeddable page from the board TOML">Generate</button>
+        </div>
+      </section>
+    </div>
   </main>
+  <p class="legal">Nothing you configure or build leaves this browser.</p>
 </div>
 
 <script type="module" src="js/main.js"></script>

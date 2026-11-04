@@ -52,21 +52,34 @@ function mimeOf(name) {
 }
 
 /**
- * Fill container with a download button per output. build is session.build;
- * stale says the configuration changed since (the buttons stay, labeled).
+ * The name an output is saved under: Katapult's .config and defconfig as
+ * katapult.config and katapult.defconfig, as the Flash step saves them, so
+ * they do not land on the firmware's.
  */
-export function renderArtifacts(container, build, { stale = false } = {}) {
+export function saveName(build, name) {
+  if (build && build.project === "katapult" && (name === ".config" || name === "defconfig")) {
+    return name === ".config" ? "katapult.config" : "katapult.defconfig";
+  }
+  return name;
+}
+
+/**
+ * Fill container with a download button per output. build is a buildRecord;
+ * stale says the configuration changed since (the buttons stay, labeled).
+ * compact: no heading (the Build step's row names the build already).
+ */
+export function renderArtifacts(container, build, { stale = false, compact = false } = {}) {
   if (!build || !build.outputs) {
     container.replaceChildren();
     return;
   }
   const outputs = build.outputs instanceof Map ? build.outputs : new Map(Object.entries(build.outputs));
   const list = artifactList(build);
+  const staleTag = stale ? `<span class="artifacts-stale" title="The configuration changed after this build: these files are from the earlier one.">earlier configuration</span>` : "";
   container.innerHTML =
-    `<div class="artifacts-head"><span>Files</span>` +
-    (build.version ? `<span class="artifacts-version">${esc(build.version)}</span>` : "") +
-    (stale ? `<span class="artifacts-stale" title="The configuration changed after this build: these files are from the earlier one.">earlier configuration</span>` : "") +
-    `</div>` +
+    (compact ? (staleTag ? `<div class="artifacts-head">${staleTag}</div>` : "")
+      : `<div class="artifacts-head"><span>Files</span>` +
+        (build.version ? `<span class="artifacts-version">${esc(build.version)}</span>` : "") + staleTag + `</div>`) +
     `<div class="artifact-buttons">` +
     list.map((a, i) =>
       `<button type="button" class="artifact${i === 0 ? " primary" : ""}" data-name="${esc(a.name)}" title="${esc(`${a.title}. Click to download.`)}">` +
@@ -77,7 +90,7 @@ export function renderArtifacts(container, build, { stale = false } = {}) {
     btn.addEventListener("click", () => {
       const name = btn.dataset.name;
       const bytes = outputs.get(name);
-      if (bytes) saveFile(bytes, name, mimeOf(name));
+      if (bytes) saveFile(bytes, saveName(build, name), mimeOf(name));
     });
   }
 }
@@ -93,13 +106,16 @@ export function renderMemory(table, memory) {
     return;
   }
   regions.sort(([a], [b]) => (REGION_NAMES[a] ? 0 : 1) - (REGION_NAMES[b] ? 0 : 1));
-  table.innerHTML = `<caption>Memory</caption>` + regions.map(([region, { used, size }]) => {
+  table.innerHTML = `<caption>Memory</caption>` + regions.map(([region, { used, size, region_size: regionSize }]) => {
     const pct = size > 0 ? Math.min(100, (100 * used) / size) : 0;
     const name = REGION_NAMES[region.toLowerCase()] || region;
     // Klipper's linker scripts put the stack at the end of RAM, so the
     // linker counts RAM up to its end: full is normal there, not a warning.
     const ram = name === "RAM";
+    // A Katapult build's flash row is its own space (the engine's
+    // _katapult_space), not the linker script's region, the whole flash.
     const title = ram ? "RAM as the linker counts it: up to the end of the stack, which the firmware places at the end of RAM"
+      : regionSize ? "Katapult's own space: the flash below the application address, where the firmware starts"
       : `the linker script's ${region} region`;
     return `<tr><th scope="row" title="${esc(title)}">${esc(name)}</th>` +
       `<td class="mem-bar"><span class="mem-fill${ram ? " ram" : pct >= 90 ? " full" : ""}" style="width:${pct.toFixed(1)}%"></span></td>` +
@@ -116,10 +132,11 @@ export function renderMemory(table, memory) {
  * Kalico; for Katapult, whose FLASH_APPLICATION_ADDRESS is the deployer's,
  * CONFIG_FLASH_START, where katapult.bin goes.
  */
-export function buildRecord(result, outputs, { project, ref }) {
+export function buildRecord(result, outputs, { project, ref, slot = "fw" }) {
   const proj = result.project || project;
   const appAddress = proj === "katapult" ? numberOrNull(result.flash_start) : numberOrNull(result.app_address);
   return {
+    slot: result.slot || slot,
     project: proj,
     ref,
     version: result.version || "",
@@ -145,14 +162,41 @@ export function configKey(text) {
 
 /**
  * Whether a build record (buildRecord's) is a build of what the session
- * configures now: the same project, the same ref and the same .config. A
- * build that no longer matches is not flashed (the Build card keeps its
- * files, labeled as from an earlier configuration).
+ * configures now in the build's slot: the same project, the same ref and the
+ * same .config. The "fw" slot is the session's own project, "katapult" is
+ * session.katapult (Katapult beside the firmware). A build that no longer
+ * matches is not flashed (the Build step keeps its files, labeled as from an
+ * earlier configuration).
  */
-export function buildMatches(session, build) {
+export function buildMatches(session, build, slot = (build && build.slot) || "fw") {
   if (!session || !build) return false;
-  return build.project === session.project && Boolean(session.ref) && build.ref === session.ref.id &&
-    configKey(build.config) === configKey(session.configText);
+  const now = slotConfig(session, slot);
+  if (!now || !now.ref) return false;
+  return build.project === now.project && build.ref === now.ref.id &&
+    configKey(build.config) === configKey(now.configText);
+}
+
+/** What the session configures in a slot: {project, ref, configText}, or null when the slot is not in use. */
+export function slotConfig(session, slot) {
+  if (slot === "katapult") {
+    const k = session.katapult;
+    return k && k.on ? { project: "katapult", ref: k.ref, configText: k.configText } : null;
+  }
+  return { project: session.project, ref: session.ref, configText: session.configText };
+}
+
+/** The slots the session builds, in build order: Katapult first, the firmware last. */
+export function slotsToBuild(session) {
+  return session.katapult && session.katapult.on ? ["katapult", "fw"] : ["fw"];
+}
+
+/**
+ * Whether every slot the session builds has a matching build in builds
+ * ({fw, katapult}, session.builds): a pair goes to Flash only when both do.
+ */
+export function buildsMatch(session, builds = session && session.builds) {
+  if (!session || !builds) return false;
+  return slotsToBuild(session).every((slot) => buildMatches(session, builds[slot], slot));
 }
 
 function numberOrNull(v) {

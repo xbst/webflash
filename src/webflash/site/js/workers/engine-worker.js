@@ -230,12 +230,13 @@ const OWN = {
 
   /**
    * Download a ref's core bundle (cached), gunzip it here, and hand the tar
-   * to bridge.load_sources(project, ref_json, tar_bytes). ref is the ref's
-   * entry from sources/index.json, url the core bundle's URL, size its size
-   * from the index (or null). Resolves to the bridge's JSON plus the bundle's
-   * size and whether it came from the cache.
+   * to bridge.load_sources(slot, project, ref_json, tar_bytes). ref is the
+   * ref's entry from sources/index.json, url the core bundle's URL, size its
+   * size from the index (or null), slot the engine's slot ("fw" or
+   * "katapult"). Resolves to the bridge's JSON plus the bundle's size and
+   * whether it came from the cache.
    */
-  async loadSources(id, [project, ref, url, size = null]) {
+  async loadSources(id, [project, ref, url, size = null, slot = "fw"]) {
     const label = `${project} ${ref && ref.id ? ref.id : ""}`.trim();
     const blob = await fetchBlob(url, { size, onProgress: (done, total) => progress("sources", label, done, total, id) });
     // "extract" only once Python is up: until then the page says it is
@@ -245,7 +246,7 @@ const OWN = {
     const tar = await gunzip(blob.bytes);
     await booting;
     if (waiting) progress("extract", label, null, null, id);
-    const out = JSON.parse(await callBridge("load_sources", [project, JSON.stringify(ref), tar]));
+    const out = JSON.parse(await callBridge("load_sources", [slot, project, JSON.stringify(ref), tar]));
     return JSON.stringify({ ...out, size: blob.size, cached: blob.cached });
   },
 

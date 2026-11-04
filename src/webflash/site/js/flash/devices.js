@@ -53,32 +53,32 @@ export const METHODS = {
   katapult: {
     id: "katapult", label: "Katapult (USB or UART)", transport: "serial",
     short: "Katapult",
-    needs: "Chrome or Edge on a computer; on Linux your user in the dialout group. No driver on Windows.",
+    needs: "No driver needed; on Linux, add your user to the dialout group.",
   },
   "katapult-can": {
-    id: "katapult-can", label: "Katapult over CAN (USB to CAN adapter)", transport: "usb",
+    id: "katapult-can", label: "Katapult over CAN", transport: "usb",
     short: "Katapult over CAN",
-    needs: "A candleLight / gs_usb adapter or a Klipper board in USB to CAN bridge mode on the same bus; on Linux the adapter must be unbound from the kernel's gs_usb driver.",
+    needs: "Needs a candleLight (gs_usb) adapter or a USB to CAN bridge board; on Linux, unbind it from gs_usb first.",
   },
   dfu: {
-    id: "dfu", label: "DFU (STM32 ROM bootloader)", transport: "usb",
+    id: "dfu", label: "DFU (STM32 ROM)", transport: "usb",
     short: "DFU",
-    needs: "Windows: the WinUSB driver on the bootloader device, \"DFU in FS Mode\" or \"STM32 BOOTLOADER\" (Zadig, once). Linux: a udev rule. macOS: nothing.",
+    needs: "Windows needs the WinUSB driver once (Zadig: \"DFU in FS Mode\"); Linux needs a udev rule.",
   },
   picoboot: {
-    id: "picoboot", label: "PICOBOOT (RP2040/RP2350 BOOTSEL)", transport: "usb",
+    id: "picoboot", label: "PICOBOOT (RP2 BOOTSEL)", transport: "usb",
     short: "PICOBOOT",
-    needs: "Windows: the WinUSB driver on RP2 Boot (Interface 1) (Zadig, once) for the RP2040. Linux: a udev rule. macOS: nothing.",
+    needs: "Windows needs the WinUSB driver once for the RP2040 (Zadig: \"RP2 Boot (Interface 1)\"); Linux needs a udev rule.",
   },
   uf2: {
-    id: "uf2", label: "UF2 file onto the BOOTSEL drive", transport: "filesystem",
+    id: "uf2", label: "UF2 drive (RP2 BOOTSEL)", transport: "filesystem",
     short: "UF2 drive",
-    needs: "Chrome or Edge on a computer. No driver on any OS.",
+    needs: "No driver needed.",
   },
   download: {
     id: "download", label: "Download the files", transport: "none",
     short: "Download",
-    needs: "Nothing: flash the downloaded file with the board's own tool.",
+    needs: "",
   },
 };
 
@@ -435,9 +435,9 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
   const offset = `the firmware starts at ${hex(appAddr)}, after a bootloader`;
 
   const katapultByInterface = () => {
-    if (iface === "can") add("katapult-can", `${offset}, and it talks CAN bus (the toolhead is reached through a USB to CAN adapter)`);
+    if (iface === "can") add("katapult-can", `${offset}, and it talks CAN through a USB to CAN adapter`);
     else if (iface === "usbcan") add("katapult", `${offset}; a USB to CAN bridge board runs Katapult over its own USB port`);
-    else if (iface === "serial") add("katapult", `${offset}, and it talks serial (Katapult in UART mode through a USB-UART adapter)`);
+    else if (iface === "serial") add("katapult", `${offset}, and Katapult answers in UART mode through a USB-UART adapter`);
     else add("katapult", `${offset}, so Katapult updates it over USB`);
   };
 
@@ -462,8 +462,8 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
       if (hasBootloader) katapultByInterface();
       if (hasDfuRom(cfg)) {
         add("dfu", hasBootloader
-          ? `the STM32's ROM bootloader (BOOT0) writes the whole flash${overUsb}, Katapult included, when Katapult is not there yet`
-          : `no bootloader offset is configured, so the STM32's own ROM bootloader (hold BOOT0 and tap RESET) is the way in${overUsb}`);
+          ? `the STM32's ROM bootloader (BOOT0) writes the flash${overUsb} while Katapult is not on the board yet`
+          : `there is no bootloader offset, so the STM32's ROM bootloader (hold BOOT0, tap RESET) writes it${overUsb}`);
       } else if (!hasBootloader) {
         add("download", "this STM32 has no USB DFU in its ROM; flash the file with its own tool");
       }
@@ -473,7 +473,7 @@ export function inferMethods(configText, { project = "klipper" } = {}) {
       if (hasBootloader) katapultByInterface();
       add("picoboot", hasBootloader
         ? "the BOOTSEL ROM (hold BOOTSEL while plugging in) writes the flash directly, Katapult or not"
-        : "no bootloader offset is configured, so the BOOTSEL ROM (hold BOOTSEL while plugging in) is the way in");
+        : "there is no bootloader offset, so the BOOTSEL ROM (hold BOOTSEL while plugging in) writes it");
       add("uf2", "the BOOTSEL ROM also takes a .uf2 copied onto its drive");
       break;
     case "lpc176x":
@@ -506,7 +506,7 @@ export function applyTomlMethods(inferred, tomlMethods) {
   for (const idv of tomlMethods) {
     const found = inferred.find((m) => m.id === idv);
     if (found) methods.push(found);
-    else if (METHODS[idv]) warnings.push(`The board TOML offers "${idv}", which this configuration cannot use; it was left out.`);
+    else if (METHODS[idv]) warnings.push(`The board TOML's "${idv}" does not fit this configuration, so it is left out.`);
     else warnings.push(`The board TOML names an unknown flashing method "${idv}".`);
   }
   if (!methods.length) {
@@ -566,7 +566,7 @@ export function methodsForPrebuilt({ mcu = null, image = null, tomlMethods = nul
       { id: "katapult", reason: `${why}: Katapult over USB when the board has it` },
     ];
   } else {
-    inferred = METHOD_IDS.map((idv) => ({ id: idv, reason: "nothing is known about the board, so every method is offered; pick the one that matches its bootloader" }));
+    inferred = METHOD_IDS.map((idv) => ({ id: idv, reason: "nothing names the chip, so every method is offered: pick the one for its bootloader" }));
   }
   if (image && image.family && image.format === "uf2") {
     // A UF2 can only go where UF2s go, plus the methods that write its bytes.
@@ -620,37 +620,67 @@ export function configFitsImage(cfg, image) {
 // ── Instructions and hints ──────────────────────────────────────────
 
 /**
- * The connect step's text for a method when the board TOML gives none.
- * serial: the firmware talks over a UART (a USB-UART adapter), at baud.
+ * The connect step for a method when the board TOML gives none, as short
+ * numbered steps (SPEC 7). fromKlipper: the restart from Klipper is offered;
+ * serial: the firmware talks over a UART (a USB-UART adapter), at baud;
+ * pair: {title, deployer} for Katapult and a firmware that no ROM method
+ * writes together (an LPC176x), whose download puts Katapult on first.
  */
-export function defaultInstructions(method, family = null, { fromKlipper = true, serial = false, baud = 250000 } = {}) {
+export function defaultSteps(method, family = null, { fromKlipper = true, serial = false, baud = 250000, pair = null } = {}) {
+  if (method === "download" && pair) {
+    return [
+      ...(pair.deployer
+        ? ["Download deployer.bin.", "Copy it to the SD card as firmware.bin.", "Power up once with the card in."]
+        : ["Download katapult.bin.", "Write it with an SWD or ISP tool."]),
+      `Then flash ${pair.title || "the firmware"} through Katapult.`,
+    ];
+  }
   switch (method) {
     case "katapult":
-      if (serial) {
-        return `The board talks serial at ${baud || 250000} baud through a USB-UART adapter, and Katapult in UART mode is built for the same baud. ` +
-          (fromKlipper ? "If Klipper is running on the board, click Restart Klipper into Katapult and pick the adapter's port: WebFlash sends Klipper's serial bootloader request over it, and Katapult then answers on the same port. " : "") +
-          "Otherwise put the board in Katapult yourself: double-tap RESET (or hold the boot button while resetting, on boards built that way), then click Connect and pick the adapter's port.";
-      }
-      return (fromKlipper ? "If Klipper is running on the board, WebFlash asks it to restart into Katapult (pick the Klipper port when asked). " : "") +
-        "Otherwise put the board in Katapult yourself: double-tap RESET (or hold the boot button while resetting, on boards built that way), then click Connect and pick the Katapult port. For a board on a USB-UART adapter pick the adapter's port.";
+      return [
+        ...(fromKlipper ? ["Klipper running? Click **Restart Klipper into Katapult**."] : []),
+        `${fromKlipper ? "Otherwise, double-tap" : "Double-tap"} RESET to start Katapult.`,
+        serial ? `Click **Connect** and pick the adapter's port.` : "Click **Connect** and pick the Katapult port.",
+        ...(serial ? [`Katapult must talk at ${baud || 250000} baud too.`] : []),
+      ];
     case "katapult-can":
-      return "Plug the USB to CAN adapter (candleLight, CANable in candleLight mode, or a Klipper board in USB to CAN bridge mode) into this computer with the toolhead on its bus, then click Connect and pick the adapter. WebFlash lists the nodes on the bus; a node running Klipper is restarted into Katapult first.";
+      return [
+        "Plug in the USB to CAN adapter.",
+        "Click **Connect** and pick the adapter.",
+        "Pick the node; Klipper restarts into Katapult.",
+      ];
     case "dfu":
-      return "Put the board in its ROM bootloader: hold BOOT0 (or BOOT), tap RESET, release BOOT0; or plug it in with BOOT0 held. Then click Connect and pick \"DFU in FS Mode\" (older ROMs say \"STM32 BOOTLOADER\"). On Windows that device needs the WinUSB driver once (Zadig).";
+      return [
+        "Plug the board in over USB.",
+        "Hold BOOT0, tap RESET, release BOOT0.",
+        "Click **Connect** and pick \"DFU in FS Mode\".",
+      ];
     case "picoboot":
-      return "Hold BOOTSEL while plugging the board in (or while tapping RESET), then click Connect and pick \"RP2 Boot\". On Windows the RP2040's \"RP2 Boot (Interface 1)\" needs the WinUSB driver once (Zadig).";
+      return [
+        "Hold BOOTSEL and plug the board in.",
+        "Click **Connect** and pick \"RP2 Boot\".",
+      ];
     case "uf2":
-      return `Hold BOOTSEL while plugging the board in; it shows up as a drive named ${family === "rp2350" ? "RP2350" : "RPI-RP2"}. Then click Pick the drive and choose that drive in the folder picker; WebFlash writes the .uf2 onto it and the board restarts by itself.`;
+      return [
+        "Hold BOOTSEL and plug the board in.",
+        `Click **Pick the drive** and choose ${family === "rp2350" ? "RP2350" : "RPI-RP2"}.`,
+        "The board restarts by itself.",
+      ];
     case "download":
       switch (family) {
-        case "lpc176x": return "Download klipper.bin, copy it to the board's SD card as firmware.bin, and power the board up with the card in.";
-        case "atsam": case "atsamd": return "Download klipper.bin and flash it with bossac, as Klipper's make flash does for this board.";
-        case "hc32f460": return "Download klipper.bin and flash it with the board's own tool.";
-        default: return "Download the files and flash them with the tool your board's documentation names.";
+        case "lpc176x": return ["Download klipper.bin.", "Copy it to the SD card as firmware.bin.", "Power the board up with the card in."];
+        case "atsam": case "atsamd": return ["Download klipper.bin.", "Flash it with bossac (as `make flash` does)."];
+        case "hc32f460": return ["Download klipper.bin.", "Flash it with the board's own tool."];
+        default: return ["Download the files.", "Flash them with your board's own tool."];
       }
     default:
-      return "";
+      return [];
   }
+}
+
+/** defaultSteps as one text, a step per line. */
+export function defaultInstructions(method, family = null, options = {}) {
+  return defaultSteps(method, family, options).join("\n");
 }
 
 /**
@@ -666,20 +696,18 @@ export function printerConfigHint({ method, mcu = null, serial = null, uuid = nu
   const kind = iface || (method === "katapult-can" ? "can" : null);
   if (kind === "can" || kind === "usbcan" || uuid) {
     if (uuid) return `[mcu]\ncanbus_uuid: ${uuid}`;
-    const query = "~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0 lists it on the host";
-    return kind === "usbcan"
-      ? `[mcu]\ncanbus_uuid: <the bridge's UUID>\n# the bridge's UUID comes from its chip id; ${query}`
-      : `[mcu]\ncanbus_uuid: <the node's UUID>\n# ${query}`;
+    const query = "# Find it with: ~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0";
+    return `[mcu]\ncanbus_uuid: <the ${kind === "usbcan" ? "bridge" : "node"}'s UUID>\n${query}`;
   }
   if (kind === "serial") {
     // Klipper opens the UART at 250000 unless [mcu] names another baud.
     const rate = Number.isInteger(baud) && baud > 0 && baud !== 250000 ? `\nbaud: ${baud}` : "";
-    return `[mcu]\nserial: /dev/serial/by-id/<the USB-UART adapter>${rate}\n# ls /dev/serial/by-id/ on the host shows the adapter's name`;
+    return `[mcu]\nserial: /dev/serial/by-id/<the USB-UART adapter>${rate}\n# Find it with: ls /dev/serial/by-id/`;
   }
   const name = mcu || "<mcu>";
   const known = !!(serial && /^[0-9A-Fa-f]{8,}$/.test(serial));
   const ser = known ? serial.toUpperCase() : "<serial>";
-  const note = known ? "" : "\n# <serial> is the chip id, which this bootloader does not tell; ls /dev/serial/by-id/ on the host shows it once Klipper runs";
+  const note = known ? "" : "\n# Find <serial> with: ls /dev/serial/by-id/ (once Klipper runs)";
   return `[mcu]\nserial: /dev/serial/by-id/usb-Klipper_${name}_${ser}-if00${note}`;
 }
 

@@ -360,7 +360,7 @@ def open_in_site_url(config: BoardConfig) -> str:
 
 # ── Page ─────────────────────────────────────────────────────────────
 
-_NOTICE_SENTENCE = "Flashing from the browser needs Chrome or Edge on a computer."
+_BROWSERS = "Chrome or Edge on a computer"
 
 
 def _render_fallback(config: BoardConfig, inline: dict[str, str]) -> str:
@@ -380,14 +380,17 @@ def _render_fallback(config: BoardConfig, inline: dict[str, str]) -> str:
     if config.prebuilt is not None:
         name = PurePosixPath(config.prebuilt.file.replace("\\", "/")).name
         href = inline.get("prebuilt") or config.prebuilt.file
-        lines.append(f'<p class="wf-notice">{_NOTICE_SENTENCE} Download the firmware: '
+        lines.append(f'<p class="wf-notice">Flash it with {_BROWSERS}, or download the firmware: '
                      f'<a href="{esc(href)}" download="{esc(name)}">{esc(name)}</a>.</p>')
     else:
         site = site_url(b.engine_url)
         host = urllib.parse.urlsplit(site).netloc
-        lines.append(f'<p class="wf-notice">{_NOTICE_SENTENCE} Download the firmware from '
+        # The link opens the first setup; a titled one is named.
+        first = config.setups[0].title if config.setups else ""
+        setup = f" ({esc(first)})" if first else ""
+        lines.append(f'<p class="wf-notice">Build the firmware{setup} on '
                      f'<a href="{esc(open_in_site_url(config))}" target="_blank" rel="noopener">'
-                     f'{esc(host)}</a>.</p>')
+                     f'{esc(host)}</a> and flash it with {_BROWSERS}.</p>')
     lines.append("</div>")
     return "\n".join(lines)
 
@@ -435,7 +438,8 @@ _HTML_TEMPLATE = """\
 
 def page_config(config: BoardConfig, inline: dict[str, str] | None = None) -> dict:
     """What the page's ``#webflash-config`` holds (schema 1): the board TOML's
-    tables (``board_data``), ``schema``, ``toml`` (the TOML text, which "Open
+    tables (``board_data``: ``katapult``, ``setups`` and ``setups_form`` for
+    both a [config] and a [[setup]] TOML), ``schema``, ``toml`` (the TOML text, which "Open
     in WebFlash" carries to the site), and with ``-i`` on a ``[prebuilt]``
     board ``inline: {"prebuilt": <data URL>}``. An inlined image is only in
     the fallback's ``<img>``, which the runtime keeps: a photo would otherwise

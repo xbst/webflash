@@ -47,12 +47,12 @@ export function methodAvailable(method, caps = capabilities()) {
   if (transport === "filesystem" && !caps.fileSystem) {
     // Say what was checked: STOP 3 saw this on a desktop Chrome, where the
     // folder picker should exist, and the old text gave nothing to go on.
-    const why = caps.secure === false ? "needs an https or localhost page: the browser hides the File System Access API elsewhere"
-      : caps.crossOriginFrame ? "needs a folder picker, which the browser never opens in a page embedded from another site (open the card in a tab of its own to use it)"
+    const why = caps.secure === false ? "needs an https or localhost page"
+      : caps.crossOriginFrame ? "needs a folder picker, which browsers block in a frame from another site (open the card in a tab of its own)"
       : caps.os === "android" ? "needs the File System Access API, which Android Chrome does not have"
       : caps.browser === "firefox" || caps.browser === "safari" ? "needs the File System Access API, which this browser does not have (Chrome or Edge on a computer do)"
       : caps.browser === "brave" ? "needs the File System Access API, which Brave turns off by default (enable brave://flags/#file-system-access-api and restart Brave, or use Chrome or Edge)"
-      : "needs the File System Access API, but this browser exposes no window.showDirectoryPicker on this page (Chrome and Edge on a computer have it unless a policy, a flag or an extension removes it)";
+      : "needs the File System Access API, but this page has no window.showDirectoryPicker (a policy, a flag or an extension may have removed it)";
     return { ok: false, reason: `${why}; download the .uf2 and copy it onto the drive instead` };
   }
   return { ok: true, reason: "" };
@@ -142,7 +142,8 @@ export function shouldPrime(mcu) {
  * Flash an image. options: {connection, mcu, uuid, baud, bitrate, prime,
  * verify, leave, family, fileName, timing, nodeQueryMs, settleMs,
  * rebootWaitMs}. callbacks: {log(text), progress(phase, done, total, unit),
- * status(text), pickNode(nodes) -> uuidHex | null}; unit is "bytes" unless
+ * status(text), pickNode(nodes) -> uuidHex | null, called with an empty
+ * list too, since a node may be flashed by a typed UUID}; unit is "bytes" unless
  * the protocol counts "pages", "sectors" or "blocks".
  */
 export async function flashImage(method, image, options = {}, callbacks = {}) {
@@ -223,9 +224,14 @@ async function flashOverCan(image, options, { log, progress, status, pickNode })
     let nodes = await queryNodes(adapter, { timeoutMs: queryMs, log });
     let uuidHex = options.uuid ? uuidToHex(uuidFromHex(options.uuid)) : null;
     if (!uuidHex) {
-      if (!nodes.length) fail("timeout", "No node answered on the bus. Check the bus speed, the wiring and the termination, and that the toolhead is powered; a node that is already talking to a Klipper host does not answer either.");
+      // A node running Klipper under a host does not answer the query but
+      // takes the bootloader request at its UUID, so an empty list still
+      // goes to the prompt, which can take a typed canbus_uuid.
+      const noNode = "No node answered on the bus: check the bus speed, the wiring, the termination and the power, or stop Klipper on the host.";
+      if (!nodes.length && !pickNode) fail("timeout", noNode);
       if (!pickNode) fail("flash", "Several nodes may be on the bus; a node UUID is needed.");
       const picked = await pickNode(nodes);
+      if (!picked && !nodes.length) fail("timeout", noNode);
       if (!picked) fail("cancelled", "No node was picked.");
       uuidHex = uuidToHex(uuidFromHex(picked));
     }

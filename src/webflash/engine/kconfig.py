@@ -45,20 +45,23 @@ class Session:
     ``version`` is the snapshot's describe string: Katapult's Kconfig asks
     the shell for it and bakes it into ``CONFIG_KATAPULT_VERSION``. Node ids
     (``n<k>``) are the nodes' positions in Kconfig definition order, stable
-    for the life of the session.
+    for the life of the session. ``id_prefix`` goes in front of every id
+    (the site's engine holds two trees and prefixes them ``fw:`` and
+    ``katapult:``, so their ids never collide in one page).
     """
 
-    def __init__(self, tree: Path, project: str = "", version: str = "?") -> None:
+    def __init__(self, tree: Path, project: str = "", version: str = "?", id_prefix: str = "") -> None:
         self.tree = Path(tree).resolve()
         self.project = project or detect_project(self.tree)
         self.version = version
+        self.id_prefix = id_prefix
         find_firmware_extras(self.tree)
         self.kconfiglib = MODULES.import_module(self.tree, "lib/kconfiglib", "kconfiglib")
         self.kconf = self._load_kconfig()
         self._nodes: list = []
         self._ids: dict[int, str] = {}
         for node in self.kconf.node_iter():
-            node_id = f"n{len(self._nodes)}"
+            node_id = f"{id_prefix}n{len(self._nodes)}"
             self._nodes.append(node)
             self._ids[id(node)] = node_id
         self._by_id = {self._ids[id(n)]: n for n in self._nodes}
@@ -171,16 +174,35 @@ class Session:
         """Every defined symbol's value."""
         return {s.name: s.str_value for s in self.kconf.unique_defined_syms}
 
-    def set(self, name: str, value: str) -> dict:
-        """Set a symbol (``"y"``/``"n"`` for bools, a string for int/hex/string)
-        or a choice (``name`` is its node id or its name, ``value`` the member
-        symbol to select). Returns the new tree."""
+    def item(self, name: str):
+        """The symbol or choice a node id (with or without the prefix), a
+        symbol name or a choice name names, or None."""
         lib = self.kconfiglib
         node = self._by_id.get(name)
+        if node is None and self.id_prefix and re.fullmatch(r"n\d+", name):
+            node = self._by_id.get(self.id_prefix + name)
         item = node.item if node is not None else self.kconf.syms.get(name)
         if item is None:
             item = self.kconf.named_choices.get(name)
         if item is None or item in (lib.MENU, lib.COMMENT):
+            return None
+        return item
+
+    def node_id(self, node) -> str:
+        return self._ids[id(node)]
+
+    def set(self, name: str, value: str) -> dict:
+        """Set a symbol (``"y"``/``"n"`` for bools, a string for int/hex/string)
+        or a choice (``name`` is its node id or its name, ``value`` the member
+        symbol to select). Returns the new tree."""
+        self.assign(name, value)
+        return self.tree_json()
+
+    def assign(self, name: str, value: str) -> None:
+        """``set`` without the tree."""
+        lib = self.kconfiglib
+        item = self.item(name)
+        if item is None:
             raise KconfigError(f"unknown symbol or choice: {name}")
         if isinstance(item, lib.Choice):
             member = self.kconf.syms.get(value)
@@ -198,7 +220,6 @@ class Session:
             else:
                 if not item.set_value(str(value)):
                     raise KconfigError(f"{value!r} is not a valid {lib.TYPE_TO_STR[item.orig_type]} for {name}")
-        return self.tree_json()
 
     # ── Tree ──────────────────────────────────────────────────────────
 

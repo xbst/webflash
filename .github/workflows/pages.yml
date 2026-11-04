@@ -12,7 +12,7 @@ name: Deploy the site to GitHub Pages
 
 on:
   push:
-    branches: [master, dev, "wf/**"]
+    branches: [master]
     paths:
       - "src/**"
       - "sources.toml"
@@ -27,6 +27,10 @@ on:
         description: "Deploy to GitHub Pages (off: build and check only)"
         type: boolean
         default: true
+      gate_minutes:
+        description: "Minutes for gating older commits (history snapshots) in this run; the rest wait for a later run"
+        type: number
+        default: 90
 
 permissions:
   contents: read
@@ -49,7 +53,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # The gate of the older commits stops at --gate-minutes (90 by default)
+    # and the next run carries on, so this leaves room for a by-hand run
+    # with a larger budget (GitHub's own limit is 360).
+    timeout-minutes: 240
     outputs:
       gate: ${{ steps.sources.outputs.gate }}
       pages: ${{ steps.pages.outputs.pages }}
@@ -76,7 +83,7 @@ jobs:
           # The embed runtime, laid out as the local server serves it
           # (serve.py's engine_files): js/embed/ at its root beside the
           # modules of js/ it imports, then flash/, build/, configure/,
-          # workers/ and css/.
+          # workers/, wizard/ and css/.
           PYTHONPATH=src python -c "from webflash.serve import stage_engine; print(stage_engine('$site', '_site/engine/v1'), 'files in engine/v1')"
           find _site -name __pycache__ -type d -prune -exec rm -rf {} +
           echo "$SITE_DOMAIN" > _site/CNAME
@@ -162,6 +169,13 @@ jobs:
 
       - name: Build the source snapshots
         id: sources
+        env:
+          # The refs are always gated; the older commits (history_days in
+          # sources.toml) only for this long, newest first: the first runs
+          # after enabling history publish the rest with checked: null, and
+          # each later run gates more of them until none is left. Snapshots
+          # with the same bundles as one already gated take its verdict.
+          GATE_MINUTES: ${{ inputs.gate_minutes || 90 }}
         run: |
           # Exit code 2: everything was written, but a snapshot failed the
           # gate. It is published with checked: false (the site offers it with
@@ -170,7 +184,8 @@ jobs:
           # with this attempt's cache) checks it again.
           set +e
           webflash sources build --policy sources.toml --out _site/sources \
-            --cache "$SOURCES_CACHE" --clones "$RUNNER_TEMP/clones" --run "$GITHUB_RUN_ID"
+            --cache "$SOURCES_CACHE" --clones "$RUNNER_TEMP/clones" --run "$GITHUB_RUN_ID" \
+            --gate-minutes "$GATE_MINUTES"
           code=$?
           set -e
           if [ "$code" = 2 ]; then
@@ -216,7 +231,8 @@ jobs:
                       for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
           engine = site / "engine" / "v1"
           parts = {"": src / "js" / "embed", "flash/": src / "js" / "flash", "build/": src / "js" / "build",
-                   "configure/": src / "js" / "configure", "workers/": src / "js" / "workers", "css/": src / "css"}
+                   "configure/": src / "js" / "configure", "workers/": src / "js" / "workers", "wizard/": src / "js" / "wizard",
+                   "css/": src / "css"}
           expected = {prefix + name: data for prefix, folder in parts.items() if folder.is_dir()
                       for name, data in files(folder).items()}
           for name in ("runtime.js", "state.js", "toml-io.js", "dialogs.js"):
@@ -301,6 +317,24 @@ jobs:
                       unchecked.append(label)
                       verdict = "not checked: " + report.get("note", "")
                   table.append(f"| {name} | {ref['id']} | `{ref['describe']}` | {verdict.replace('|', '/')} |")
+          # The older commits, counted per project rather than listed: there
+          # are hundreds. Those failing are named.
+          history_lines, history_failed, history_waiting = [], [], []
+          for name, project in index["projects"].items():
+              if "history" not in project:
+                  continue
+              refs = json.loads((root / project["history"]["file"]).read_text(encoding="utf-8"))["refs"]
+              ok = sum(1 for r in refs if r["checked"] is True)
+              bad = [r["id"] for r in refs if r["checked"] is False]
+              waiting = len(refs) - ok - len(bad)
+              history_lines.append(f"| {name} | {len(refs)} | {ok} | {len(bad)} | {waiting} |")
+              if bad:
+                  history_failed.append(f"{name} ({len(bad)}: {', '.join(bad[:5])}{', ...' if len(bad) > 5 else ''})")
+              if waiting:
+                  history_waiting.append(f"{name} ({waiting})")
+          if history_lines:
+              table += ["", "### Older commits", "", "| Project | Snapshots | Passed | Failed | Not checked |",
+                        "|---|---:|---:|---:|---:|", *history_lines]
           print("\n".join(table))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("\n".join(table) + "\n\n")
@@ -311,6 +345,10 @@ jobs:
               print(f"::warning title=Snapshot gate::checked: false, offered with a warning: {', '.join(failed)}")
           if unchecked:
               print(f"::warning title=Snapshot gate::checked: null, nothing vouches for them: {', '.join(unchecked)}")
+          if history_failed:
+              print(f"::warning title=Snapshot gate::older commits with checked: false: {'; '.join(history_failed)}")
+          if history_waiting:
+              print(f"::notice title=Snapshot gate::older commits not gated yet (a later run gates them): {', '.join(history_waiting)}")
           PY
 
       - name: Report the size
@@ -319,6 +357,22 @@ jobs:
           # exist (no toolchain yet) counts 0.
           size() { { du -sb "$@" 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}'; }
           total=$(size _site)
+          # The part of sources/ only the older commits use: the bundles their
+          # history files name that no ref of the index does, and the files.
+          history=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("_site/sources")
+          index = json.loads((root / "index.json").read_text(encoding="utf-8"))
+          own, files = set(), 0
+          for project in index["projects"].values():
+              if "history" in project:
+                  path = root / project["history"]["file"]
+                  files += path.stat().st_size
+                  own |= set(json.loads(path.read_text(encoding="utf-8"))["blobs"])
+          print(files + sum((root / b).stat().st_size for b in own - set(index["blobs"])))
+          PY
+          )
           {
             echo "### Site size"
             echo ""
@@ -329,13 +383,16 @@ jobs:
               bytes=$(size ${part#*:})
               echo "| ${part%%:*} | $(awk "BEGIN {printf \"%.2f\", $bytes / 1048576}") |"
             done
+            echo "| (sources: older commits only) | $(awk "BEGIN {printf \"%.2f\", $history / 1048576}") |"
             echo "| **total** | **$(awk "BEGIN {printf \"%.2f\", $total / 1048576}")** |"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$total" -gt 950000000 ]; then
             echo "::error::the site is $total bytes, too close to GitHub Pages' 1 GB limit: publish fewer refs in sources.toml"
             exit 1
-          elif [ "$total" -gt 700000000 ]; then
-            echo "::warning::the site is $total bytes; GitHub Pages publishes up to 1 GB"
+          elif [ "$total" -gt 600000000 ]; then
+            # The budget the site was planned to: room for the toolchain and
+            # the refs to grow under GitHub Pages' 1 GB.
+            echo "::warning::the site is $total bytes, over its 600 MB budget: lower history_days or history_max in sources.toml"
           fi
 
       - name: Check whether Pages is enabled

@@ -6,7 +6,9 @@
 //   ?mock=katapult   a Klipper port that becomes Katapult on the touch, and a paired Katapult port
 //   ?mock=dfu        an STM32 ROM bootloader
 //   ?mock=picoboot   an RP2040 BOOTSEL device
-//   ?mock=can        a candleLight adapter with one Katapult and one Klipper node
+//   ?mock=can        a candleLight adapter with one Katapult and one Klipper node, and a Klipper node a host
+//                    holds (112233445566: it answers no query, so only its typed UUID reaches it);
+//                    &bus=host leaves only that one
 //   ?mock=uf2        a BOOTSEL drive
 //   ?mock=uart       a USB-UART adapter wired to a board running Klipper in UART mode, which the serial
 //                    bootloader request restarts into Katapult on the same port; &baud=<n> is the board's
@@ -83,9 +85,12 @@ export async function installMocks(params) {
     for (let i = 0; i < 20; i++) usb.willPick(() => (fail === "cancel" ? null : new PicobootMockDevice({ claimError, openHang: fail === "hang", corruptReadAt: fail === "verify" ? 0x10000123 : null, rebootDelayCap: 300 })));
     firmware = { name: "klipper.uf2", bytes: toUf2(fromBin(sampleBin(9000), 0x10000000), "rp2040") };
   } else if (kind === "can") {
-    const nodes = [
-      new KatapultCanNode({ uuid: [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff], deviceOptions: { mcu: fail === "mcu" ? "stm32f072xb" : "stm32g0b1xx", corruptReadAt: fail === "verify" ? 0x2000 + 50 : null } }),
+    const deviceOptions = { mcu: fail === "mcu" ? "stm32f072xb" : "stm32g0b1xx", corruptReadAt: fail === "verify" ? 0x2000 + 50 : null };
+    const held = new KlipperCanNode({ uuid: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66], rebootDelayMs: 800, assigned: true, deviceOptions });
+    const nodes = params.get("bus") === "host" ? [held] : [
+      new KatapultCanNode({ uuid: [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff], deviceOptions }),
       new KlipperCanNode({ uuid: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06], rebootDelayMs: 800 }),
+      held,
     ];
     for (let i = 0; i < 20; i++) usb.willPick(() => (fail === "cancel" ? null : new GsUsbMockAdapter({ nodes, claimError, busDelayMs: 2 })));
     firmware = { name: "klipper.bin", bytes: sampleBin(2000), address: 0x08002000 };

@@ -1,5 +1,5 @@
 # An STM32G0B1 board on USB, the shape of the Isik's Tech boards: Klipper or
-# Kalico, with the reader choosing whether Katapult sits in the first 8 KiB.
+# Kalico, with Katapult flashed beside it or already in the first 8 KiB.
 # Render it with: webflash examples/stm32g0b1-usb/stm32g0b1-usb.toml
 
 [board]
@@ -7,7 +7,7 @@ title = "STM32G0B1 over USB"
 description = """
 Klipper firmware for an STM32G0B1 board connected over USB, with an 8 MHz crystal.
 
-Pick **Katapult (8 KiB)** if Katapult is already on the board; it then updates over USB with no buttons to press. Pick **No bootloader** to flash with the chip's own DFU bootloader. See the [Klipper bootloader guide](https://www.klipper3d.org/Bootloaders.html) for the details."""
+Tick **Katapult** to flash the bootloader with it over DFU. Already have Katapult? Leave it unticked and keep **Katapult (8 KiB)**; updates then need no buttons. See the [Klipper bootloader guide](https://www.klipper3d.org/Bootloaders.html)."""
 image = "stm32g0b1-usb.png"
 
 [firmware]
@@ -15,11 +15,21 @@ project = "klipper"
 projects = ["klipper", "kalico"]
 version = "latest"
 
+# Unticked when the card opens: most of these boards have Katapult already.
+[katapult]
+version = "latest"
+default = false
+
 # Exactly what `make savedefconfig` writes: everything left out holds its
 # default, which for an STM32G0B1 on Klipper master is an 8 KiB bootloader,
-# an 8 MHz crystal and USB on PA11/PA12.
+# an 8 MHz crystal and USB on PA11/PA12. Katapult's defaults are the same
+# chip settings, with its application at 8 KiB and no deployer.
 [config]
 defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+"""
+katapult = """
 CONFIG_MACH_STM32=y
 CONFIG_MACH_STM32G0B1=y
 """

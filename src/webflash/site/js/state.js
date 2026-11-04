@@ -1,11 +1,13 @@
 // The session: what the site is configuring, building and flashing.
 //
 // It holds the board TOML's tables in the shape webflash's board_data returns
-// ([board], [firmware], [config] defconfig, [[option]], [flash], [prebuilt]):
+// ([board], [firmware], [katapult], setups (from [config] or [[setup]]) with
+// setups_form, [[option]], [flash], [prebuilt]); the site configures one
+// setup at a time (setupIndex, the Setup select; the first by default):
 // they are what Save TOML writes, and the TOML text is derived from them
 // (tomlText, the same text as bridge.save_toml for the same tables). Opening a
-// TOML replaces them; the Configure, Embed options and toolbar controls
-// change them. Beside the tables it holds the configure session: the sources
+// TOML replaces them; page 1 (Firmware), Configure and Embed options change
+// them. Beside the tables it holds the configure session: the sources
 // index, the ref being configured, the full .config and the Kconfig tree the
 // engine reports, the build plan, the files opened beside the TOML (its image
 // and firmware file, which Generate embeds with -i), and whether a build has
@@ -14,11 +16,15 @@
 // Every change is announced as a "change" event whose detail names what
 // changed ({what, origin}); what is one of board, firmware, project,
 // version, config, options, flash, prebuilt, toml, files, index, ref, tree,
-// plan, sources, lock, undo, open. Undo and redo cover the tables (and the
-// TOML's name and files); a "restore" event tells the configure code to load
-// the restored defconfig into the engine.
+// plan, sources, lock, undo, open, setup (another setup picked, or the
+// picked one's defconfigs replaced), setups (the list of setups changed),
+// katapult (Katapult ticked, unticked or its
+// version changed) and katapult-<part> (its engine side: ref, tree, config,
+// plan, sources, link). Undo and redo cover the tables (and the TOML's name
+// and files), Katapult's version and defconfig among them; a "restore" event
+// tells the configure code to load the restored defconfigs into the engine.
 
-import { parseToml, writeBoardToml, DEFAULT_ENGINE_URL } from "./toml-io.js";
+import { parseToml, writeBoardToml, CONFIG_SETUP_ID, DEFAULT_ENGINE_URL } from "./toml-io.js";
 
 export const PROJECTS = ["klipper", "kalico", "katapult"];
 export const PROJECT_TITLES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult" };
@@ -30,8 +36,29 @@ export const METHODS = ["dfu", "picoboot", "uf2", "katapult", "katapult-can", "d
 const UNDO_LIMIT = 100;
 
 // What a fresh session configures: Klipper's latest version for an STM32G0B1,
-// the shape of the boards WebFlash was written for.
-export const STARTER_DEFCONFIG = "CONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n";
+// the shape of the boards WebFlash was written for, with the low-level
+// options shown (the clock, the USB ids, the CAN bus speed).
+export const STARTER_DEFCONFIG = "CONFIG_LOW_LEVEL_OPTIONS=y\nCONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n";
+
+// A firmware's starting defconfig beside a Katapult configured alone: its
+// chip (the MACH_ lines), with the low-level options shown. The pair sync
+// brings Katapult's other shared options once both load.
+function firmwareStart(katapultDefconfig) {
+  const chip = String(katapultDefconfig || "").split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^CONFIG_MACH_[A-Za-z0-9_]+=y$/.test(l));
+  return `${["CONFIG_LOW_LEVEL_OPTIONS=y", ...chip].join("\n")}\n`;
+}
+
+// The engine's side of Katapult beside the firmware (session.katapult), before
+// the engine has loaded it.
+function freshKatapultEngine() {
+  return {
+    ref: null, configText: "", tree: null, plan: null,
+    sources: { state: "idle", detail: "" },
+    link: null,     // the offset link (bridge pair answers' offset), while paired
+    notes: [],      // what the last paired change could not copy into the other tree
+  };
+}
 
 export function defaultTables() {
   return {
@@ -40,7 +67,9 @@ export function defaultTables() {
       theme_dir: "./themes", engine_url: DEFAULT_ENGINE_URL,
     },
     firmware: { project: "klipper", projects: ["klipper"], version: "latest", versions: "all" },
-    config: { defconfig: STARTER_DEFCONFIG },
+    katapult: null,
+    setups: [newSetup({ defconfig: STARTER_DEFCONFIG })],
+    setups_form: "config",
     options: [],
     flash: { methods: null, instructions: {} },
     prebuilt: null,
@@ -49,7 +78,23 @@ export function defaultTables() {
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
-/** The tables of a board TOML as board_data gives them, every key present. */
+/** One setup as board_data gives it ({id, title, description, defconfig, katapult, methods}). */
+export function newSetup(s = {}) {
+  return {
+    id: s.id || CONFIG_SETUP_ID,
+    title: s.title || "",
+    description: s.description || "",
+    defconfig: s.defconfig || "",
+    katapult: typeof s.katapult === "string" ? s.katapult : null,
+    methods: Array.isArray(s.methods) ? [...s.methods] : null,
+  };
+}
+
+/**
+ * The tables of a board TOML as board_data gives them, every key present. A
+ * [config] table given as config: {defconfig, katapult} (the shape before
+ * setups) is read as the one setup.
+ */
 export function normalizeTables(t) {
   const d = defaultTables();
   const board = { ...d.board, ...(t.board || {}) };
@@ -59,16 +104,29 @@ export function normalizeTables(t) {
     version: t.firmware.version || "latest",
     versions: t.firmware.versions === undefined ? "all" : clone(t.firmware.versions),
   } : null;
+  const katapult = firmware && t.katapult ? {
+    version: t.katapult.version || "latest",
+    versions: t.katapult.versions === undefined ? "all" : clone(t.katapult.versions),
+    default: t.katapult.default !== false,
+  } : null;
+  let setups = [];
+  if (firmware) {
+    if (Array.isArray(t.setups) && t.setups.length) setups = t.setups.map(newSetup);
+    else setups = [newSetup(t.config || {})];
+  }
   return {
     board,
     firmware,
-    config: firmware ? { defconfig: (t.config && t.config.defconfig) || "" } : null,
+    katapult,
+    setups,
+    setups_form: firmware ? (t.setups_form === "setup" ? "setup" : "config") : null,
     options: firmware ? (t.options || []).map((o) => ({
       symbol: o.symbol,
       label: o.label || "",
       values: o.values === undefined || o.values === null ? null : o.values.map(String),
       labels: { ...(o.labels || {}) },
       help: o.help || "",
+      setups: Array.isArray(o.setups) ? [...o.setups] : null,
     })) : [],
     flash: {
       methods: t.flash && Array.isArray(t.flash.methods) ? [...t.flash.methods] : null,
@@ -138,7 +196,20 @@ export class Session {
     this.plan = null;
     this.sources = { state: "idle", detail: "" };   // idle, loading, ready, error
     this.locked = "";           // why configuring is locked (a build running), "" when not
-    this.build = null;          // the last build (build/artifacts.js's buildRecord), until a TOML is opened
+    // The last build of each engine slot (build/artifacts.js's buildRecord),
+    // until a TOML is opened: {fw, katapult}. session.build is builds.fw.
+    this.builds = { fw: null, katapult: null };
+    // The engine's side of Katapult beside the firmware (see the katapult getter).
+    this._katapultEngine = freshKatapultEngine();
+    this._setupIndex = 0;       // the setup Configure edits (setupIndex clamps it)
+    // The firmware's tables while Katapult is picked alone (setProject).
+    this._firmwareAside = null;
+    // The setups (ids) whose firmware starts from Katapult's shared options:
+    // the next pair sync copies Katapult's into the firmware (katapultLeads).
+    this._katapultLeads = new Set();
+    // Setup ids a retitle replaced (old -> new; setSetups), so an engine
+    // answer asked for under the old id still lands.
+    this._renamed = new Map();
 
     this._listeners = new Map();
     this._undo = [];
@@ -179,7 +250,69 @@ export class Session {
   get prebuilt() { return this._t.prebuilt; }
   get project() { return this._t.firmware ? this._t.firmware.project : null; }
   get version() { return this._t.firmware ? this._t.firmware.version : null; }
-  get defconfigText() { return this._t.config ? this._t.config.defconfig : ""; }
+  get defconfigText() { return this.setup ? this.setup.defconfig : ""; }
+
+  /** Which setup Configure edits (the Setup select): an index into the tables' setups. */
+  get setupIndex() {
+    return Math.max(0, Math.min(this._setupIndex, this._t.setups.length - 1));
+  }
+
+  /** The setup Configure edits, or null ([prebuilt]). */
+  get setup() { return this._t.setups[this.setupIndex] || null; }
+
+  // The index of the setup an engine answer was asked for (the setup's id
+  // when the request was made; null: the one edited now), or -1 when it is
+  // gone. The lone setup of a [config] table, which Add and a title rename,
+  // is still the first; a setup a retitle gave another id is found by it.
+  _setupIndexFor(id) {
+    if (id === null || id === undefined) return this.setupIndex;
+    const find = (x) => this._t.setups.findIndex((s) => s.id === x);
+    let i = find(id);
+    for (let x = id, n = 0; i < 0 && this._renamed.has(x) && n < 100; n++) i = find(x = this._renamed.get(x));
+    return i >= 0 ? i : id === CONFIG_SETUP_ID && this._t.setups.length ? 0 : -1;
+  }
+
+  /** The firmware's last build (builds.fw). */
+  get build() { return this.builds.fw; }
+  set build(record) { this.builds = { ...this.builds, fw: record }; }
+
+  /**
+   * Katapult configured beside the firmware, or null when not picked: {on,
+   * version, defconfigText, ref, configText, tree, plan, sources, link,
+   * notes}, the configure session's side of the engine's "katapult" slot.
+   * on, version and defconfigText are the tables' ([katapult] version and
+   * the configured setup's katapult defconfig), so undo and Save TOML cover
+   * them; the rest is the engine's. Null while the project is Katapult
+   * itself, and for a setup without a Katapult defconfig.
+   */
+  get katapult() {
+    if (!this._t.katapult || !this._t.firmware || this._t.firmware.project === "katapult") return null;
+    const setup = this.setup;
+    if (!setup || typeof setup.katapult !== "string") return null;
+    return {
+      on: true, version: this._t.katapult.version,
+      defconfigText: setup.katapult,
+      ...this._katapultEngine,
+    };
+  }
+
+  /**
+   * Edit another setup (the Setup select): its defconfigs become the
+   * session's, and Katapult follows whether it has one. Not undoable (it
+   * changes what is shown, not the tables). Announced as a "setup" change,
+   * and "katapult" when Katapult comes or goes with it; the configure code
+   * then loads the setup into the engine.
+   */
+  setSetupIndex(i) {
+    const next = Math.max(0, Math.min(Number(i) || 0, this._t.setups.length - 1));
+    if (next === this.setupIndex) return;
+    const before = this.katapult;
+    this._setupIndex = next;
+    if (!this.katapult) this._katapultEngine = freshKatapultEngine();
+    this._changed("setup", "visual");
+    if (Boolean(before) !== Boolean(this.katapult)) this._changed("katapult", "visual");
+  }
+
   get theme() { return this._t.board.theme || "default"; }
   get exposed() { return this._t.options.map((o) => o.symbol); }
 
@@ -213,7 +346,38 @@ export class Session {
   get canRedo() { return this._redo.length > 0; }
 
   _snapshot() {
-    return { tables: clone(this._t), tomlName: this.tomlName, files: this.files };
+    return {
+      tables: clone(this._t), tomlName: this.tomlName, files: this.files, setupId: this.setup ? this.setup.id : null,
+      aside: clone(this._firmwareAside), leads: [...this._katapultLeads],
+    };
+  }
+
+  // Which setup Configure edits once the tables are replaced (undo, redo).
+  // A step that added or removed setups puts Configure where it was when
+  // the snapshot was taken (an undone Add lands on the setup it copied, its
+  // redo on the copy); any other keeps the setup edited now (a Setup select
+  // pick is not an undo step, so undoing an edit made before it does not
+  // move it); one that is gone leaves the index as it is.
+  _setupIndexAfter(before, wasId, snapId) {
+    const ids = (t) => t.setups.map((s) => s.id).sort().join("\u0001");
+    const order = ids(before) === ids(this._t) ? [wasId, snapId] : [snapId, wasId];
+    for (const id of order) {
+      const i = id === null || id === undefined ? -1 : this._t.setups.findIndex((s) => s.id === id);
+      if (i >= 0) return i;
+    }
+    return this._setupIndex;
+  }
+
+  // After the tables were replaced (undo, redo, open): announce a Katapult
+  // ticked, unticked or at another version, and forget the engine's side of
+  // one that is gone. Returns whether it changed.
+  _katapultReplaced(before, origin) {
+    const was = before && before.version;
+    const now = this.katapult && this.katapult.version;
+    if (was === now) return false;
+    if (!now) this._katapultEngine = freshKatapultEngine();
+    this._changed("katapult", origin);
+    return true;
   }
 
   /** Record the state before an undoable change (the configure code calls it before a Kconfig edit). */
@@ -226,10 +390,19 @@ export class Session {
 
   _restore(snap, origin) {
     const before = this._t;
+    const katapultBefore = this.katapult;
+    const wasId = this.setup ? this.setup.id : null;
+    const indexBefore = this.setupIndex;
     this._t = snap.tables;
     this.tomlName = snap.tomlName;
     this.files = snap.files;
-    for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    this._firmwareAside = snap.aside || null;
+    this._katapultLeads = new Set(snap.leads || []);
+    this._setupIndex = this._setupIndexAfter(before, wasId, snap.setupId);
+    for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    if (this.setupIndex !== indexBefore) this._changed("setup", origin);
+    this._katapultReplaced(katapultBefore, origin);
+    this._changed("katapult-config", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
       this._changed("project", origin);
     }
@@ -267,11 +440,19 @@ export class Session {
   openTables(tables, { name = null, files = null, origin = "open" } = {}) {
     this.checkpoint();
     const before = this._t;
+    const katapultBefore = this.katapult;
     this._t = normalizeTables(tables);
-    this.build = null;
+    this.builds = { fw: null, katapult: null };
+    this._setupIndex = 0;
+    this._firmwareAside = null;
+    this._katapultLeads = new Set();
+    this._renamed = new Map();
+    // An opened TOML's Katapult starts over in the engine.
+    this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
     if (files !== null) this.files = files;
-    for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    if (katapultBefore || this.katapult) this._changed("katapult", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
       this._changed("project", origin);
     }
@@ -322,20 +503,277 @@ export class Session {
    * undo step). projects follows: a single project is replaced, a list keeps
    * it (or gains it), and Katapult never mixes with the firmware projects
    * (the loader refuses that).
+   *
+   * Katapult alone (page 1's None) takes each setup's Katapult defconfig as
+   * its defconfig and [katapult]'s versions, as a card's None does; the
+   * firmware's side is kept aside, so going back to a firmware brings back
+   * its projects, versions and defconfigs, and the Katapult it had, as
+   * configured alone. With nothing put aside (a TOML opened as Katapult
+   * alone, say), each setup's defconfig moves to its Katapult defconfig, and
+   * the firmware starts from Katapult's chip, taking Katapult's shared
+   * options at the next pair sync (katapultLeads). Without a version,
+   * leaving Katapult alone keeps an alias, or the firmware's own ref back to
+   * that firmware, and takes "latest" for a ref of another project.
    */
   setProject(project, { version = null, origin = "visual", undoable = true } = {}) {
     if (!PROJECTS.includes(project) || !this._t.firmware || project === this._t.firmware.project) return;
     if (undoable) this.checkpoint();
     const f = this._t.firmware;
-    let projects = f.projects && f.projects.length ? [...f.projects] : [f.project];
-    if (project === "katapult" || projects.includes("katapult") || projects.length === 1) projects = [project];
+    const k = this._t.katapult;
+    const setups = this._t.setups;
+    const aside = this._firmwareAside;
+    this._firmwareAside = null;
+    const alone = project === "katapult";
+    // Back from Katapult alone to the firmware it was picked from.
+    const back = !alone && f.project === "katapult" && Boolean(aside) &&
+      aside.setups.length === setups.length && aside.setups.every((s, i) => s.id === setups[i].id);
+    // From Katapult alone with no firmware to go back to: Katapult stays, beside it.
+    const fresh = !alone && f.project === "katapult" && !back;
+    const base = back ? aside.firmware : f;
+    let projects = base.projects && base.projects.length ? [...base.projects] : [base.project];
+    if (alone || projects.includes("katapult") || projects.length === 1) projects = [project];
     else if (!projects.includes(project)) projects.push(project);
-    const next = { ...f, project, projects };
+    const next = { ...base, project, projects };
+    if (alone) next.versions = k ? k.versions : "all";
     if (version) next.version = version;
+    // Leaving Katapult alone, an alias stays, and an exact ref only for its
+    // own project (the firmware's, back to it): "latest" otherwise.
+    else if (f.project === "katapult" && !PINLESS.includes(next.version) && !(back && base.project === project)) {
+      next.version = "latest";
+    }
+    // A pinned version must be one of the versions the reader picks from.
+    if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
+      next.versions = [...next.versions, next.version];
+    }
     this._t.firmware = next;
+    const katapultChanged = (alone && Boolean(k)) || (back && Boolean(aside.katapult)) || fresh;
+    // Klipper to Kalico before the pair synced keeps a lead.
+    if (alone || back) this._katapultLeads = new Set();
+    if (alone) {
+      // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
+      this._firmwareAside = { firmware: clone(f), katapult: k ? clone(k) : null, setups: clone(setups) };
+      if (k) {
+        this._t.katapult = null;
+        this._t.setups = setups.map((s) => ({ ...s, defconfig: typeof s.katapult === "string" ? s.katapult : "", katapult: null }));
+      }
+    } else if (back) {
+      // The firmware's defconfigs come back, and the Katapult it had, as
+      // configured alone, beside it in the setups that had one.
+      const kat = aside.katapult;
+      this._t.setups = setups.map((s, i) => {
+        const was = aside.setups[i];
+        return { ...s, defconfig: was.defconfig, katapult: kat && typeof was.katapult === "string" ? s.defconfig : null };
+      });
+      if (kat) {
+        const table = { ...kat, version: f.version, versions: f.versions };
+        if (Array.isArray(table.versions) && !PINLESS.includes(table.version) && !table.versions.includes(table.version)) {
+          table.versions = [...table.versions, table.version];
+        }
+        this._t.katapult = table;
+      }
+    } else if (fresh) {
+      this._t.setups = setups.map((s) => ({ ...s, defconfig: firmwareStart(s.defconfig), katapult: s.defconfig }));
+      const table = { version: f.version, versions: f.versions, default: true };
+      if (Array.isArray(table.versions) && !PINLESS.includes(table.version) && !table.versions.includes(table.version)) {
+        table.versions = [...table.versions, table.version];
+      }
+      this._t.katapult = table;
+      this._katapultLeads = new Set(setups.map((s) => s.id));
+    }
+    if (katapultChanged) this._katapultEngine = freshKatapultEngine();
     this._changed("project", origin);
     this._changed("firmware", origin);
-    if (version && version !== f.version) this._changed("version", origin);
+    if (katapultChanged) this._changed("katapult", origin);
+    if (next.version !== f.version) this._changed("version", origin);
+    this._sync(origin);
+  }
+
+  /**
+   * Whether the configured setup's firmware starts from Katapult's shared
+   * options (setProject from Katapult alone with nothing put aside): the
+   * next pair sync copies Katapult's into the firmware, not the other way.
+   * A Kconfig edit or unticking Katapult ends it (takeKatapultLead), and so
+   * does that sync; the undo snapshots keep it.
+   */
+  get katapultLeads() {
+    return Boolean(this.katapult) && this._katapultLeads.has(this.setup.id);
+  }
+
+  takeKatapultLead() {
+    const lead = this.katapultLeads;
+    if (this.setup) this._katapultLeads.delete(this.setup.id);
+    return lead;
+  }
+
+  // ── Katapult beside the firmware ─────────────────────────────────
+
+  /**
+   * Tick or untick Katapult beside the firmware, or change its version: {on,
+   * version} (one undo step). Ticking it adds [katapult] (version "latest"
+   * unless named; a [katapult] another setup uses stays as it is) and an
+   * empty Katapult defconfig to the configured setup
+   * (the configure code loads it with the firmware's chip); unticking takes
+   * the configured setup's Katapult defconfig away, and [katapult] with it
+   * once no setup has one (the loader refuses one without the other).
+   * Refused while the project is Katapult itself. Announced as a "katapult"
+   * change.
+   */
+  setKatapult({ on, version } = {}, { origin = "visual", undoable = true } = {}) {
+    if (!this._t.firmware || this.project === "katapult") return;
+    const k = this._t.katapult;
+    const at = this.setupIndex;
+    const mine = Boolean(this.katapult);
+    const turnOn = on === undefined ? mine : Boolean(on);
+    if (!turnOn) {
+      if (!mine) return;
+      if (undoable) this.checkpoint();
+      this.takeKatapultLead();   // ticked again, Katapult starts from the firmware
+      const setups = this._t.setups.map((s, i) => (i === at ? { ...s, katapult: null } : s));
+      const others = setups.some((s) => typeof s.katapult === "string");
+      this._t.setups = others ? setups : setups.map((s) => ({ ...s, katapult: null }));
+      if (!others) this._t.katapult = null;
+      this._katapultEngine = freshKatapultEngine();
+    } else if (!mine) {
+      if (undoable) this.checkpoint();
+      this._t.katapult = k ? { ...k } : { version: version || "latest", versions: "all", default: true };
+      this._t.setups = this._t.setups.map((s, i) => (i === at && s.katapult === null ? { ...s, katapult: "" } : s));
+      this._katapultEngine = freshKatapultEngine();
+    } else {
+      if (!version || version === k.version) return;
+      if (undoable) this.checkpoint();
+      const next = { ...k, version };
+      // A pinned version must be one of the versions the reader picks from.
+      if (Array.isArray(next.versions) && !PINLESS.includes(version) && !next.versions.includes(version)) {
+        next.versions = [...next.versions, version];
+      }
+      this._t.katapult = next;
+    }
+    this._changed("katapult", origin);
+    this._sync(origin);
+  }
+
+  /**
+   * [katapult] fields as the Embed step edits them: version, versions,
+   * default. Works whichever setup Configure edits (setKatapult needs one
+   * with Katapult). Announced as a "katapult" change.
+   */
+  setKatapultTable(fields, { origin = "visual", undoable = true } = {}) {
+    const k = this._t.katapult;
+    if (!k) return;
+    const next = { ...k, ...fields };
+    // A pinned version must be one of the versions the reader picks from.
+    if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
+      next.versions = [...next.versions, next.version];
+    }
+    if (JSON.stringify(next) === JSON.stringify(k)) return;
+    if (undoable) this.checkpoint();
+    this._t.katapult = next;
+    this._changed("katapult", origin);
+    this._sync(origin);
+  }
+
+  /** Take Katapult out of the board TOML: [katapult] and every setup's Katapult defconfig (one undo step). */
+  removeKatapult({ origin = "visual", undoable = true } = {}) {
+    if (!this._t.katapult) return;
+    if (undoable) this.checkpoint();
+    this._t.katapult = null;
+    this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+    this._katapultEngine = freshKatapultEngine();
+    this._changed("katapult", origin);
+    this._changed("setups", origin);
+    this._sync(origin);
+  }
+
+  /**
+   * Replace the setups (the Embed step's setups editor), with the options
+   * and [katapult] that follow them, as one undo step: fields {setups,
+   * options?, katapult?} (configure/setups.js makes them); selected: the
+   * setup Configure edits afterwards. Announced as a "setups" change, plus
+   * "options", "setup" (the selected setup's defconfigs are not the ones
+   * loaded) and "katapult" as they apply. Resolves to {reload}: whether the
+   * configure code must load the selected setup into the engine.
+   */
+  setSetups({ setups, options, katapult }, { selected, origin = "visual", undoable = true } = {}) {
+    if (!this._t.firmware || !Array.isArray(setups) || !setups.length) return { reload: false };
+    const before = this.setup;
+    const katapultBefore = this.katapult;
+    const next = {
+      setups: setups.map(newSetup),
+      options: options ? normalizeTables({ firmware: this._t.firmware, options }).options : this._t.options,
+      katapult: katapult === undefined ? this._t.katapult : (katapult ? { ...katapult } : null),
+    };
+    const index = selected === undefined ? this.setupIndex : Math.max(0, Math.min(selected, next.setups.length - 1));
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const optionsChanged = !same(next.options, this._t.options);
+    if (same(next.setups, this._t.setups) && !optionsChanged && same(next.katapult, this._t.katapult) &&
+      index === this.setupIndex) return { reload: false };
+    if (undoable) this.checkpoint();
+    // A retitle that gave a setup another id (one made here follows its title).
+    if (next.setups.length === this._t.setups.length) {
+      const was = new Set(this._t.setups.map((x) => x.id));
+      const now = new Set(next.setups.map((x) => x.id));
+      next.setups.forEach((x, i) => {
+        const old = this._t.setups[i].id;
+        if (old !== x.id && !now.has(old) && !was.has(x.id)) {
+          this._renamed.set(old, x.id);
+          if (this._katapultLeads.delete(old)) this._katapultLeads.add(x.id);
+        }
+      });
+    }
+    this._t.setups = next.setups;
+    this._t.options = next.options;
+    this._t.katapult = next.katapult;
+    this._setupIndex = index;
+    const after = this.setup;
+    const reload = !before || !after || before.defconfig !== after.defconfig || before.katapult !== after.katapult;
+    // Katapult gone from the edited setup starts over in the engine; one
+    // still there keeps its ref and sources (the reload refreshes the rest).
+    if (!this.katapult) this._katapultEngine = freshKatapultEngine();
+    this._changed("setups", origin);
+    if (optionsChanged) this._changed("options", origin);
+    if (reload) this._changed("setup", origin);
+    if (Boolean(katapultBefore) !== Boolean(this.katapult)) this._changed("katapult", origin);
+    this._sync(origin);
+    return { reload };
+  }
+
+  /**
+   * The engine's side of session.katapult (ref, configText, tree, plan,
+   * sources, link, notes), as the configure code reports it: not undoable.
+   * Announced as a "katapult-<part>" change.
+   */
+  setKatapultState(fields, part = "engine", { origin = "engine" } = {}) {
+    if (!this.katapult) return;
+    const engine = { ...this._katapultEngine };
+    for (const key of Object.keys(freshKatapultEngine())) if (key in fields) engine[key] = fields[key];
+    this._katapultEngine = engine;
+    this._changed(`katapult-${part}`, origin);
+  }
+
+  /**
+   * Katapult's .config and defconfig after a change; the defconfig becomes
+   * the katapult defconfig of the setup the change was asked for (at: its
+   * id when the request was made; default the configured setup). An answer
+   * for a setup no longer edited keeps only its defconfig: what is shown is
+   * the edited setup's, which the configure code loads after it. The undo
+   * point was taken before the change (checkpoint).
+   */
+  setKatapultConfig({ configText, defconfigText }, { origin = "engine", at = null } = {}) {
+    const i = this._setupIndexFor(at);
+    const setup = i >= 0 ? this._t.setups[i] : null;
+    if (!setup || typeof setup.katapult !== "string" || !this._t.katapult || this.project === "katapult") return;
+    if (i !== this.setupIndex) {
+      if (setup.katapult === defconfigText) return;
+      this._t.setups[i] = { ...setup, katapult: defconfigText };
+      this._changed("katapult-config", origin);
+      this._sync(origin);
+      return;
+    }
+    const k = this.katapult;
+    if (k.configText === configText && k.defconfigText === defconfigText) return;
+    this._katapultEngine = { ...this._katapultEngine, configText };
+    this._t.setups[i] = { ...setup, katapult: defconfigText };
+    this._changed("katapult-config", origin);
     this._sync(origin);
   }
 
@@ -369,15 +807,27 @@ export class Session {
 
   /**
    * The configuration the engine reports after a change: the full .config
-   * and the defconfig, which becomes [config] defconfig. The undo point was
-   * taken before the change (checkpoint).
+   * and the defconfig, which becomes the defconfig of the setup the change
+   * was asked for (at: its id when the request was made; default the
+   * configured setup). An answer for a setup no longer edited keeps only its
+   * defconfig (see setKatapultConfig). The undo point was taken before the
+   * change (checkpoint).
    */
-  setConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
-    const changed = configText !== this.configText ||
-      (this._t.config && defconfigText !== this._t.config.defconfig);
+  setConfig({ configText, defconfigText }, { origin = "engine", at = null } = {}) {
+    const i = this._setupIndexFor(at);
+    if (i < 0) return;
+    const setup = this._t.setups[i];
+    if (i !== this.setupIndex) {
+      if (!setup || setup.defconfig === defconfigText) return;
+      this._t.setups[i] = { ...setup, defconfig: defconfigText };
+      this._changed("config", origin);
+      this._sync(origin);
+      return;
+    }
+    const changed = configText !== this.configText || (setup && defconfigText !== setup.defconfig);
     if (!changed) return;
     this.configText = configText;
-    if (this._t.config) this._t.config = { defconfig: defconfigText };
+    if (setup) this._t.setups[i] = { ...setup, defconfig: defconfigText };
     this._changed("config", origin);
     this._sync(origin);
   }

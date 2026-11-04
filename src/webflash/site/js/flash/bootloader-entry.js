@@ -149,7 +149,7 @@ export function waitForDisconnect(device, { timeoutMs = 5000, nav = typeof navig
  */
 export async function enterFromKlipperUsb(method, { nav = typeof navigator !== "undefined" ? navigator : null, log = null, onTick = null,
                                                    timeoutMs = REENUMERATION_TIMEOUT_MS, port = null } = {}) {
-  if (!hasWebSerial(nav)) fail("no-api", "This browser has no Web Serial, so it cannot ask Klipper to restart into its bootloader. Put the board in its bootloader by hand.");
+  if (!hasWebSerial(nav)) fail("no-api", "This browser has no Web Serial, so it cannot restart Klipper into its bootloader: put the board in its bootloader by hand.");
   const link = port || await requestSerialPort(SERIAL_FILTERS.klipper, { nav });
   await touch1200(link, { log });
   const expect = expectedAfterTouch(method);
@@ -167,7 +167,7 @@ export async function enterFromKlipperUsb(method, { nav = typeof navigator !== "
  * line coding to the board.
  */
 export async function enterFromKlipperSerial({ nav = typeof navigator !== "undefined" ? navigator : null, log = null, baud = 250000, port = null, settleMs = 1000 } = {}) {
-  if (!hasWebSerial(nav)) fail("no-api", "This browser has no Web Serial, so it cannot ask Klipper to restart into its bootloader. Put the board in Katapult by hand.");
+  if (!hasWebSerial(nav)) fail("no-api", "This browser has no Web Serial, so it cannot restart Klipper into Katapult: put the board in Katapult by hand (double-tap RESET).");
   const link = port || await requestSerialPort(SERIAL_FILTERS.any, { nav });
   if (log) log(`Asking Klipper on ${link.describe()} to restart into Katapult`);
   await requestSerialBootloader(link, baud, { log, settleMs });

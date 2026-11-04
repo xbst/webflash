@@ -612,12 +612,43 @@ export function patchValue(text, table, key, value) {
 // ── A fresh board TOML ──────────────────────────────────────────────
 
 export const DEFAULT_ENGINE_URL = "https://webflash.isiks.tech/engine/v1/";
+// The setup a [config] table is (config.CONFIG_SETUP_ID).
+export const CONFIG_SETUP_ID = "default";
+
+// versions of [firmware] or [katapult], when not "all".
+function versionLines(table) {
+  const versions = table.versions === undefined ? "all" : table.versions;
+  if (Array.isArray(versions)) return [`versions = ${tomlArray(versions)}`];
+  if (versions && versions !== "all") return [`versions = ${tomlString(versions)}`];
+  return [];
+}
+
+// A defconfig, multi-line and ending with a newline, or "" when empty.
+function tomlDefconfig(text) {
+  let t = text || "";
+  if (t && !t.endsWith("\n")) t += "\n";
+  return t ? tomlMultiline(t) : tomlString("");
+}
+
+/**
+ * Whether the setups are written as one [config] table: the TOML wrote them
+ * so (or the tables say nothing) and the one setup holds nothing only
+ * [[setup]] can hold. config.py's _as_config_table.
+ */
+export function asConfigTable(form, setups) {
+  if ((form !== undefined && form !== null && form !== "config") || setups.length > 1) return false;
+  const s = setups[0] || {};
+  return (s.id || CONFIG_SETUP_ID) === CONFIG_SETUP_ID && !s.title && !s.description &&
+    (s.methods === undefined || s.methods === null);
+}
 
 /**
  * A board TOML from its tables, in the shape webflash's board_data returns
  * (and bridge.check_board passes on): the tables in the order of the board
  * TOML reference, every key that holds its default left out except
- * [firmware] version. The same text as config.dump_board in Python.
+ * [firmware] version and [katapult] version. setups is written as one
+ * [config] table when setups_form says "config" (and the setup fits one),
+ * else as [[setup]] tables. The same text as config.dump_board in Python.
  */
 export function writeBoardToml(data) {
   const lines = [];
@@ -636,13 +667,29 @@ export function writeBoardToml(data) {
     const projects = firmware.projects && firmware.projects.length ? firmware.projects : [project];
     if (!(projects.length === 1 && projects[0] === project)) lines.push(`projects = ${tomlArray(projects)}`);
     lines.push(`version = ${tomlString(firmware.version || "latest")}`);
-    const versions = firmware.versions === undefined ? "all" : firmware.versions;
-    if (Array.isArray(versions)) lines.push(`versions = ${tomlArray(versions)}`);
-    else if (versions && versions !== "all") lines.push(`versions = ${tomlString(versions)}`);
+    lines.push(...versionLines(firmware));
 
-    let text = (data.config && data.config.defconfig) || "";
-    if (text && !text.endsWith("\n")) text += "\n";
-    lines.push("", "[config]", `defconfig = ${text ? tomlMultiline(text) : tomlString("")}`);
+    const katapult = data.katapult;
+    if (katapult) {
+      lines.push("", "[katapult]", `version = ${tomlString(katapult.version || "latest")}`);
+      lines.push(...versionLines(katapult));
+      if (katapult.default === false) lines.push("default = false");
+    }
+
+    const setups = data.setups || [];
+    const asConfig = asConfigTable(data.setups_form, setups);
+    if (asConfig) {
+      const setup = setups[0] || {};
+      lines.push("", "[config]", `defconfig = ${tomlDefconfig(setup.defconfig)}`);
+      if (setup.katapult !== undefined && setup.katapult !== null) lines.push(`katapult = ${tomlDefconfig(setup.katapult)}`);
+    }
+    for (const setup of asConfig ? [] : setups) {
+      lines.push("", "[[setup]]", `id = ${tomlString(setup.id || "")}`, `title = ${tomlText(setup.title || "")}`);
+      if (setup.description) lines.push(`description = ${tomlText(setup.description)}`);
+      lines.push(`defconfig = ${tomlDefconfig(setup.defconfig)}`);
+      if (setup.katapult !== undefined && setup.katapult !== null) lines.push(`katapult = ${tomlDefconfig(setup.katapult)}`);
+      if (setup.methods !== undefined && setup.methods !== null) lines.push(`methods = ${tomlArray(setup.methods)}`);
+    }
 
     for (const option of data.options || []) {
       lines.push("", "[[option]]", `symbol = ${tomlString(option.symbol || "")}`);
@@ -652,6 +699,7 @@ export function writeBoardToml(data) {
         lines.push(`labels = ${tomlInlineTable(option.labels, labelOrder(option.labels, option.values))}`);
       }
       if (option.help) lines.push(`help = ${tomlText(option.help)}`);
+      if (option.setups !== undefined && option.setups !== null) lines.push(`setups = ${tomlArray(option.setups)}`);
     }
   }
 

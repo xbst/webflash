@@ -1,12 +1,15 @@
 // The site's Flash card: flash-ui.js wired to the session (SPEC 12).
 //
 // This is the one flash module that knows the site's state. The firmware
-// comes, in this order of preference, from a file the user uploaded with
-// the toolbar's Upload firmware, from session.build (the in-browser build's
-// outputs, while the project, ref and .config are still the build's), or,
-// for a [prebuilt] board TOML, from the file opened beside it.
+// comes, in this order of preference, from a file the user uploaded (Upload
+// firmware in the top bar, or page 1's "Flash a file you have"; a build that
+// finishes after it takes its place), from
+// session.builds (the in-browser builds' outputs, while the project, ref and
+// .config of each slot are still the build's: Katapult and the firmware
+// together, through pair.js, when Katapult is picked), or, for a [prebuilt]
+// board TOML, from the file opened beside it.
 // The methods come from the configuration (session.configText, the
-// configure code's full .config, else the TOML's defconfig) through
+// configure code's full .config, else the selected setup's defconfig) through
 // devices.js's inferMethods, narrowed by the TOML's [flash].methods; a file
 // with no configuration gets the methods its MCU or address allow.
 //
@@ -17,7 +20,11 @@ import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin, sniffFormat, looksLikeText } from "./firmware-file.js";
 import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict, serialBaud } from "./devices.js";
 import { explainError, FlashError } from "./errors.js";
-import { buildMatches } from "../build/artifacts.js";
+import { firmwareFromPair } from "./pair.js";
+import { buildMatches, buildsMatch } from "../build/artifacts.js";
+
+// The embed's embed-model.js imports it from pair.js, which needs no DOM.
+export { firmwareFromPair };
 
 /**
  * A message about a file with the file's name in front, unless it already
@@ -30,7 +37,7 @@ function aboutFile(name, message) {
 
 /**
  * Mount the panel into root (the #flash-card element) for a Session. The
- * toolbar's Upload firmware button (uploadButton) is taken over. Returns
+ * top bar's Upload firmware button (uploadButton) is taken over. Returns
  * the panel API plus refresh().
  */
 export async function mountFlashPanel(session, root, { uploadButton = null, showError = null } = {}) {
@@ -51,15 +58,24 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   // ── Sources ─────────────────────────────────────────────────────
   function configText() {
     if (typeof session.configText === "string" && session.configText.trim()) return session.configText;
+    // The setup Configure edits, as tomlFlash reads its methods; else the TOML's own.
     const t = session.toml || {};
-    return (t.config && typeof t.config.defconfig === "string") ? t.config.defconfig : "";
+    const table = session.setup || t.config || firstSetup(t);
+    return (table && typeof table.defconfig === "string") ? table.defconfig : "";
+  }
+
+  // The first [[setup]], the one the site configures, or null.
+  function firstSetup(t) {
+    return Array.isArray(t.setup) && t.setup[0] && typeof t.setup[0] === "object" ? t.setup[0] : null;
   }
 
   function tomlFlash() {
     const t = session.toml || {};
     const flash = t.flash && typeof t.flash === "object" ? t.flash : {};
+    // The setup Configure edits (U05's Setup select), else the TOML's first.
+    const setup = session.setup || firstSetup(t) || {};
     return {
-      methods: Array.isArray(flash.methods) ? flash.methods : null,
+      methods: Array.isArray(setup.methods) ? setup.methods : Array.isArray(flash.methods) ? flash.methods : null,
       instructions: flash.instructions && typeof flash.instructions === "object" ? flash.instructions : null,
     };
   }
@@ -69,14 +85,33 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return t.prebuilt && typeof t.prebuilt === "object" ? t.prebuilt : null;
   }
 
+  // Why there is nothing to flash, for the panel's firmware line: the builds
+  // cannot be flashed together (pair.js's refusal), or a [prebuilt] TOML's
+  // file is missing or unreadable (Build is skipped for it); else "".
+  let refusal = "";
+  // What went wrong reading the firmware this refresh: logged once, when the
+  // panel's firmware changes, not on every session change that leaves it.
+  let notes = [];
+
   /**
-   * The build's firmware (session.build), as a panel firmware, or null. A
+   * The build's firmware (session.builds), as a panel firmware, or null. A
    * build of another project, version or .config is not offered: the Build
-   * card says Rebuild and keeps its files, as a card withdraws its build.
+   * step says Rebuild and keeps its files, as a card withdraws its build.
+   * With Katapult picked, both builds must match and go as one firmware.
    */
   function fromBuild() {
+    if (session.katapult && session.katapult.on) {
+      if (!buildsMatch(session, session.builds)) return null;
+      try {
+        return firmwareFromPair(session.builds, tomlFlash());
+      } catch (e) {
+        refusal = e.message;
+        notes.push(e.message);
+        return null;
+      }
+    }
     const b = session.build;
-    if (!b || !b.outputs || !buildMatches(session, b)) return null;
+    if (!b || !b.outputs || !buildMatches(session, b, "fw")) return null;
     const outputs = b.outputs instanceof Map ? b.outputs : new Map(Object.entries(b.outputs));
     const project = b.project || session.project || "klipper";
     const cfg = b.config || configText();
@@ -94,7 +129,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       else if (uf2Name) image = parseFirmware(uf2Name, outputs.get(uf2Name), { source: "build" });
       else if (hexName) image = parseFirmware(hexName, outputs.get(hexName), { source: "build" });
     } catch (e) {
-      panel.log(`The build's output could not be read: ${e.message}`);
+      notes.push(`The build's output could not be read: ${e.message}`);
       return null;
     }
     if (!image) return null;
@@ -113,12 +148,16 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const pre = prebuiltTable();
     if (!pre || typeof pre.file !== "string") return null;
     const bytes = session.fileFor ? session.fileFor(pre.file) : null;
-    if (!bytes) return null;
+    if (!bytes) {
+      refusal = `This board TOML flashes ${pre.file}, which was not opened with it: open the TOML again together with ${pre.file}, or use Upload firmware.`;
+      return null;
+    }
     let image;
     try {
       image = parseFirmware(pre.file, bytes, { address: typeof pre.address === "number" ? pre.address : null, source: "upload" });
     } catch (e) {
-      panel.log(aboutFile(pre.file, e.message));
+      refusal = aboutFile(pre.file, e.message);
+      notes.push(refusal);
       return null;
     }
     const { methods, warnings } = methodsForPrebuilt({ mcu: pre.mcu || null, image, tomlMethods: tomlFlash().methods });
@@ -213,22 +252,27 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   let shown = null;
 
   function firmwareKey(firmware) {
-    if (!firmware) return { origin: null, text: "null" };
-    const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? session.build : (firmware.artifacts[0] || {}).bytes;
-    const skip = new Set(["image", "artifacts", "onClear"]);
-    const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "");
+    if (!firmware) return { origin: null, text: `null ${refusal}\n${notes.join("\n")}` };
+    const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? (firmware.pair ? session.builds : session.build) : (firmware.artifacts[0] || {}).bytes;
+    // The images hold the bytes (a pair's appImage too), which origin stands for: only their ranges go in.
+    const skip = new Set(["image", "appImage", "artifacts", "onClear"]);
+    const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "") +
+      (firmware.appImage ? ` ${describeImage(firmware.appImage).rangeText}` : "");
     return { origin, text };
   }
 
   // While a flash runs, the panel holds a new firmware back until it ends
   // (flash-ui.js's setFirmware), so a refresh never interrupts one.
   function refresh() {
+    refusal = "";
+    notes = [];
     // A [prebuilt] board TOML flashes its own file, never a build.
     const firmware = fromUpload() || (prebuiltTable() ? fromPrebuilt() : fromBuild());
     const key = firmwareKey(firmware);
     if (shown && shown.origin === key.origin && shown.text === key.text) return;
     shown = key;
-    panel.setFirmware(firmware);
+    for (const note of notes) panel.log(note);
+    panel.setFirmware(firmware, { empty: refusal });
   }
 
   // ── Upload firmware ─────────────────────────────────────────────
@@ -258,7 +302,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     // The same decision parseFirmware makes: only a raw binary needs an address.
     const isBin = sniffFormat(name, bytes) === "bin";
     if (isBin && looksLikeText(bytes)) {
-      throw new FlashError(`${name} is a text file, not a firmware image (a Klipper dictionary, or an Intel HEX file whose first record cannot be read). Upload the firmware itself: a .bin, .hex, .uf2 or .elf file.`, { code: "format" });
+      throw new FlashError(`${name} is a text file, not a firmware image (a Klipper dictionary, or an Intel HEX file whose first record cannot be read): upload a .bin, .hex, .uf2 or .elf file.`, { code: "format" });
     }
     if (isBin) {
       let address = givenAddress;
@@ -284,13 +328,16 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   if (uploadButton) {
     uploadButton.disabled = false;
-    uploadButton.title = "Flash a firmware file you already have (.bin, .hex, .uf2 or .elf)";
+    uploadButton.title = "Flash a firmware file you have (.bin, .hex, .uf2 or .elf)";
     uploadButton.addEventListener("click", () => input.click());
   }
 
   // ── Session changes ─────────────────────────────────────────────
   session.on("change", ({ what }) => {
-    if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files"].includes(what)) refresh();
+    // A build that finishes after an upload replaces it (uploading again
+    // brings the file back); a "build" change that clears the builds does not.
+    if (what === "build" && (session.build || (session.builds && session.builds.katapult))) state.uploaded = null;
+    if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files", "katapult", "katapult-ref", "katapult-config", "setup"].includes(what)) refresh();
   });
   refresh();
 

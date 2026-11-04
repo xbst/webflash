@@ -25,7 +25,7 @@ A board with a different crystal, USB pins or CAN pins needs its own build (chun
 ## How to run a row
 
 1. Open the site (the local `webflash` server during development; the hosted site after release) in Chrome or Edge on a computer. Brave runs every method except the UF2 drive, because it ships with the File System Access API off (`brave://flags/#file-system-access-api` turns it on); Firefox and Safari run none, since they have no WebUSB and no Web Serial. Brave also hands the page made-up USB serial numbers (16 letters and digits such as `XTw3bNlxBIr89HqV` in the rows below, where Chrome shows the real hex ones), most likely its fingerprinting protection; the page only puts a hex serial into the printer.cfg hint, so those rows got `<serial>`.
-2. Click **Upload firmware** in the toolbar and pick the file of the row (a `.bin` asks for its address: use the one in the table). The Flash card then names the file, its address range and, for Klipper binaries, the MCU and version it was built for.
+2. Click **Upload firmware** in the top bar (or "Flash a file you have" on page 1) and pick the file of the row (a `.bin` asks for its address: use the one in the table). The Flash card then names the file, its address range and, for Klipper binaries, the MCU and version it was built for.
 3. Pick the **Method**, read the instructions, put the board in the mode they describe, click **Connect** (or **Restart Klipper into ...** when Klipper is running on the board) and pick the device in the browser's list.
 4. Check the confirmation (device, method, address range, size, MCU) and click **Flash**. Watch the progress, the verification and the result box; expand **Log** for the details and **What went wrong?** on a failure.
 5. Confirm the board came back: it enumerates as Klipper (`1d50:614e`) or Katapult (`1d50:6177`), and a Klipper host connects to it (Mainsail or Fluidd shows the MCU ready).
@@ -84,6 +84,55 @@ Board: a board built with a serial interface and Katapult in UART mode, on a USB
 
 End to end with firmware built in the browser: the site staged as `pages.yml` stages it (the toolchain release `llvm23.1.4-atfe23.1.0-build1`, the gated snapshots of 2026-11-02 and again of 2026-11-03, the same bundles) behind a local server that answers as GitHub Pages does, and generated pages embedded with md-iframe in a scratch Zensical site, their runtime loaded from that server. The rows below say for each whether the firmware came from the site or from a card. A "built in" time before `2224ade` is the compile time alone; from then on it is the whole wait the clock shows.
 
+## The guided UI's runs (2026-11-04)
+
+The wizard (Firmware, Configure, Build, Flash, Embed) with Katapult and Klipper configured, built and flashed together, older commits as versions, and board TOMLs with setups. The site ran from the local `webflash` server with local assets (the toolchain release above and a snapshot output with the older commits); the embed was `examples/can-toolhead` rendered against that server, in a scratch Zensical site with md-iframe. Each STOP starts from a fresh reload of the page.
+
+### STOP U1: Katapult and Klipper over DFU in one session, G0B1 on USB
+
+1. Page 1: Klipper, Version Latest, tick **Katapult bootloader**. **Next**.
+2. Configure: under "Board · used by both", STM32G0B1, 8 MHz crystal, USB on PA11/PA12. "Klipper only" shows "8KiB bootloader · set by Katapult". Under "Katapult only", set what the old Katapult had (double-tap entry, status LED). **Build**.
+3. The Build step builds Katapult, then Klipper. **Next**.
+4. Flash: Method "DFU (STM32 ROM) · flashes both at once"; the list shows Katapult at `0x08000000` and Klipper at `0x08002000`. Hold BOOT0, tap RESET, release; **Connect**, pick "DFU in FS Mode", **Flash Katapult and Klipper**.
+5. Expected: both rows checked, "Flashed and verified", Klipper enumerates and the host connects; a double-tap of RESET (if enabled) shows Katapult (`1d50:6177`).
+
+### STOP U2: Klipper over Katapult USB, built from the host's own version
+
+1. In Mainsail (Machine, Update Manager) or Fluidd, copy the host's Klipper version, such as `v0.13.0-245-g61c0c8d`.
+2. Page 1: paste it into Klipper's Version. Expected: that commit, or the closest kept one with "Closest kept: …" under the field. Keep Katapult ticked. **Next**, **Build**, **Next**.
+3. Flash: Method "Katapult (USB or UART) · Klipper only"; the list says "Katapult · already on the board". **Restart Klipper into Katapult**, pick the Klipper port, then the Katapult port when asked, **Flash**.
+4. Expected: flashed and verified; Mainsail's MCU version matches the commit picked.
+
+### STOP U3: KUSBA (RP2040, IS25LP flash), PICOBOOT and the UF2 drive
+
+1. Page 1: Klipper Latest, Katapult ticked, **Next**.
+2. Configure, "Board · used by both": Raspberry Pi RP2040 ("Enable extra low-level configuration options" is ticked by default). Klipper's offset reads "16KiB bootloader · set by Katapult". Under "Katapult only": "Flash chip: GENERIC_03H with CLKDIV 4" (Klipper behind Katapult has no stage-2 bootloader, so only Katapult's counts). **Build**, **Next**.
+3. BOOTSEL; Method "PICOBOOT (RP2 BOOTSEL) · flashes both at once", **Connect**, "RP2 Boot", **Flash**. Expected: both written and verified, the board reboots, Klipper enumerates.
+4. BOOTSEL again; Method "UF2 drive (RP2 BOOTSEL) · flashes both at once", **Pick the drive**, `RPI-RP2`, **Flash**. Expected: one `.uf2` with both, the board restarts into Klipper.
+5. Flash the Anchor firmware back (Upload firmware, its `.uf2`, PICOBOOT).
+
+### STOP U4: the CAN toolhead's Klipper over Katapult CAN, from the embed
+
+1. Open the scratch docs page with the `can-toolhead` card. Firmware: Klipper Latest, Katapult ticked, **Next**.
+2. Setup: "CAN bus, with Katapult", CAN bus speed 1 Mbit/s. **Build**, then **Next**.
+3. Flash: "Katapult over CAN · Klipper only"; **Connect**, the CANable, pick the toolhead in the node list, **Flash**.
+4. Expected: flashed and verified, the `canbus_uuid` hint matches printer.cfg, Klipper connects; the frame grows and shrinks with each step, no scrollbar inside it.
+
+### STOP U5: Firefox
+
+1. Open the site in Firefox; page 1 **Next**, **Build**, **Next**. Expected: the build works, the Flash step offers only the downloads and says why.
+
+### STOP U6: a CAN node held by its host, flashed by its canbus_uuid
+
+The CAN toolhead with Katapult, running Klipper with its host connected (`klipper.service` up), so the node holds a node id and does not answer the query; the CANable on the same bus, on this computer; the toolhead's `canbus_uuid` from printer.cfg.
+
+1. Leave Klipper running on the host. On the site, open `examples/can-toolhead` (setup "CAN bus, with Katapult", Katapult unticked on page 1), **Build**, **Next**.
+2. Flash: "Katapult over CAN"; **Connect**, the CANable (on Linux, `can0` down or `gs_usb` unbound first, as the fixes say), **Flash**.
+3. Expected: "No node answered on the bus." with "Node not listed? Enter its canbus_uuid" open (or the other nodes listed with the field folded).
+4. Type a short value: refused with "A canbus_uuid is 12 hex digits, like aabbccddeeff." Then the toolhead's UUID (also try it with colons), **Use this UUID**.
+5. Expected: the log says the bootloader request went to that UUID, Katapult answers, the write is verified, and the hint shows the same `canbus_uuid`; Klipper reconnects after a `FIRMWARE_RESTART`.
+6. Negative run: **Flash**, then **Cancel** on the empty list. Expected: the no-node error, whose fixes say to stop Klipper on the host.
+
 ## Results
 
 | Date | OS and browser | Board | Method | File | Result | Notes |
@@ -114,3 +163,9 @@ End to end with firmware built in the browser: the site staged as `pages.yml` st
 | 2026-11-03 | Windows 10 Pro 19045, Chrome | none (the toolhead's configuration) | The Flash card of a Katapult CAN build, from the site (STOP 6a) | Katapult master for the STM32G0B1 toolhead (CAN on PB0/PB1, status LED), built in the page | Pass: DFU offered first, `katapult.bin` the first download | Checks `5685630` and `a553caa` |
 | 2026-11-03 | Windows 10 Pro 19045, Chrome | STM32G0B1 board with Katapult, USB | Katapult over USB, the cable pulled while writing, from the site (STOP 6b) | Klipper master `stm32g0b1-usb` built in the page | Pass: the card stopped with "The device went away" and what to do; plugged back, flashed again, verified, Klipper connected | Checks `67f345c`. Katapult never erases itself, so a write cut short leaves the board in Katapult |
 | 2026-11-03 | | | Pyodide's CDN blocked (STOP 6c) | | Not run in Chrome: its DevTools no longer has the "Network request blocking" panel the steps named | In the pane, an engine worker booted with an unreachable Pyodide address answers "Could not download the Python runtime from cdn.jsdelivr.net. Check your network or allowlist that host, or use the webflash command line tool.", PinConnect's message |
+| 2026-11-04 | Windows 10 Pro 19045, Chrome | STM32G0B1 board on USB, in its ROM bootloader | DFU, Katapult and Klipper in one session, from the site (STOP U1) | Katapult master and Klipper master built together in the page (Klipper at 8 KiB, linked to Katapult's application offset) | Pass: both written and verified in one session, Klipper connected (as reported) | The guided UI's first pair on hardware |
+| 2026-11-04 | Windows 10 Pro 19045, Chrome | The same board, running Klipper from the new Katapult | Katapult over USB, Klipper only, from the site (STOP U2) | Kalico built in the page from the host's own version, pasted from Mainsail into page 1's version picker | Pass: flashed and verified; Mainsail's MCU version matched the host's (as reported) | The older-commit picker on hardware: a Kalico host's describe string resolved to a kept commit |
+| 2026-11-04 | Windows 10 Pro 19045, Chrome | KUSBA (RP2040, IS25LP flash chip) | PICOBOOT and the UF2 drive, Katapult and Klipper together (STOP U3, attempt 1) | | Not run: Configure showed no "Flash chip" option | Behind Katapult's 16 KiB, Klipper has no stage-2 bootloader (`RP2040_HAVE_STAGE2` follows `RPXXXX_FLASH_START_0100`), so its Flash chip is hidden; the pairing counted the choice as shared, showed Klipper's hidden copy and took Katapult's out of "Katapult only". Fixed in `1cd3736`: a shared option the firmware hides and Katapult shows stays in "Katapult only" |
+| 2026-11-04 | Windows 10 Pro 19045, Chrome | The same KUSBA in BOOTSEL | PICOBOOT, then the UF2 drive, Katapult and Klipper together, from the site (STOP U3, attempt 2) | Katapult master (Flash chip GENERIC_03H with CLKDIV 4, under "Katapult only") and Klipper master at 16 KiB, built together in the page | Pass: both methods flashed both images, and Klipper came up through Katapult (as reported); the Anchor firmware went back afterwards | Checks `1cd3736` |
+| 2026-11-04 | Windows 10 Pro 19045, Chrome | CAN toolhead (STM32G0B1, PB0/PB1, 1 Mbit) through the CANable | Katapult over CAN, Klipper only, from a card: `can-toolhead` in the scratch Zensical site, setup "CAN bus, with Katapult" (STOP U4) | Klipper master and Katapult built together in the card | Pass: flashed and verified, the `canbus_uuid` hint matched printer.cfg, Klipper connected (as reported) | |
+| 2026-11-04 | Windows 10 Pro 19045, Firefox | none | Build, from the site (STOP U5) | Klipper master | Pass: built (as reported) | |

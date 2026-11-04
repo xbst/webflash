@@ -10,7 +10,7 @@ name: ci
 
 on:
   push:
-    branches: [dev, master, "wf/**"]
+    branches: [master]
   workflow_dispatch:
 
 env:

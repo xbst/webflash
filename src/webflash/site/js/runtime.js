@@ -8,7 +8,7 @@
 //
 // Nothing heavy downloads at page load: the first call boots the worker
 // (Pyodide from the CDN, then webflash.zip), and onProgress reports how far it
-// got, for the toolbar's status.
+// got, for the top bar's status chip.
 //
 // Long work reports progress as it goes: call(method, params, {onProgress})
 // receives that call's own progress ({phase, detail, done, total}, done and
@@ -278,52 +278,114 @@ export async function render(tomlText, { themeName = "", inline = false, files =
 }
 
 // ── Sources and Kconfig (the engine's bridge methods) ─────────────
+//
+// The engine holds two configurations at once, by slot: "fw" (Klipper,
+// Kalico, or Katapult alone) and "katapult" (Katapult beside a firmware).
+// Every wrapper below takes {slot} (default "fw"); node ids in what comes
+// back are prefixed with it ("fw:n12", "katapult:n4").
+
+/** The slot a node id names ("katapult:n4" is katapult), else fallback. */
+export function slotOf(id, fallback = "fw") {
+  const m = /^(fw|katapult):/.exec(String(id || ""));
+  return m ? m[1] : fallback;
+}
 
 /**
- * Make one ref of a project the tree the engine configures and builds: the
+ * Make one ref of a project the tree a slot configures and builds: the
  * worker downloads its core bundle (Cache Storage keeps it), gunzips it and
  * hands it to bridge.load_sources. ref is the ref's entry in
  * sources/index.json, url the core bundle's URL, size its size from the
  * index's blobs table (the progress total; null when unknown). Resolves to
- * {project, id, sha, tree, size, cached}; onProgress gets the download in bytes.
+ * {slot, project, id, sha, tree, size, cached}; onProgress gets the download
+ * in bytes.
  */
-export async function loadSources(project, ref, url, { onProgress = null, size = null } = {}) {
-  return JSON.parse(await call("loadSources", [project, ref, url, size], { onProgress, early: true }));
+export async function loadSources(project, ref, url, { onProgress = null, size = null, slot = "fw" } = {}) {
+  return JSON.parse(await call("loadSources", [project, ref, url, size, slot], { onProgress, early: true }));
+}
+
+/** Forget a slot's sources, configuration and build (Katapult unticked). */
+export async function dropSlot(slot) {
+  return JSON.parse(await call("drop_slot", [slot]));
 }
 
 /**
- * Load a .config or a defconfig into the current tree with olddefconfig
+ * Load a .config or a defconfig into a slot's tree with olddefconfig
  * semantics ("" loads every default). Resolves to {missing: [[name, value]],
- * warnings: [text]}: missing are the assignments to symbols this version does
- * not have.
+ * warnings: [text], tree, pair?}: missing are the assignments to symbols this
+ * version does not have; pair (while the slots are paired) is as kconfigSet's.
  */
-export async function kconfigLoad(configText) {
-  return JSON.parse(await call("kconfig_load", [configText]));
+export async function kconfigLoad(configText, { slot = "fw" } = {}) {
+  return JSON.parse(await call("kconfig_load", [slot, configText]));
 }
 
-/** The Kconfig tree: {root, nodes: {id: node}} (SPEC 10 nodes). */
-export async function kconfigTree() {
-  return JSON.parse(await call("kconfig_tree"));
+/** A slot's Kconfig tree: {root, nodes: {id: node}} (SPEC 10 nodes). */
+export async function kconfigTree({ slot = "fw" } = {}) {
+  return JSON.parse(await call("kconfig_tree", [slot]));
 }
 
 /**
  * Set one symbol ("y"/"n" for a bool, the text for int, hex and string; a
- * choice is set by its member, with "y"). Resolves to the new tree; rejects
- * with the engine's reason for a value it refuses.
+ * choice is set by its node id and the member, or by its member with "y").
+ * Resolves to the slot's new tree; rejects with the engine's reason for a
+ * value it refuses. While the slots are paired the tree carries pair:
+ * {notes: [what the other tree refused], offset: the offset link, trees:
+ * {slot: tree} (the other slot's, when the set changed it)}.
  */
-export async function kconfigSet(name, value) {
-  return JSON.parse(await call("kconfig_set", [name, value]));
+export async function kconfigSet(name, value, { slot = slotOf(name) } = {}) {
+  return JSON.parse(await call("kconfig_set", [slot, name, value]));
 }
 
-/** The full .config, as make olddefconfig writes it. */
-export function kconfigConfig() { return call("kconfig_config"); }
+/** A slot's full .config, as make olddefconfig writes it. */
+export function kconfigConfig({ slot = "fw" } = {}) { return call("kconfig_config", [slot]); }
 
-/** The minimal configuration, as make savedefconfig writes it. */
-export function kconfigDefconfig() { return call("kconfig_defconfig"); }
+/** A slot's minimal configuration, as make savedefconfig writes it. */
+export function kconfigDefconfig({ slot = "fw" } = {}) { return call("kconfig_defconfig", [slot]); }
 
-/** What a build of this .config needs: {dirs, libs: ["lib/<dir>", ...]}. */
-export async function plan(configText) {
-  return JSON.parse(await call("plan", [configText]));
+/** One symbol's node, or null. */
+export async function kconfigSymbol(name, { slot = "fw" } = {}) {
+  return JSON.parse(await call("kconfig_symbol", [slot, name]));
+}
+
+/** The ids of a slot's nodes whose name, prompt or help mention text. */
+export async function kconfigSearch(text, { slot = "fw" } = {}) {
+  return JSON.parse(await call("kconfig_search", [slot, text]));
+}
+
+/**
+ * The options the firmware and Katapult share, while both slots hold a
+ * configuration: [{kind, name, prompt, type, fw: node id, katapult: node id,
+ * members}].
+ */
+export async function pairShared() {
+  return JSON.parse(await call("pair_shared"));
+}
+
+/**
+ * Copy one slot's shared values into the other (the firmware's into
+ * Katapult by default) and apply the offset link: {notes, offset, copied:
+ * [the other slot's options that changed], trees: {fw, katapult}}.
+ */
+export async function pairSync({ source = "fw" } = {}) {
+  return JSON.parse(await call("pair_sync", [source]));
+}
+
+/**
+ * Both slots' trees in one: {root: ["group:shared", "group:fw",
+ * "group:katapult"], groups: [{id, title, root}], nodes, title, titles,
+ * offset}. normalizeTree reads it like any tree (each group is a menu node).
+ */
+export async function pairTree() {
+  return JSON.parse(await call("pair_tree"));
+}
+
+/** What a build of a slot's configuration needs: {dirs, libs: ["lib/<dir>", ...], missing, targets}. */
+export async function plan(configText, { slot = "fw" } = {}) {
+  return JSON.parse(await call("plan", [slot, configText]));
+}
+
+/** The flashing methods a configuration allows, best first: [{id, reason}]. */
+export async function inferMethods(configText, { slot = "fw" } = {}) {
+  return JSON.parse(await call("infer_methods", [slot, configText]));
 }
 
 /**
@@ -339,9 +401,9 @@ export function fetchBlob(url, { onProgress = null, phase = "download", detail =
 
 // ── The build ───────────────────────────────────────────────────────
 
-/** Extract one lib/<dir> bundle (gzipped or not) into the engine's tree: {name, files}. */
-export async function addLib(name, bytes) {
-  return JSON.parse(await call("add_lib", [name, bytes]));
+/** Extract one lib/<dir> bundle (gzipped or not) into a slot's tree: {name, files}. */
+export async function addLib(name, bytes, { slot = "fw" } = {}) {
+  return JSON.parse(await call("add_lib", [slot, name, bytes]));
 }
 
 /** Tell the engine which toolchain release the workers run (its manifest): {id, llvm}. */
@@ -368,16 +430,18 @@ export function toolchainIdle() {
 }
 
 /**
- * Build the configuration with the attached toolchain workers. Resolves to
- * the bridge's result ({outputs: {name: size}, memory, log, duration,
- * version, config, defconfig, project, mcu, app_address, ...}); progress
- * goes to onProgress; aborting signal stops the build at its next step.
+ * Build a slot's configuration with the attached toolchain workers. Resolves
+ * to the bridge's result ({slot, outputs: {name: size}, memory, log,
+ * duration, version, config, defconfig, project, mcu, app_address, ...});
+ * progress goes to onProgress; aborting signal stops the build at its next
+ * step. Afterwards the slot's Kconfig holds the built .config (every symbol
+ * pinned): load its defconfig again before configuring on.
  */
-export async function build(configText, version, jobs, { onProgress = null, signal = null } = {}) {
-  return JSON.parse(await call("build", [configText, version || "", jobs], { onProgress, signal, long: true }));
+export async function build(configText, version, jobs, { onProgress = null, signal = null, slot = "fw" } = {}) {
+  return JSON.parse(await call("build", [slot, configText, version || "", jobs], { onProgress, signal, long: true }));
 }
 
-/** One output file of the last build, as a Uint8Array (transferred, not copied). */
-export function buildOutput(name) {
-  return call("build_output", [name]);
+/** One output file of a slot's last build, as a Uint8Array (transferred, not copied). */
+export function buildOutput(name, { slot = "fw" } = {}) {
+  return call("build_output", [slot, name]);
 }

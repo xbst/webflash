@@ -101,33 +101,44 @@ export function capabilities(nav = typeof navigator !== "undefined" ? navigator 
 // ── Fix texts ───────────────────────────────────────────────────────
 
 const ZADIG_STEPS = (deviceName) => [
-  `On Windows, install the WinUSB driver for the device once with Zadig (zadig.akeo.ie): start Zadig, open Options and tick List All Devices, pick ${deviceName} in the list, choose WinUSB as the driver and click Replace Driver (or Install Driver).`,
-  "Unplug and replug the board, then click Connect again.",
+  "Windows: open Zadig (zadig.akeo.ie) and tick Options > List All Devices.",
+  `In Zadig, pick ${deviceName}, choose WinUSB and click Replace Driver.`,
+  "Replug the board, then click Connect again.",
 ];
 
-const UDEV_RULE = (vid, pid) =>
-  `On Linux, give your user access to the device with a udev rule, for example in /etc/udev/rules.d/70-webflash.rules: SUBSYSTEM=="usb", ATTR{idVendor}=="${vid}", ATTR{idProduct}=="${pid}", MODE="0666", TAG+="uaccess". Then run: sudo udevadm control --reload-rules && sudo udevadm trigger, and replug the board.`;
+const UDEV_RULE = (vid, pid) => [
+  `Linux: add SUBSYSTEM=="usb", ATTR{idVendor}=="${vid}", ATTR{idProduct}=="${pid}", MODE="0666", TAG+="uaccess" to /etc/udev/rules.d/70-webflash.rules.`,
+  "Run sudo udevadm control --reload-rules && sudo udevadm trigger, then replug the board.",
+];
 
-const DIALOUT = "On Linux, add your user to the dialout group (sudo usermod -a -G dialout $USER), log out and back in, and make sure no other program (Klipper, a serial monitor, ModemManager) holds the port.";
+const DIALOUT = [
+  "Linux: run sudo usermod -a -G dialout $USER, then log out and back in.",
+  "Stop anything else holding the port (Klipper, ModemManager).",
+];
 
 const GS_USB_UNBIND = [
-  "On Linux the kernel's gs_usb driver claims the adapter, so the browser cannot. Take the CAN interface down and unbind the adapter first: sudo ip link set can0 down, then find the adapter under /sys/bus/usb/drivers/gs_usb/ (a name like 1-3:1.0) and run: echo 1-3:1.0 | sudo tee /sys/bus/usb/drivers/gs_usb/unbind. Replug the adapter when you are done to give it back to the kernel.",
-  "A Klipper host running on the same adapter (klippy, can0 up) also keeps it busy: stop Klipper first, or use a laptop with no CAN setup.",
+  "Linux: run sudo ip link set can0 down.",
+  "Run echo <name> | sudo tee /sys/bus/usb/drivers/gs_usb/unbind (<name> is listed in that folder, like 1-3:1.0).",
+  "Replug the adapter after flashing.",
+  "Stop a Klipper host that uses the same adapter.",
 ];
 
-const BUSY_GENERIC = "Close any other program that is talking to the board: a Klipper host (stop klipper.service), a serial monitor, STM32CubeProgrammer, Arduino IDE, dfu-util or picotool. Then click Connect again.";
+const BUSY_GENERIC = "Close other programs using the board (Klipper, a serial monitor, STM32CubeProgrammer, dfu-util, picotool), then click Connect again.";
 
-const OTHER_TAB = "Another tab of this site may hold the device: close it.";
+const OTHER_TAB = "Close other tabs of this site.";
 
-const SECURE_PAGE = "The page needs to be served over HTTPS or from localhost.";
+const SECURE_PAGE = "Open the page over HTTPS or from localhost.";
 
-const EMBED_ALLOW = "If this page is embedded in another site, the embedding page must allow USB and serial access: allow=\"usb; serial\" on its iframe.";
+const EMBED_ALLOW = "Embedded in another site? Its iframe needs allow=\"usb; serial\".";
 
-const PICKER_NOTE = "Make sure the board is in the right mode and is plugged straight into this computer (a USB hub can hide it); the picker only lists devices in that mode.";
+const UART_BAUD = "Over UART, Katapult must use the same baud rate as the firmware.";
+
+const PICKER_NOTE = "Put the board in the right mode and plug it straight into this computer (not a hub).";
 
 const DISCONNECTED_FIXES = [
-  "The board disconnected before the step finished. If it just restarted after a successful write, that is expected: check that it enumerates as Klipper (or Katapult) now.",
-  "Otherwise put it back in its bootloader and click Connect again, with a different USB cable or port if it keeps dropping out.",
+  "Just flashed? Then the restart is expected: check that the board shows up as Klipper (or Katapult).",
+  "Otherwise, put it back in its bootloader and connect again.",
+  "Keeps dropping? Try another cable or USB port.",
 ];
 
 // The device a fix names: a ROM bootloader in quotes as Zadig lists it, else a description.
@@ -154,7 +165,8 @@ function vidPid(method) {
 /**
  * Turn any error into {code, title, message, fixes}. context names the
  * method ("dfu", "picoboot", "uf2", "katapult", "katapult-can"), the
- * transport ("usb", "serial", "filesystem") and, optionally, os and browser
+ * transport ("usb", "serial", "filesystem"), optionally the firmware's
+ * interface (iface: "usb", "serial", "can", "usbcan") and os and browser
  * (detected when absent).
  */
 export function explainError(err, context = {}) {
@@ -178,33 +190,50 @@ export function explainError(err, context = {}) {
         fixes.push(...apiFixes(os, browser, transport));
         break;
       case "timeout":
-        if (!fixes.length) fixes.push("Reset the board into its bootloader again and click Connect; if it keeps timing out, try another USB cable or port (a charge-only cable has no data lines).");
+        if (!fixes.length) fixes.push(
+          "Reset the board into its bootloader and click Connect again.",
+          "Still timing out? Try another USB cable or port (a charge-only cable has no data lines).",
+        );
+        // One baud serves Klipper's request and Katapult, as flashtool's -b does.
+        if (method === "katapult" && context.iface === "serial") fixes.push(UART_BAUD);
         break;
       case "verify-failed":
-        if (!fixes.length) fixes.push("Flash again. If the read-back differs a second time, the flash may be worn or write-protected; try the download and the vendor's flashing tool.");
+        if (!fixes.length) fixes.push(
+          "Flash again.",
+          "Fails again? The flash may be worn or write-protected: download the file and use the vendor's flashing tool.",
+        );
         break;
       case "wrong-mcu":
-        if (!fixes.length) fixes.push("Build the firmware for the micro-controller the board reports, or connect the board this firmware was built for.");
+        if (!fixes.length) fixes.push(
+          "Build the firmware for the micro-controller the board reports.",
+          "Or connect the board this firmware was built for.",
+        );
         break;
       case "read-protected":
         if (!fixes.length) fixes.push(
-          "Remove the read-out protection with STM32CubeProgrammer, through the ROM bootloader over USB or with an ST-LINK: set RDP back to level 0 (AA) under Option bytes. That erases the whole chip, a bootloader such as Katapult included.",
-          "Then put the board back in its ROM bootloader (hold BOOT0 and tap RESET) and flash again.",
+          "In STM32CubeProgrammer (over USB to the ROM bootloader, or with an ST-LINK), set RDP to level 0 (AA) under Option bytes; this erases the whole chip, Katapult included.",
+          "Put the board back in its ROM bootloader (hold BOOT0, tap RESET) and flash again.",
         );
         break;
       case "wrong-family":
         if (fixes.length) break;
         if (method === "picoboot") {
-          fixes.push("Build or pick a firmware for the chip that is connected (the RP2040 and the RP2350 take different files), or connect the board this firmware was built for.");
+          fixes.push(
+            "Build or pick a firmware for the chip that is connected (RP2040 and RP2350 files differ).",
+            "Or connect the board this firmware was built for.",
+          );
         } else {
           fixes.push(
-            "Build or pick a .uf2 for the chip the drive belongs to: the RP2040's drive is named RPI-RP2 and the RP2350's RP2350, and neither takes the other's files.",
-            "Or, if the firmware is the right one, pick the drive of the board it was built for.",
+            "Build or pick a .uf2 for the chip the drive belongs to (an RP2040's drive is RPI-RP2, an RP2350's is RP2350).",
+            "Or pick the drive of the board it was built for.",
           );
         }
         break;
       case "reenumeration":
-        if (!fixes.length) fixes.push("Put the board in its bootloader by hand (hold BOOT0 or BOOTSEL and tap RESET, or double-tap RESET for Katapult), then click Connect and pick it.");
+        if (!fixes.length) fixes.push(
+          "Put the board in its bootloader by hand: hold BOOT0 or BOOTSEL and tap RESET (double-tap RESET for Katapult).",
+          "Click Connect and pick it.",
+        );
         break;
       case "disconnected":
         // The serial and USB wrappers' own error for a board unplugged mid-step.
@@ -246,7 +275,7 @@ export function explainError(err, context = {}) {
     const claim = /claim/i.test(raw) || transport === "usb";
     return {
       code: claim ? "claim-failed" : "busy",
-      title: claim ? "The browser could not take over the device" : "The port could not be opened",
+      title: claim ? titleFor("claim-failed") : "The port could not be opened",
       message: raw,
       fixes: dedupe(claim ? claimFixes(os, method, label, vid, pid, transport) : busyFixes(os, transport, err)),
     };
@@ -260,7 +289,7 @@ export function explainError(err, context = {}) {
     };
   }
   if (name === "AbortError") {
-    return { code: "aborted", title: "Stopped", message: raw, fixes: ["The transfer was stopped. Reset the board into its bootloader and start again."] };
+    return { code: "aborted", title: "Stopped", message: raw, fixes: ["Reset the board into its bootloader and start again."] };
   }
   if (name === "InvalidStateError" || /already open|An operation that changes interface state is in progress/i.test(raw)) {
     return {
@@ -276,23 +305,23 @@ export function explainError(err, context = {}) {
 }
 
 function claimFixes(os, method, label, vid, pid, transport) {
-  if (transport === "serial") return [DIALOUT, BUSY_GENERIC];
+  if (transport === "serial") return [...DIALOUT, BUSY_GENERIC];
   const fixes = [];
   if (os === "windows") {
     if (method === "katapult-can") {
-      fixes.push("On Windows a candleLight adapter and a Klipper board in USB to CAN bridge mode install the WinUSB driver by themselves. If this one did not, use Zadig to put WinUSB on it (Options, List All Devices, pick the adapter, WinUSB, Replace Driver).");
+      fixes.push("Windows: if the adapter has no WinUSB driver, install WinUSB on it with Zadig.");
     } else {
       fixes.push(...ZADIG_STEPS(label));
-      if (method === "dfu") fixes.push("If STM32CubeProgrammer is installed, its STTub30 driver owns the DFU device and blocks the browser: Zadig replaces it with WinUSB (STM32CubeProgrammer still works through the WinUSB driver in its recent versions).");
+      if (method === "dfu") fixes.push("STM32CubeProgrammer installed? Replace its STTub30 driver with WinUSB in Zadig.");
     }
   } else if (os === "linux") {
     if (method === "katapult-can") fixes.push(...GS_USB_UNBIND);
-    fixes.push(UDEV_RULE(vid, pid));
-    if (method === "dfu") fixes.push("A running dfu-util or STM32CubeProgrammer also holds the device.");
+    fixes.push(...UDEV_RULE(vid, pid));
+    if (method === "dfu") fixes.push("Quit dfu-util or STM32CubeProgrammer.");
   } else if (os === "mac") {
-    fixes.push("On macOS nothing needs installing: another program holds the device. Quit it (picotool, dfu-util, STM32CubeProgrammer, a Klipper host) and click Connect again.");
+    fixes.push("macOS needs no driver: quit the program holding the device (picotool, dfu-util, STM32CubeProgrammer, Klipper).");
   } else if (os === "android") {
-    fixes.push("On Android, accept the USB permission prompt for the device; a USB OTG adapter is needed to plug the board in.");
+    fixes.push("Android: accept the USB permission prompt; the board needs a USB OTG adapter.");
   }
   fixes.push(BUSY_GENERIC);
   return fixes;
@@ -303,7 +332,7 @@ function busyFixes(os, transport, cause) {
   const msg = cause && cause.message ? String(cause.message) : "";
   const alreadyOpen = !!cause && (cause.name === "InvalidStateError" || /already open|interface state is in progress/i.test(msg));
   const fixes = [];
-  if (transport === "serial" && os === "linux" && !alreadyOpen) fixes.push(DIALOUT);
+  if (transport === "serial" && os === "linux" && !alreadyOpen) fixes.push(...DIALOUT);
   fixes.push(BUSY_GENERIC, OTHER_TAB);
   return fixes;
 }
@@ -313,14 +342,17 @@ function permissionFixes(os, transport, vid, pid) {
     // Chrome refuses a port with a SecurityError for the permissions policy
     // (an iframe without allow) or an insecure page, not for the OS's rules.
     const fixes = [EMBED_ALLOW, SECURE_PAGE];
-    if (os === "linux") fixes.push(DIALOUT);
+    if (os === "linux") fixes.push(...DIALOUT);
     return fixes;
   }
   if (transport === "filesystem") {
-    return ["The browser refused the folder. Pick the BOOTSEL drive itself (its top folder, named RPI-RP2 or RP2350) and allow the page to edit files there, or download the .uf2 and copy it onto the drive yourself."];
+    return [
+      "Pick the drive's top folder (RPI-RP2 or RP2350) and allow editing.",
+      "Or download the .uf2 and copy it onto the drive yourself.",
+    ];
   }
   return [
-    os === "linux" ? UDEV_RULE(vid, pid) : SECURE_PAGE,
+    ...(os === "linux" ? UDEV_RULE(vid, pid) : [SECURE_PAGE]),
     EMBED_ALLOW,
   ];
 }
@@ -328,15 +360,17 @@ function permissionFixes(os, transport, vid, pid) {
 function apiFixes(os, browser, transport) {
   const fixes = [];
   if (browser === "firefox" || browser === "safari") {
-    fixes.push("Flashing from the browser needs WebUSB and Web Serial, which Firefox and Safari do not have. Download the firmware here and flash it with Chrome or Edge, or with the usual tools (dfu-util, picotool, Katapult's flashtool.py).");
+    fixes.push("Use Chrome or Edge: Firefox and Safari have no WebUSB or Web Serial.");
+    fixes.push("Or download the files and flash them with dfu-util, picotool or Katapult's flashtool.py.");
   } else if (transport === "serial" && os === "android") {
-    fixes.push("Android Chrome has WebUSB but no Web Serial, so Katapult over USB cannot run here. Use DFU or PICOBOOT if the board has that bootloader, or a computer with Chrome or Edge.");
+    fixes.push("Android Chrome has no Web Serial: use DFU or PICOBOOT, or a computer.");
   } else if (transport === "filesystem" && browser === "brave") {
-    fixes.push("Brave turns the File System Access API off by default. Open brave://flags/#file-system-access-api, enable it and restart Brave, or use Chrome or Edge; or download the .uf2 and copy it onto the BOOTSEL drive yourself.");
+    fixes.push("Brave: enable brave://flags/#file-system-access-api and restart, or use Chrome or Edge.");
+    fixes.push("Or download the .uf2 and copy it onto the drive yourself.");
   } else if (transport === "filesystem") {
-    fixes.push("This browser cannot write to a drive from a web page. Download the .uf2 and copy it onto the BOOTSEL drive yourself.");
+    fixes.push("Download the .uf2 and copy it onto the drive yourself.");
   } else {
-    fixes.push("Use Chrome or Edge on a computer; the page must be served over HTTPS or from localhost.");
+    fixes.push("Use Chrome or Edge on a computer, over HTTPS or from localhost.");
   }
   return fixes;
 }
@@ -345,20 +379,20 @@ function titleFor(code) {
   switch (code) {
     case "no-api": return "This browser cannot flash";
     case "cancelled": return "No device picked";
-    case "claim-failed": return "The browser could not take over the device";
+    case "claim-failed": return "The browser could not claim the device";
     case "busy": return "The device is in use";
     case "permission": return "The browser may not use this device";
     case "disconnected": return "The device went away";
     case "timeout": return "The board did not answer";
-    case "protocol": return "The board answered with something unexpected";
-    case "wrong-mcu": return "This firmware is for a different micro-controller";
-    case "wrong-family": return "This firmware is for a different chip";
+    case "protocol": return "Unexpected answer from the board";
+    case "wrong-mcu": return "Firmware for another micro-controller";
+    case "wrong-family": return "Firmware for another chip";
     case "verify-failed": return "The verification failed";
-    case "not-bootloader": return "The device is not in its bootloader";
-    case "address": return "The firmware does not fit the device's memory";
+    case "not-bootloader": return "Not in its bootloader";
+    case "address": return "The firmware does not fit";
     case "read-protected": return "The chip is read-protected";
-    case "drive": return "That is not a BOOTSEL drive";
-    case "reenumeration": return "The board did not come back in its bootloader";
+    case "drive": return "Not a BOOTSEL drive";
+    case "reenumeration": return "The board did not restart into its bootloader";
     case "unsupported": return "Not supported";
     case "aborted": return "Stopped";
     default: return "Flashing failed";

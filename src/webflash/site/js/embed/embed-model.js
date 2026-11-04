@@ -35,7 +35,7 @@ export function readConfig(text) {
     return {
       newer,
       error: newer
-        ? `This page was made by a newer WebFlash (configuration schema ${data.schema}) than the runtime it loaded, which reads schema ${SCHEMA}. Generate it again, or load the runtime its version names.`
+        ? `This page needs a newer WebFlash runtime (schema ${data.schema}; this one reads ${SCHEMA}): generate it again, or load the runtime its version names.`
         : `This page's configuration has schema ${JSON.stringify(data.schema)}, which this runtime does not read (it reads schema ${SCHEMA}).`,
     };
   }
@@ -44,6 +44,17 @@ export function readConfig(text) {
   }
   const firmware = isObject(data.firmware) ? data.firmware : null;
   const flash = isObject(data.flash) ? data.flash : {};
+  const katapult = firmware && isObject(data.katapult) ? data.katapult : null;
+  const str = (v) => (typeof v === "string" ? v : "");
+  const setups = firmware && Array.isArray(data.setups) ? data.setups.filter(isObject).map((s, i) => ({
+    id: typeof s.id === "string" && s.id ? s.id : (i ? `setup-${i + 1}` : "default"),
+    title: str(s.title),
+    description: str(s.description),
+    defconfig: str(s.defconfig),
+    katapult: typeof s.katapult === "string" ? s.katapult : null,
+    methods: Array.isArray(s.methods) ? s.methods : null,
+  })) : [];
+  if (firmware && !setups.length) return { error: "This page's configuration has no setup to build." };
   const config = {
     schema: SCHEMA,
     board: { description: "", image: "", theme: "default", theme_dir: "./themes", engine_url: "", ...data.board },
@@ -53,13 +64,20 @@ export function readConfig(text) {
       version: firmware.version || "latest",
       versions: firmware.versions === undefined ? "all" : firmware.versions,
     } : null,
-    config: firmware ? { defconfig: (isObject(data.config) && typeof data.config.defconfig === "string") ? data.config.defconfig : "" } : null,
+    katapult: katapult ? {
+      version: katapult.version || "latest",
+      versions: katapult.versions === undefined ? "all" : katapult.versions,
+      default: katapult.default !== false,
+    } : null,
+    setups,
+    setups_form: firmware ? (data.setups_form === "setup" ? "setup" : "config") : null,
     options: firmware && Array.isArray(data.options) ? data.options.filter((o) => isObject(o) && typeof o.symbol === "string").map((o) => ({
       symbol: o.symbol,
       label: o.label || "",
       values: Array.isArray(o.values) ? o.values.map(String) : null,
       labels: isObject(o.labels) ? { ...o.labels } : {},
       help: o.help || "",
+      setups: Array.isArray(o.setups) ? o.setups.map(String) : null,
     })) : [],
     flash: {
       methods: Array.isArray(flash.methods) ? flash.methods : null,
@@ -245,22 +263,188 @@ export function applyChoices(defconfig, options, choices) {
   return lines.length ? `${lines.join("\n")}\n` : "";
 }
 
+// ── The reader's picks ───────────────────────────────────────────────
+//
+// The card's steps (SPEC 2.2 of the guided UI): Firmware (what to flash and
+// the versions), Setup (which [[setup]], only when there are several),
+// Build and Flash. What the reader picks is {project, version, katapult,
+// katapultVersion, setupIndex}: project is one of [firmware] projects, or
+// "none" (Katapult alone, offered only beside [katapult]); katapult is the
+// Katapult checkbox.
+
+const PROJECT_NAMES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult", none: "None" };
+
+/** A project's name as the card shows it. */
+export function projectLabel(project) {
+  return PROJECT_NAMES[project] || project;
+}
+
+/** The firmware switch's choices: [firmware] projects, then None when the TOML has [katapult]. */
+export function firmwareChoices(config) {
+  if (!config.firmware) return [];
+  const list = config.firmware.projects.map((id) => ({ id, label: projectLabel(id) }));
+  if (config.katapult) list.push({ id: "none", label: "None" });
+  return list;
+}
+
+const OFFSET_MEMBER = /^(STM32|RPXXXX|LPC)_FLASH_START_[0-9A-F]+$/;
+
+/** Whether an option is the firmware's bootloader offset (a *_FLASH_START_* choice). */
+export function isOffsetOption(option) {
+  const names = Array.isArray(option.values) && option.values.length ? option.values : [option.symbol];
+  return names.every((v) => OFFSET_MEMBER.test(v));
+}
+
+/**
+ * The [[option]]s that apply to a setup ([[option]] setups; none listed:
+ * every setup). With picks None (Katapult alone), the firmware's bootloader
+ * offset does not: Katapult's Kconfig gives those symbols another meaning
+ * (its deployer's address), as engine/pair.py's deny list knows.
+ */
+export function optionsFor(config, setup, picks = null) {
+  return config.options.filter((o) => (!o.setups || (setup && o.setups.includes(setup.id))) &&
+    !(picks && picks.project === "none" && isOffsetOption(o)));
+}
+
+/**
+ * Whether an option is Klipper's bootloader offset while Katapult is ticked
+ * beside the firmware: the engine sets it from Katapult's application
+ * offset then (engine/pair.py's link), so the reader cannot.
+ */
+export function offsetLocked(option, picks) {
+  if (!picks.katapult || picks.project === "none" || picks.project === "katapult") return false;
+  return isOffsetOption(option);
+}
+
+/** Why the reader cannot pick a setup now, or "": one without Katapult while Katapult is ticked. */
+export function setupBlock(setup, katapult) {
+  return katapult && setup && typeof setup.katapult !== "string" ? "No Katapult in this setup: untick Katapult to use it." : "";
+}
+
+/** The setup to use: preferred when it can be picked, else the first that can, else preferred. */
+export function allowedSetup(config, katapult, preferred = 0) {
+  const setups = config.setups;
+  if (setups[preferred] && !setupBlock(setups[preferred], katapult)) return preferred;
+  const i = setups.findIndex((s) => !setupBlock(s, katapult));
+  return i >= 0 ? i : preferred;
+}
+
+/** What the card starts with: the TOML's project and versions, [katapult] default, the first setup that fits. */
+export function initialPicks(config) {
+  const f = config.firmware;
+  const k = config.katapult;
+  const katapult = Boolean(k && k.default);
+  return {
+    project: f ? f.project : null, version: f ? f.version : null,
+    katapult, katapultVersion: k ? k.version : "latest",
+    setupIndex: f ? allowedSetup(config, katapult, 0) : 0,
+  };
+}
+
+/** Whether the picks name something to build: a firmware, or Katapult. */
+export function picksValid(picks) {
+  return picks.project !== "none" || picks.katapult;
+}
+
+/** Whether two picks are the same. */
+export function samePicks(a, b) {
+  return ["project", "version", "katapult", "katapultVersion", "setupIndex"].every((k) => a[k] === b[k]);
+}
+
+/** What the picks flash, as the card names it: "Klipper and Katapult", "Katapult", "Klipper". */
+export function picksTitle(picks) {
+  const fw = picks.project === "none" ? null : projectLabel(picks.project);
+  const parts = [fw, picks.katapult && picks.project !== "katapult" ? "Katapult" : null].filter(Boolean);
+  return parts.length === 2 ? `${parts[0]} and ${parts[1]}` : parts[0] || "";
+}
+
+// The commit hash a version names (a describe string's g<hash>, or a bare hash), else null.
+const commitOf = (v) => {
+  const m = /-g([0-9a-f]{4,40})(?:-dirty)?$/i.exec(v) || /^g?([0-9a-f]{7,40})$/i.exec(v);
+  return m ? m[1].toLowerCase() : null;
+};
+
+/** Whether two versions name the same commit by its hash, in any abbreviation. */
+function sameCommit(a, b) {
+  const x = commitOf(String(a));
+  const y = commitOf(String(b));
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+}
+
+/**
+ * The board TOML's tables (board_data's shape) for the reader's picks.
+ * For the card's session (link false) every setup stays, by index: with
+ * Katapult unticked none has a Katapult defconfig, and with None each
+ * setup's Katapult defconfig is its defconfig (a setup without one is
+ * blocked). For "Open in WebFlash" (link true) the tables make a TOML the
+ * loader takes and the site opens on the reader's setup: the setup the
+ * reader picked comes first with their choices (choices: Map of option
+ * symbol to value) in its defconfig, Katapult unticked takes only its
+ * Katapult away, and None keeps only the setups with Katapult.
+ */
+export function cardTables(config, picks, { link = false, choices = null } = {}) {
+  // A pinned version must be one of the versions the reader picks from, as the session keeps it;
+  // a commit the list names in another abbreviation keeps the list's spelling.
+  const pin = (t) => {
+    if (!Array.isArray(t.versions) || !t.version || t.version === "latest" || t.version === "release" ||
+        t.versions.includes(t.version)) return t;
+    const same = t.versions.find((w) => sameCommit(w, t.version));
+    return same ? { ...t, version: same } : { ...t, versions: [...t.versions, t.version] };
+  };
+  const f = config.firmware;
+  const k = config.katapult;
+  const at = Math.max(0, Math.min(picks.setupIndex || 0, config.setups.length - 1));
+  const none = picks.project === "none" && Boolean(k);
+  let setups = config.setups.map((s) => ({ ...s, methods: s.methods ? [...s.methods] : null }));
+  let options = config.options.map((o) => ({ ...o, labels: { ...o.labels }, setups: o.setups ? [...o.setups] : null }));
+  let firmware;
+  let katapult = null;
+  if (none) {
+    firmware = { project: "katapult", projects: ["katapult"], version: picks.katapultVersion || k.version, versions: k.versions };
+    setups = setups.map((s) => ({ ...s, defconfig: typeof s.katapult === "string" ? s.katapult : "", katapult: null }));
+  } else {
+    firmware = { ...f, project: picks.project || f.project, version: picks.version || f.version };
+    if (k && picks.katapult) katapult = { ...k, version: picks.katapultVersion || k.version };
+    else if (k && link) setups = setups.map((s, i) => (i === at ? { ...s, katapult: null } : s));
+    else setups = setups.map((s) => ({ ...s, katapult: null }));
+    if (k && link && !katapult && setups.some((s) => typeof s.katapult === "string")) {
+      katapult = { ...k, version: picks.katapultVersion || k.version };
+    }
+  }
+  if (link) {
+    const mine = setups[at];
+    const own = optionsFor(config, config.setups[at], picks).filter((o) => !offsetLocked(o, picks));
+    if (choices && choices.size) mine.defconfig = applyChoices(mine.defconfig, own, choices);
+    let order = [mine, ...setups.filter((s, i) => i !== at)];
+    if (none) order = order.filter((s, i) => i === 0 || typeof config.setups.find((c) => c.id === s.id).katapult === "string");
+    setups = order;
+    // [[option]] setups name only the setups kept; an option left with none
+    // goes, and so does the firmware's offset for Katapult alone.
+    const ids = new Set(setups.map((s) => s.id));
+    options = options.flatMap((o) => {
+      if (none && isOffsetOption(o)) return [];
+      if (!o.setups) return [o];
+      const kept = o.setups.filter((id) => ids.has(id));
+      return kept.length ? [{ ...o, setups: kept }] : [];
+    });
+  }
+  firmware = pin(firmware);
+  if (katapult) katapult = pin(katapult);
+  return {
+    board: config.board, firmware, katapult, setups, setups_form: config.setups_form,
+    options, flash: config.flash, prebuilt: null,
+  };
+}
+
 /**
  * The TOML "Open in WebFlash" carries: the page's own text while the reader
  * changed nothing (comments and all, as the fallback's link has it), else
- * one written from the tables with the reader's project, version and
- * defconfig.
+ * one written from cardTables with the reader's picks and choices, so the
+ * site opens what the reader picked.
  */
-export function linkToml(config, { changed = false, project = null, version = null, defconfig = null } = {}) {
+export function linkToml(config, { changed = false, picks = null, choices = null } = {}) {
   if (!config.firmware || (!changed && config.toml)) return config.toml;
-  return writeBoardToml({
-    board: config.board,
-    firmware: { ...config.firmware, project: project || config.firmware.project, version: version || config.firmware.version },
-    config: { defconfig: defconfig === null ? config.config.defconfig : defconfig },
-    options: config.options,
-    flash: config.flash,
-    prebuilt: null,
-  });
+  return writeBoardToml(cardTables(config, picks || initialPicks(config), { link: true, choices }));
 }
 
 // ── What the frame may do ────────────────────────────────────────────
@@ -332,19 +516,19 @@ export function frameNotice(perms, nav, href) {
   const serialBlocked = !perms.serial && Boolean(nav && nav.serial);
   if (!usbBlocked && !serialBlocked) return null;
   const own = `<a href="${escHtml(href)}" target="_blank" rel="noopener">open this card in a tab of its own</a>`;
-  const allow = `(The site can allow it with <code>allow="usb; serial"</code> on the embed.)`;
+  const allow = `(the site can allow it with <code>allow="usb; serial"</code> on the embed)`;
   const usable = (perms.usb && nav.usb) || (perms.serial && nav.serial);
   if (!usable) {
     const blocked = [usbBlocked ? "USB" : "", serialBlocked ? "serial ports" : ""].filter(Boolean).join(" or ");
-    return `<p>The page this card is embedded in does not let it use ${blocked}, so it cannot flash from here. ` +
-      `Build and download the files, or ${own}. ${allow}</p>`;
+    return `<p>The page this card is embedded in does not let it use ${blocked}, so it cannot flash from here: ` +
+      `download the files, or ${own} ${allow}.</p>`;
   }
   if (serialBlocked) {
-    return `<p>The page this card is embedded in does not let it use serial ports, so Katapult over a USB or UART serial port is not offered here; ` +
-      `the USB methods (DFU, PICOBOOT, Katapult through a CAN adapter) still work. For a serial port, ${own}. ${allow}</p>`;
+    return `<p>The page this card is embedded in does not let it use serial ports, so Katapult over a USB or UART serial port is not offered ` +
+      `(DFU, PICOBOOT and Katapult through a CAN adapter still work): for it, ${own} ${allow}.</p>`;
   }
-  return `<p>The page this card is embedded in does not let it use USB, so DFU, PICOBOOT and CAN adapters are not offered here; ` +
-    `Katapult over a serial port still works. For the others, ${own}. ${allow}</p>`;
+  return `<p>The page this card is embedded in does not let it use USB, so DFU, PICOBOOT and CAN adapters are not offered ` +
+    `(Katapult over a serial port still works): for those, ${own} ${allow}.</p>`;
 }
 
 // ── The firmware the flash panel gets ────────────────────────────────
@@ -366,9 +550,11 @@ const baseName = (path) => String(path).split(/[\\/]/).pop();
  * A build (artifacts.js's buildRecord) as the flash panel's firmware, the
  * way the site's flash-panel.js makes it: the .bin at its address (else the
  * .elf, the .uf2 or the .hex), the methods the .config allows narrowed by
- * the TOML's [flash] methods, every output as a download.
+ * the setup's methods (methods; default: the first setup's, else [flash]
+ * methods), every output as a download. A Katapult build beside the
+ * firmware goes through flash/pair.js's firmwareFromPair instead.
  */
-export function firmwareFromBuild(build, config) {
+export function firmwareFromBuild(build, config, { methods: setupMethods } = {}) {
   const outputs = build.outputs instanceof Map ? build.outputs : new Map(Object.entries(build.outputs || {}));
   const project = build.project || (config.firmware && config.firmware.project) || "klipper";
   const cfg = build.config || "";
@@ -384,7 +570,9 @@ export function firmwareFromBuild(build, config) {
   else if (uf2Name) image = parseFirmware(uf2Name, outputs.get(uf2Name), { source: "build" });
   else if (hexName) image = parseFirmware(hexName, outputs.get(hexName), { source: "build" });
   if (!image) return null;
-  const { methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), config.flash.methods);
+  const setup = (config.setups || [])[0];
+  const tomlMethods = setupMethods !== undefined ? setupMethods : setup && setup.methods ? setup.methods : config.flash.methods;
+  const { methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), tomlMethods);
   const artifacts = names.filter((n) => /\.(bin|uf2|elf|hex|dict)$/i.test(n) || n === ".config" || n === "defconfig")
     .map((n) => ({ name: n, bytes: outputs.get(n) }));
   return {

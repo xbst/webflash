@@ -9,12 +9,15 @@ The engine methods (sources, Kconfig, plan, build, method inference) run the
 build engine on a source snapshot extracted under ``/webflash/src``: the
 project's own kconfiglib, Makefiles and scripts, with the compiler commands
 handed to the page's toolchain workers through ``webflash_js.run_tool``.
-Progress goes through ``webflash_js.progress(phase, detail)``.
+They take a slot first ("fw" or "katapult"): the engine holds the firmware
+and Katapult side by side, and ``pair_*`` keeps the options they share in
+step. Progress goes through ``webflash_js.progress(phase, detail)``.
 """
 from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import io
 import json
 import shutil
@@ -76,11 +79,12 @@ def init(assets_origin: str = "") -> str:
 
 
 def theme_catalog() -> str:
-    """Bundled theme names and display names, default first."""
+    """Bundled theme names, display names and [behavior] values, default first."""
     themes = []
     for path in sorted(_BUNDLED_THEMES.glob("*.toml"), key=lambda p: p.stem.lower()):
         theme = load_theme(path.stem, _board_path())
-        themes.append({"name": path.stem, "display": theme.name or path.stem})
+        themes.append({"name": path.stem, "display": theme.name or path.stem,
+                       "behavior": dataclasses.asdict(theme.behavior)})
     themes.sort(key=lambda t: (t["name"] != "default", t["display"].lower()))
     return json.dumps(themes)
 
@@ -177,11 +181,21 @@ def render(toml_text: str, theme_name: str = "", inline_json: str = "") -> str:
 
 # ── Build engine ─────────────────────────────────────────────────────
 
-# The current snapshot: {"project", "sha", "describe", "ref", "tree"}.
-_sources: dict = {}
-_session = None
+# The engine holds up to two configurations at once, one per slot: "fw" (the
+# firmware: Klipper, Kalico, or Katapult when it is the only pick) and
+# "katapult" (Katapult beside a firmware). Each slot has its snapshot
+# ({"project", "sha", "describe", "ref", "tree"}), its Kconfig session (node
+# ids prefixed "<slot>:") and its last build.
+SLOTS = ("fw", "katapult")
+_slots: dict = {}
+_pair_cache: dict = {}
 _toolchain_manifest: dict | None = None
-_last_build = None
+
+
+def _slot(slot: str) -> dict:
+    if slot not in SLOTS:
+        raise ValueError(f"unknown slot {slot!r}: the engine's slots are {', '.join(SLOTS)}")
+    return _slots.setdefault(slot, {"sources": {}, "session": None, "last_build": None})
 
 
 def _progress(phase: str, detail: str = "", done=None, total=None) -> None:
@@ -225,10 +239,10 @@ def _run_tool_js():
     return getattr(webflash_js, "run_tool", None)
 
 
-def _tree() -> Path:
-    tree = _sources.get("tree")
+def _tree(slot: str) -> Path:
+    tree = _slot(slot)["sources"].get("tree")
     if not tree:
-        raise RuntimeError("no sources loaded: call load_sources first")
+        raise RuntimeError(f"no sources loaded in slot {slot!r}: call load_sources first")
     return Path(tree)
 
 
@@ -255,78 +269,186 @@ def _extract(data: bytes, into: Path) -> int:
     return count
 
 
-def load_sources(project: str, ref_json: str, core_bytes: bytes) -> str:
+def load_sources(slot: str, project: str, ref_json: str, core_bytes: bytes) -> str:
     """Extract a ref's core bundle into ``/webflash/src/<project>/<sha>/`` and
-    make it the current tree. ``ref_json`` is the ref's entry of the sources
-    index (``sha``, ``describe``, ``libs``, ...). Returns
-    ``{"tree", "project", "sha", "describe", "files"}``."""
-    global _session, _sources, _last_build
+    make it the slot's tree. ``ref_json`` is the ref's entry of the sources
+    index (``sha``, ``describe``, ``libs``, ...). Only this slot is replaced:
+    a tree path the other slot also holds is extracted over, keeping the lib
+    bundles it added. Returns ``{"slot", "tree", "project", "sha", "describe",
+    "files"}``."""
+    state = _slot(slot)
+    if slot == "katapult" and project != "katapult":
+        raise ValueError(f"the katapult slot holds Katapult, not {project}")
     ref = json.loads(ref_json) if ref_json else {}
     sha = str(ref.get("sha") or "local")
     tree = SRC / project / sha
     _progress("sources", f"extracting {project} {ref.get('id') or sha}")
-    if tree.exists():
+    shared = any(other is not state and other["sources"].get("tree") == str(tree) for other in _slots.values())
+    if tree.exists() and not shared:
         shutil.rmtree(tree)
-    tree.mkdir(parents=True)
+    tree.mkdir(parents=True, exist_ok=True)
     count = _extract(bytes(core_bytes), tree)
-    _sources = {"project": project, "sha": sha, "describe": str(ref.get("describe") or sha),
-                "ref": ref, "tree": str(tree)}
-    _session = None
-    _last_build = None
-    return json.dumps({"tree": str(tree), "project": project, "sha": sha,
-                       "describe": _sources["describe"], "files": count})
+    state["sources"] = {"project": project, "sha": sha, "describe": str(ref.get("describe") or sha),
+                        "ref": ref, "tree": str(tree)}
+    state["session"] = None
+    state["last_build"] = None
+    return json.dumps({"slot": slot, "tree": str(tree), "project": project, "sha": sha,
+                       "describe": state["sources"]["describe"], "files": count})
 
 
-def _get_session():
-    global _session
-    if _session is None:
+def drop_slot(slot: str) -> str:
+    """Forget a slot's sources, configuration and build (Katapult unticked).
+    The extracted tree stays on disk for a later load of the same ref."""
+    _slot(slot)
+    _slots.pop(slot, None)
+    return json.dumps({"slot": slot})
+
+
+def _get_session(slot: str):
+    state = _slot(slot)
+    if state["session"] is None:
         from webflash.engine.kconfig import Session
-        _session = Session(_tree(), _sources["project"], _sources["describe"])
-    return _session
+        sources = state["sources"]
+        state["session"] = Session(_tree(slot), sources["project"], sources["describe"], id_prefix=f"{slot}:")
+    return state["session"]
 
 
-def kconfig_load(config_text: str) -> str:
-    """Load the tree's Kconfig with a ``.config`` or a defconfig (new symbols
+def _pair():
+    """The pairing of the two slots, while both hold a configuration and the
+    firmware slot is not Katapult itself; None otherwise."""
+    fw, kat = _slots.get("fw"), _slots.get("katapult")
+    if not fw or not kat or not fw["sources"].get("tree") or not kat["sources"].get("tree"):
+        return None
+    if fw["sources"].get("project") == "katapult":
+        return None
+    fw_session, kat_session = _get_session("fw"), _get_session("katapult")
+    pair = _pair_cache.get("pair")
+    if pair is None or pair.fw is not fw_session or pair.katapult is not kat_session:
+        from webflash.engine.pair import Pair
+        pair = _pair_cache["pair"] = Pair(fw_session, kat_session)
+    return pair
+
+
+def _need_pair():
+    pair = _pair()
+    if pair is None:
+        raise ValueError("pairing needs a firmware in slot fw and Katapult in slot katapult")
+    return pair
+
+
+def _paired(pair, slot: str, notes: list, before: dict, link: dict) -> dict:
+    """What a paired call reports beside the slot's own answer: the notes,
+    the offset link, and the other slot's tree when it changed."""
+    other = pair.other(slot)
+    trees = {}
+    if pair.session(other).values() != before[other]:
+        trees[other] = pair.session(other).tree_json()
+    return {"notes": notes, "offset": link, "trees": trees}
+
+
+def kconfig_load(slot: str, config_text: str) -> str:
+    """Load the slot's Kconfig with a ``.config`` or a defconfig (new symbols
     take their defaults, as ``olddefconfig`` does); an empty text resets to
-    the defaults. Returns ``{"warnings": [...], "tree": <tree JSON>}``."""
-    session = _get_session()
+    the defaults. Returns ``{"warnings": [...], "missing", "tree": <tree
+    JSON>}``, and ``pair`` (see ``kconfig_set``) while the slots are paired:
+    a load applies the offset link, never copies the shared options
+    (``pair_sync`` does)."""
+    session = _get_session(slot)
     warnings = session.load(config_text if config_text else None)
-    return json.dumps({"warnings": warnings, "missing": session.missing, "tree": session.tree_json()})
+    out = {"warnings": warnings, "missing": session.missing}
+    pair = _pair()
+    if pair is not None:
+        before = {s: pair.session(s).values() for s in SLOTS}
+        out["pair"] = _paired(pair, slot, [], before, pair.link())
+    out["tree"] = session.tree_json()
+    return json.dumps(out)
 
 
-def kconfig_tree() -> str:
-    """The Kconfig tree as node JSON (SPEC 10): ``{"root", "nodes", "title"}``."""
-    return json.dumps(_get_session().tree_json())
+def kconfig_tree(slot: str) -> str:
+    """The slot's Kconfig tree as node JSON (SPEC 10): ``{"root", "nodes", "title"}``."""
+    return json.dumps(_get_session(slot).tree_json())
 
 
-def kconfig_set(name: str, value: str) -> str:
+def kconfig_set(slot: str, name: str, value: str) -> str:
     """Set a symbol (``y``/``n``, a number, text) or a choice (``name`` is its
-    node id, ``value`` the member symbol), returning the new tree."""
+    node id, ``value`` the member symbol) in a slot, returning the slot's new
+    tree. While the slots are paired, a shared option is set in both, the
+    firmware's bootloader offset follows Katapult's (setting it in ``fw`` is
+    refused), and the answer gains ``pair``: ``{"notes": [what the other
+    tree refused], "offset": <the link>, "trees": {other slot: its tree, when
+    it changed}}``."""
     from webflash.engine.kconfig import KconfigError
+    session = _get_session(slot)
+    pair = _pair()
+    if pair is not None and pair.is_locked(slot, name, value):
+        raise ValueError(f"{pair.title('fw')}'s bootloader offset follows Katapult's application offset: "
+                         "change it in Katapult.")
+    before = {s: pair.session(s).values() for s in SLOTS} if pair is not None else None
     try:
-        return json.dumps(_get_session().set(name, value))
+        session.assign(name, value)
     except KconfigError as e:
         raise ValueError(str(e)) from None
+    out = {}
+    if pair is not None:
+        notes = pair.mirror(slot, name, value)
+        notes += [n for n in pair.sync() if n not in notes]
+        out["pair"] = _paired(pair, slot, notes, before, pair.link())
+    return json.dumps({**session.tree_json(), **out})
 
 
-def kconfig_config() -> str:
-    """The full ``.config`` text."""
-    return _get_session().config_text()
+def kconfig_config(slot: str) -> str:
+    """The slot's full ``.config`` text."""
+    return _get_session(slot).config_text()
 
 
-def kconfig_defconfig() -> str:
-    """The minimal configuration, as ``make savedefconfig`` writes it."""
-    return _get_session().defconfig_text()
+def kconfig_defconfig(slot: str) -> str:
+    """The slot's minimal configuration, as ``make savedefconfig`` writes it."""
+    return _get_session(slot).defconfig_text()
 
 
-def kconfig_symbol(name: str) -> str:
+def kconfig_symbol(slot: str, name: str) -> str:
     """One symbol's node JSON, or ``null``."""
-    return json.dumps(_get_session().symbol(name))
+    return json.dumps(_get_session(slot).symbol(name))
 
 
-def kconfig_search(text: str) -> str:
-    """The ids of the nodes whose name, prompt or help mention the text."""
-    return json.dumps(_get_session().search(text))
+def kconfig_search(slot: str, text: str) -> str:
+    """The ids of the slot's nodes whose name, prompt or help mention the text."""
+    return json.dumps(_get_session(slot).search(text))
+
+
+# ── Pairing (engine/pair.py) ─────────────────────────────────────────
+
+def pair_shared() -> str:
+    """The options the firmware and Katapult share: ``[{"kind", "name",
+    "prompt", "type", "fw": node id, "katapult": node id, "members"}]``."""
+    return json.dumps(_need_pair().shared_json())
+
+
+def pair_sync(source: str = "fw") -> str:
+    """Copy one slot's shared values into the other (the firmware's into
+    Katapult by default; a ``.config`` loaded into Katapult wins over the
+    firmware's) and apply the offset link (after loading either slot).
+    Returns ``{"notes", "offset", "copied": [the other slot's options it
+    uses before and after whose value changed, by name], "trees": {"fw",
+    "katapult"}}``."""
+    if source not in SLOTS:
+        raise ValueError(f"pair_sync copies from fw or katapult, not {source!r}")
+    pair = _need_pair()
+    target = pair.other(source)
+    before = pair.shared_values(target)
+    notes = pair.sync(source)
+    after = pair.shared_values(target)
+    link = pair.link()
+    return json.dumps({"notes": notes, "offset": link,
+                       "copied": [name for name, value in before.items() if name in after and after[name] != value],
+                       "trees": {s: pair.session(s).tree_json() for s in SLOTS}})
+
+
+def pair_tree() -> str:
+    """Both slots' trees in one, grouped: the shared options (the firmware's
+    nodes), the firmware's own, Katapult's own (``engine/pair.py``'s
+    ``Pair.tree``)."""
+    return json.dumps(_need_pair().tree())
 
 
 def _lib_dirs(ev) -> list[str]:
@@ -359,8 +481,8 @@ def _lib_dirs(ev) -> list[str]:
     return names
 
 
-async def plan(config_text: str) -> str:
-    """Evaluate the Makefiles for a configuration and name the ``lib/``
+async def plan(slot: str, config_text: str) -> str:
+    """Evaluate the slot's Makefiles for a configuration and name the ``lib/``
     directories the build needs: ``{"dirs": [dirs-y], "libs": [lib/<dir>],
     "missing": [the ones not in the tree yet], "targets": [target-y]}``.
     A coroutine (the make interpreter is asynchronous and Pyodide's loop is
@@ -371,8 +493,8 @@ async def plan(config_text: str) -> str:
     from webflash.engine.make import Evaluator
     from webflash.engine.methods import unsupported_reason
     from webflash.engine.shell import Shell
-    tree = _tree()
-    session = _get_session()
+    tree = _tree(slot)
+    session = _get_session(slot)
     session.load(config_text if config_text else None)
     reason = unsupported_reason(session.values())
     if reason:
@@ -386,10 +508,10 @@ async def plan(config_text: str) -> str:
                        "targets": ev.expand("$(target-y)").split()})
 
 
-def add_lib(name: str, data: bytes) -> str:
-    """Extract one ``lib/<dir>`` bundle into the current tree. Returns
+def add_lib(slot: str, name: str, data: bytes) -> str:
+    """Extract one ``lib/<dir>`` bundle into the slot's tree. Returns
     ``{"name", "files"}``."""
-    tree = _tree()
+    tree = _tree(slot)
     rel = PurePosixPath(name.replace("\\", "/"))
     if rel.is_absolute() or ".." in rel.parts or len(rel.parts) != 2 or rel.parts[0] != "lib":
         raise ValueError(f"a lib bundle is named lib/<dir>, not {name!r}")
@@ -410,24 +532,26 @@ def set_toolchain(manifest_json: str) -> str:
     return json.dumps({"id": manifest.get("id"), "llvm": manifest.get("llvm")})
 
 
-async def build(config_text: str, version: str = "", jobs: int = 1) -> str:
-    """Build the firmware for a configuration with the page's toolchain
-    workers (``webflash_js.run_tool``). A coroutine: the worker awaits it.
-    Returns ``{"outputs": {name: size}, "memory", "log", "duration", "version",
-    "config", "defconfig", "project", "methods", "commands"}``; the output
-    files come from ``build_output(name)``."""
-    global _last_build
+async def build(slot: str, config_text: str, version: str = "", jobs: int = 1) -> str:
+    """Build the slot's firmware for a configuration with the page's
+    toolchain workers (``webflash_js.run_tool``). A coroutine: the worker
+    awaits it. Returns ``{"slot", "outputs": {name: size}, "memory", "log",
+    "duration", "version", "config", "defconfig", "project", "methods",
+    "commands"}``; the output files come from ``build_output(slot, name)``.
+    Afterwards the slot's Kconfig session holds the built ``.config``, which
+    pins every symbol: the page loads the defconfig again."""
     from webflash.engine.build import Build, BuildError
     from webflash.engine.methods import infer_methods as _infer
     from webflash.engine.toolchain import JsToolchain
-    tree = _tree()
+    state = _slot(slot)
+    tree = _tree(slot)
     run_tool = _run_tool_js()
     if run_tool is None:
         raise RuntimeError("no toolchain: the page has not registered webflash_js.run_tool")
     if _toolchain_manifest is None:
         raise RuntimeError("no toolchain manifest: call set_toolchain first")
     toolchain = JsToolchain(run_tool, _toolchain_manifest, jobs=max(1, int(jobs)))
-    version = version or _sources.get("describe") or "?"
+    version = version or state["sources"].get("describe") or "?"
     b = Build(tree, config_text, toolchain=toolchain, version=version, jobs=max(1, int(jobs)),
               log=lambda line: _progress("log", line), progress=_progress, cancelled=_cancelled)
     try:
@@ -435,13 +559,14 @@ async def build(config_text: str, version: str = "", jobs: int = 1) -> str:
     except BuildError as e:
         _progress("failed", str(e))
         raise RuntimeError(str(e)) from None
-    _last_build = result
-    session = _get_session()
+    state["last_build"] = result
+    session = _get_session(slot)
     session.load(result.config)
     values = session.values()
     methods = _infer(values, result.project)
     _progress("finished", "")
     return json.dumps({
+        "slot": slot,
         "outputs": {name: len(data) for name, data in result.outputs.items()},
         "memory": result.memory, "log": result.log, "duration": result.duration,
         "version": result.version, "config": result.config, "defconfig": result.defconfig,
@@ -464,24 +589,25 @@ def _address(values: dict, name: str):
         return None
 
 
-def build_output(name: str) -> bytes:
-    """One output file of the last build (``klipper.bin``, ``klipper.uf2``,
-    ``klipper.dict``, ``.config``, ...)."""
-    if _last_build is None:
-        raise RuntimeError("nothing built yet")
+def build_output(slot: str, name: str) -> bytes:
+    """One output file of the slot's last build (``klipper.bin``,
+    ``klipper.uf2``, ``klipper.dict``, ``.config``, ...)."""
+    last = _slot(slot)["last_build"]
+    if last is None:
+        raise RuntimeError(f"nothing built yet in slot {slot!r}")
     try:
-        return _last_build.outputs[name]
+        return last.outputs[name]
     except KeyError:
         raise ValueError(f"the last build has no output named {name!r} "
-                         f"(it has {', '.join(_last_build.outputs)})") from None
+                         f"(it has {', '.join(last.outputs)})") from None
 
 
-def infer_methods(config_text: str) -> str:
+def infer_methods(slot: str, config_text: str) -> str:
     """The flashing methods a configuration can use, best first (SPEC 11.2):
-    the text (a ``.config`` or a defconfig) is resolved through the tree's
+    the text (a ``.config`` or a defconfig) is resolved through the slot's
     Kconfig first. Returns a JSON list of ``{"id", "reason"}``, the shape of
     ``devices.js``'s ``inferMethods``."""
     from webflash.engine.methods import infer_methods as _infer
-    session = _get_session()
+    session = _get_session(slot)
     session.load(config_text if config_text else None)
-    return json.dumps(_infer(session.values(), _sources.get("project", "klipper")))
+    return json.dumps(_infer(session.values(), _slot(slot)["sources"].get("project", "klipper")))

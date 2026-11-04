@@ -614,7 +614,15 @@ export async function flashKatapult(link, image, { mcu = null, uuid = null, prim
   let sha1 = null;
   let wrote = false;
   try {
-    await flasher.sendImage(image, progress);
+    try {
+      await flasher.sendImage(image, progress);
+    } catch (e) {
+      // A write that broke off on a block leaves the board in Katapult (no
+      // COMPLETE), so say so; a refused address wrote nothing and a lost
+      // board is not there to retry.
+      if (!(e instanceof FlashError) || e.code === "address" || e.code === "disconnected" || e.code === "aborted") throw e;
+      throw new FlashError(`${e.message} The board is still in Katapult: connect again and click Flash.`, { code: e.code, fix: e.fix, cause: e, details: e.details });
+    }
     wrote = true;
     if (verify) sha1 = await flasher.verifyImage(progress);
   } finally {
