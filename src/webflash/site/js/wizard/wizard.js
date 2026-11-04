@@ -87,12 +87,23 @@ export class Wizard {
     return this.steps.findIndex((s) => s.id === id);
   }
 
-  /** Leave a step out (Configure and Build for a [prebuilt] board), or bring it back. */
+  /**
+   * Leave a step out (Configure and Build for a [prebuilt] board), or bring
+   * it back. The step shown, left out, gives way to the next one shown (else
+   * the one before), which takes over its history entry.
+   */
   setSkipped(id, skipped = true) {
     if (skipped === this.skipped.has(id)) return;
     if (skipped) this.skipped.add(id);
     else this.skipped.delete(id);
-    this.renderBar();
+    const to = skipped && id === this.current ? this.neighbor(id, 1) || this.neighbor(id, -1) : null;
+    if (!to) {
+      this.renderBar();
+      return;
+    }
+    if (this.history && this.history.replaceState) this.history.replaceState(this._stamp(this.history.state, to, this.n), "");
+    this.trail[this.n] = to;
+    this._show(to, id);
   }
 
   /** The step after (dir 1) or before (dir -1) one, skipping the skipped ones, or null. */
@@ -212,12 +223,22 @@ export class Wizard {
       return;
     }
     const n = Number.isInteger(state.webflashN) ? state.webflashN : 0;
+    const from = this.n;
     this.n = n;
     this.trail[n] = state.webflashStep;
     let id = state.webflashStep;
     // A step skipped since (a [prebuilt] TOML opened): the nearest one shown.
     if (this.indexOf(id) < 0) id = this.steps[0].id;
-    if (this.skipped.has(id)) id = this.neighbor(id, -1) || this.neighbor(id, 1) || this.current;
+    if (this.skipped.has(id)) {
+      id = this.neighbor(id, -1) || this.neighbor(id, 1) || this.current;
+      // Its entry would show the step shown already: go on past it, the way
+      // the browser was going (the first step, never skipped, ends a Back).
+      if (id === this.current && n !== from && this.history) {
+        if (n < from && this.history.back) this.history.back();
+        else if (n > from && this.history.forward) this.history.forward();
+        return;
+      }
+    }
     if (id !== this.current) this._show(id, this.current);
   }
 

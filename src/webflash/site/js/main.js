@@ -752,9 +752,11 @@ function setupKeys() {
 function setupWizard() {
   wizard = new Wizard({ box: $("wizard"), bar: $("wizard-steps") });
   // A [prebuilt] board TOML has nothing to configure or build.
+  // Build first: Configure, shown when an undo makes the board [prebuilt],
+  // then gives way to Flash rather than to Build.
   const skip = () => {
-    wizard.setSkipped("configure", !session.firmware);
     wizard.setSkipped("build", !session.firmware);
+    wizard.setSkipped("configure", !session.firmware);
   };
   session.on("change", ({ what }) => { if (what === "open" || what === "prebuilt" || what === "firmware") skip(); });
   skip();
