@@ -633,7 +633,9 @@ function setupFileIO() {
 
 // ?project= and ?version= preselect; #toml= (what a generated page's "Open
 // in WebFlash" sends) and ?config=<url> open a board TOML. hashOnly is a
-// later change of the hash, which only #toml= answers.
+// later change of the hash, which only #toml= answers. Returns true when a
+// TOML opened, false when the link named one that did not open (an error
+// dialog said why), and null when the address names none.
 async function openFromUrl({ hashOnly = false } = {}) {
   const params = new URLSearchParams(location.search);
   if (!hashOnly) {
@@ -649,9 +651,11 @@ async function openFromUrl({ hashOnly = false } = {}) {
 
   let text = null;
   let name = "board.toml";
+  let failed = false;
   try {
     text = tomlFromHash(location.hash);
   } catch (e) {
+    failed = true;
     showError("Could not open the board TOML in the link", `The #toml= part of the address is damaged: ${e.message}`);
   }
   const config = hashOnly ? null : params.get("config");
@@ -664,11 +668,12 @@ async function openFromUrl({ hashOnly = false } = {}) {
       name = decodeURIComponent(url.pathname.split("/").pop() || "") || name;
       if (!/\.toml$/i.test(name)) name = "board.toml";
     } catch (e) {
+      failed = true;
       showError("Could not load the board TOML",
                 `${config}: ${e.message}\n\nThe server it is on must allow the site to fetch it (CORS).`);
     }
   }
-  if (text === null) return false;
+  if (text === null) return failed ? false : null;
   return openToml(text, { name, files: new Map() });
 }
 
@@ -738,9 +743,11 @@ async function init() {
   });
   const opened = await openFromUrl();
   addEventListener("hashchange", () => openFromUrl({ hashOnly: true }));
-  if (!opened) {
+  if (opened !== true) {
+    // A link that did not open shows its error alone; About waits for a
+    // later visit rather than covering it.
     if (configurator.autoStart) startConfigure("start");
-    else maybeShowAboutOnFirstVisit();
+    else if (opened === null) maybeShowAboutOnFirstVisit();
   }
 }
 

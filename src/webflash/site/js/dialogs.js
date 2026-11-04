@@ -18,18 +18,25 @@ export function esc(s) {
                   .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// The open dialogs, the topmost last. Everything else on the page (the app
-// and any dialog under the top one) is inert, so Tab cannot reach it, until
-// the last dialog closes.
+// The open dialogs, the topmost last. Only the topmost answers Escape, and
+// everything else on the page (the app and any dialog under the top one) is
+// inert, so Tab cannot reach it, until the last dialog closes.
 const openModals = [];
 let inertNow = new Set();
 
 function updateInert() {
   const top = openModals[openModals.length - 1];
-  const want = new Set(top ? [...document.body.children].filter((el) => el !== top) : []);
+  const want = new Set(top ? [...document.body.children].filter((el) => el !== top.backdrop) : []);
   for (const el of inertNow) if (!want.has(el)) el.removeAttribute("inert");
   for (const el of want) el.setAttribute("inert", "");
   inertNow = want;
+}
+
+// One listener for every dialog, so one Escape closes one dialog.
+function onModalKey(e) {
+  if (e.key !== "Escape" || !openModals.length) return;
+  e.preventDefault();
+  openModals[openModals.length - 1].close();
 }
 
 /** A modal shell. Returns the body element plus a close function. */
@@ -49,19 +56,18 @@ export function openModal(title, { wide = false } = {}) {
     if (closed) return;
     closed = true;
     for (const fn of cleanups) { try { fn(); } catch (e) { /* keep closing */ } }
-    document.removeEventListener("keydown", onKey);
-    const i = openModals.indexOf(backdrop);
+    const i = openModals.findIndex((m) => m.backdrop === backdrop);
     if (i >= 0) openModals.splice(i, 1);
+    if (!openModals.length) document.removeEventListener("keydown", onModalKey);
     backdrop.remove();
     updateInert();
     if (opener && opener.isConnected && typeof opener.focus === "function") opener.focus();
   };
-  const onKey = (e) => { if (e.key === "Escape") close(); };
 
   backdrop.querySelector(".modal-close").addEventListener("click", close);
   backdrop.addEventListener("mousedown", (e) => { if (e.target === backdrop) close(); });
-  document.addEventListener("keydown", onKey);
-  openModals.push(backdrop);
+  if (!openModals.length) document.addEventListener("keydown", onModalKey);
+  openModals.push({ backdrop, close });
   document.body.appendChild(backdrop);
   updateInert();
   backdrop.querySelector(".modal-close").focus();
