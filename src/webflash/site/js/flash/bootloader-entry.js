@@ -6,7 +6,8 @@
 // is raised and dropped, and the port closed. The board then re-enumerates
 // as Katapult, as the STM32 DFU device or as an RP2 BOOTSEL device,
 // according to its build. A Katapult-in-UART-mode board gets the serial
-// request string instead (serial_irq.c), and a CAN node the admin reboot
+// request string instead (serial_irq.c), at the firmware's baud on the
+// USB-UART adapter's port, where Katapult then answers; a CAN node the admin reboot
 // command (katapult.js). Without any of these, the TOML's instructions or
 // the per-MCU defaults tell the user which buttons to press.
 //
@@ -156,4 +157,19 @@ export async function enterFromKlipperUsb(method, { nav = typeof navigator !== "
   if (log) log(`Waiting for ${expect.label} to appear`);
   const device = await waitForDevice({ kind: expect.kind, filters: expect.filters, timeoutMs, nav, onTick, ignore: [link] });
   return { device, expect };
+}
+
+/**
+ * The Klipper-over-UART entry: pick the USB-UART adapter's port (any port:
+ * an adapter has no id of its own), send Klipper's serial bootloader request
+ * at the firmware's baud, and hand back the same port, where Katapult
+ * answers once the board has restarted. No touch: the adapter carries no
+ * line coding to the board.
+ */
+export async function enterFromKlipperSerial({ nav = typeof navigator !== "undefined" ? navigator : null, log = null, baud = 250000, port = null, settleMs = 1000 } = {}) {
+  if (!hasWebSerial(nav)) fail("no-api", "This browser has no Web Serial, so it cannot ask Klipper to restart into its bootloader. Put the board in Katapult by hand.");
+  const link = port || await requestSerialPort(SERIAL_FILTERS.any, { nav });
+  if (log) log(`Asking Klipper on ${link.describe()} to restart into Katapult`);
+  await requestSerialBootloader(link, baud, { log, settleMs });
+  return { device: link };
 }

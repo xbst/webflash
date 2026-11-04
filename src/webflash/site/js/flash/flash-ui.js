@@ -10,7 +10,7 @@ import { FlashError, explainError, isCancel, capabilities } from "./errors.js";
 import { describe as describeImage, hex8, formatSize, extractKlipperDict, fromBin, parseAddress } from "./firmware-file.js";
 import { METHODS, familyFromMcu } from "./devices.js";
 import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable, probeConnection } from "./flash.js";
-import { enterFromKlipperUsb, manualInstructions, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
+import { enterFromKlipperUsb, enterFromKlipperSerial, manualInstructions, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
 import { uf2Download } from "./uf2.js";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -163,6 +163,16 @@ export function createFlashPanel(root, options = {}) {
     return fw.family || familyFromMcu(fw.mcu) || imageChip;
   }
 
+  // A firmware that talks over a UART: Katapult is reached through a
+  // USB-UART adapter, at the firmware's baud.
+  function overUart() {
+    return Boolean(state.firmware && state.firmware.iface === "serial");
+  }
+
+  function baud() {
+    return (state.firmware && state.firmware.baud) || 250000;
+  }
+
   function button(label, handler, { primary = false, title = "", id = null } = {}) {
     return el("button", { class: primary ? "primary" : "", title, id, onclick: (e) => { e.preventDefault(); handler().catch(showFailure); } }, [label]);
   }
@@ -242,7 +252,7 @@ export function createFlashPanel(root, options = {}) {
       renderDownloads(actions, fw);
       return;
     }
-    instructions.innerHTML = renderInline(manualInstructions(method, fam, fw.instructions, { fromKlipper: caps.serial }));
+    instructions.innerHTML = renderInline(manualInstructions(method, fam, fw.instructions, { fromKlipper: caps.serial, serial: overUart(), baud: baud() }));
     const needs = METHODS[method] && METHODS[method].needs;
     if (needs) instructions.appendChild(el("p", { class: "flash-needs", text: needs }));
 
@@ -251,7 +261,12 @@ export function createFlashPanel(root, options = {}) {
       return;
     }
     const transport = transportOf(method);
-    if (transport === "serial") {
+    if (transport === "serial" && overUart()) {
+      // The adapter's port has no Katapult id, so every port is listed; the
+      // restart is Klipper's serial bootloader request, not the USB touch.
+      actions.appendChild(button("Connect", () => connectAndConfirm("any"), { primary: true, title: "Pick the USB-UART adapter's port in the browser's device list", id: "flash-connect" }));
+      actions.appendChild(button("Restart Klipper into Katapult", () => enterFromKlipper(), { title: `Pick the USB-UART adapter's port; WebFlash sends Klipper's serial bootloader request at ${baud()} baud`, id: "flash-from-klipper" }));
+    } else if (transport === "serial") {
       actions.appendChild(button("Connect", () => connectAndConfirm("katapult"), { primary: true, title: "Pick the Katapult port in the browser's device list", id: "flash-connect" }));
       actions.appendChild(button("Any serial port", () => connectAndConfirm("any"), { title: "For a USB-UART adapter wired to a board in Katapult's UART mode" }));
       actions.appendChild(button("Restart Klipper into Katapult", () => enterFromKlipper(), { title: "Pick the Klipper port; WebFlash asks it to restart into its bootloader", id: "flash-from-klipper" }));
@@ -400,6 +415,24 @@ export function createFlashPanel(root, options = {}) {
     state.phase = "connecting";
     renderAll();
     const method = state.method;
+    if (method === "katapult" && overUart()) {
+      // Katapult answers on the adapter's port once the board has restarted,
+      // so that port is the connection: nothing re-enumerates.
+      let link;
+      try {
+        setStatus("Asking Klipper to restart into Katapult");
+        ({ device: link } = await enterFromKlipperSerial({ nav: opts.nav || undefined, log, baud: baud() }));
+      } catch (e) {
+        state.phase = "ready";
+        progressWrap.hidden = true;
+        if (!applyPending()) renderAll();
+        if (isCancel(e)) { log("No serial port was picked."); return; }
+        throw e;
+      }
+      progressWrap.hidden = true;
+      await adoptConnection(connectionFor(method, link));
+      return;
+    }
     let outcome;
     try {
       outcome = await enterFromKlipperUsb(method, {

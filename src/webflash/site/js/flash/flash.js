@@ -191,6 +191,7 @@ async function flashOverSerial(image, options, { log, progress, status }) {
   const link = options.connection.device;
   const baud = options.baud || 250000;
   status(`Opening ${link.describe()} at ${baud} baud`);
+  log(`Opening ${link.describe()} at ${baud} baud`);
   await link.open({ baudRate: baud });
   try {
     const prime = options.prime === null || options.prime === undefined ? shouldPrime(options.mcu) : options.prime;

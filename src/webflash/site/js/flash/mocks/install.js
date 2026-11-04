@@ -8,6 +8,10 @@
 //   ?mock=picoboot   an RP2040 BOOTSEL device
 //   ?mock=can        a candleLight adapter with one Katapult and one Klipper node
 //   ?mock=uf2        a BOOTSEL drive
+//   ?mock=uart       a USB-UART adapter wired to a board running Klipper in UART mode, which the serial
+//                    bootloader request restarts into Katapult on the same port; &baud=<n> is the board's
+//                    baud (default 250000), &boot=katapult starts it in Katapult, &fail=baud uploads a
+//                    file that says 250000 to a board built for 115200
 //   &fail=claim|hang|verify|mcu|rdp|timeout|cancel|busy   one failure to show its explanation (hang: open() never settles, as Chrome on Windows without a WinUSB driver)
 //   &fail=vanish|unplug   for ?mock=uf2: the drive goes away with the last block (a successful flash) or after 64 KiB (a cable pulled)
 //   &os=windows|linux|mac|android  &browser=firefox|safari|brave   pretend to be elsewhere
@@ -23,11 +27,28 @@ import { PicobootMockDevice } from "./picoboot-device.js";
 import { GsUsbMockAdapter, KatapultCanNode, KlipperCanNode } from "./gsusb-adapter.js";
 import { bootselDrive } from "./mock-fs.js";
 import { klipperCdcPort } from "./klipper-cdc.js";
+import { klipperUartPort } from "./klipper-uart.js";
 import { toUf2, fromBin } from "../firmware-file.js";
 
 function sampleBin(size, seed = 17) {
   const data = new Uint8Array(size);
   for (let i = 0; i < size; i++) data[i] = (i * seed + 1) & 0xff;
+  return data;
+}
+
+/**
+ * A sample image that carries a Klipper dictionary (zlib-compressed JSON,
+ * as Klipper links it in), so an upload of it reads its MCU, interface and
+ * baud the way it does from a real klipper.bin.
+ */
+export async function sampleWithDict(size, dict) {
+  const json = new TextEncoder().encode(JSON.stringify(dict));
+  const zlib = new Uint8Array(await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+  const data = sampleBin(Math.max(size, zlib.length + 16));
+  const at = data.length - zlib.length - 16;
+  // No zlib header byte in the filler, so the search meets the dictionary first.
+  for (let i = 0; i < at; i++) if (data[i] === 0x78) data[i] = 0x77;
+  data.set(zlib, at);
   return data;
 }
 
@@ -75,6 +96,13 @@ export async function installMocks(params) {
     firmware = { name: "klipper.uf2", bytes: toUf2(fromBin(sampleBin(fail === "unplug" ? 100000 : 9000), 0x10000000), "rp2040") };
     const vanishAfterBytes = fail === "vanish" ? firmware.bytes.length - 256 : fail === "unplug" ? 65536 + 4096 : null;
     drive = bootselDrive({ chip: params.get("chip") === "rp2350" ? "rp2350" : "rp2040", vanishAfterBytes });
+  } else if (kind === "uart") {
+    const given = parseInt(params.get("baud") || "", 10);
+    const baud = fail === "baud" ? 115200 : Number.isInteger(given) && given > 0 ? given : 250000;
+    const board = klipperUartPort({ baud, inKatapult: params.get("boot") === "katapult", katapultOptions: { mcu: fail === "mcu" ? "stm32f072xb" : "stm32g0b1xx", corruptReadAt: fail === "verify" ? 0x2000 + 100 : null } });
+    for (let i = 0; i < 20; i++) serial.willPick(() => (fail === "cancel" ? null : board.port));
+    const dict = { app: "Klipper", version: "v0.13.0-mock", config: { MCU: "stm32g0b1xx", CLOCK_FREQ: 64000000, RESERVE_PINS_serial: "PA10,PA9", SERIAL_BAUD: fail === "baud" ? 250000 : baud } };
+    firmware = { name: "klipper.bin", bytes: await sampleWithDict(3000, dict), address: 0x08002000 };
   }
 
   const win = {
@@ -99,6 +127,6 @@ export async function installMocks(params) {
   if (kind === "uf2" && browser !== "firefox" && browser !== "safari" && browser !== "brave") win.showDirectoryPicker = win.showDirectoryPicker || (async () => drive);
   if (browser === "firefox" || browser === "safari" || browser === "brave") win.showDirectoryPicker = undefined;
   console.info(`WebFlash mock mode: ${kind}${fail ? ` (fail=${fail})` : ""}`);
-  const method = { katapult: "katapult", dfu: "dfu", picoboot: "picoboot", can: "katapult-can", uf2: "uf2" }[kind] || null;
+  const method = { katapult: "katapult", dfu: "dfu", picoboot: "picoboot", can: "katapult-can", uf2: "uf2", uart: "katapult" }[kind] || null;
   return { nav, win, firmware, usb, serial, drive, method };
 }

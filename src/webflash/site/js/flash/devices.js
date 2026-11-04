@@ -229,6 +229,9 @@ export function configFromImage(image) {
   else if (iface.kind === "serial") lines.push("CONFIG_SERIAL=y");
   else if (iface.kind === "usb") lines.push("CONFIG_USBSERIAL=y");
   if (iface.bitrate) lines.push(`CONFIG_CANBUS_FREQUENCY=${iface.bitrate}`);
+  // serial_irq.c exports the UART's baud, which Katapult in UART mode is built for too.
+  const baud = d.SERIAL_BAUD !== undefined ? parseInt(d.SERIAL_BAUD, 10) : NaN;
+  if (Number.isInteger(baud) && baud > 0) lines.push(`CONFIG_SERIAL_BAUD=${baud}`);
   if (Number.isInteger(image.start)) {
     // An RP2040 image at the flash base carries the 256-byte stage-2 boot block; Klipper's application starts after it.
     const app = family === "rp2040" && image.start === 0x10000000 ? 0x10000100 : image.start;
@@ -274,6 +277,18 @@ export function interfaceOf(cfg) {
   }
   const family = familyOf(map);
   return family === "stm32" || family === "rp2040" || family === "rp2350" || family === "lpc176x" ? "usb" : null;
+}
+
+/**
+ * The UART's baud rate: CONFIG_SERIAL_BAUD, else Klipper's and Katapult's
+ * default, 250000 (the symbol only shows under the low-level options, so a
+ * defconfig often leaves it out). Katapult in UART mode talks at the baud
+ * it was built with, which is normally Klipper's: flashtool.py takes one
+ * baud for both.
+ */
+export function serialBaud(cfg) {
+  const n = configInt(cfg, "SERIAL_BAUD", null);
+  return Number.isInteger(n) && n > 0 ? n : 250000;
 }
 
 /** Default flash start by family (CONFIG_FLASH_BOOT_ADDRESS when the config lacks it). */
@@ -581,10 +596,18 @@ export function configFitsImage(cfg, image) {
 
 // ── Instructions and hints ──────────────────────────────────────────
 
-/** The connect step's text for a method when the board TOML gives none. */
-export function defaultInstructions(method, family = null, { fromKlipper = true } = {}) {
+/**
+ * The connect step's text for a method when the board TOML gives none.
+ * serial: the firmware talks over a UART (a USB-UART adapter), at baud.
+ */
+export function defaultInstructions(method, family = null, { fromKlipper = true, serial = false, baud = 250000 } = {}) {
   switch (method) {
     case "katapult":
+      if (serial) {
+        return `The board talks serial at ${baud || 250000} baud through a USB-UART adapter, and Katapult in UART mode is built for the same baud. ` +
+          (fromKlipper ? "If Klipper is running on the board, click Restart Klipper into Katapult and pick the adapter's port: WebFlash sends Klipper's serial bootloader request over it, and Katapult then answers on the same port. " : "") +
+          "Otherwise put the board in Katapult yourself: double-tap RESET (or hold the boot button while resetting, on boards built that way), then click Connect and pick the adapter's port.";
+      }
       return (fromKlipper ? "If Klipper is running on the board, WebFlash asks it to restart into Katapult (pick the Klipper port when asked). " : "") +
         "Otherwise put the board in Katapult yourself: double-tap RESET (or hold the boot button while resetting, on boards built that way), then click Connect and pick the Katapult port. For a board on a USB-UART adapter pick the adapter's port.";
     case "katapult-can":

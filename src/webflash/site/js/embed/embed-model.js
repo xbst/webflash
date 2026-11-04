@@ -7,7 +7,7 @@
 // /engine/v1/, where these imports resolve.
 
 import { writeBoardToml } from "./toml-io.js";
-import { applyTomlMethods, configFromImage, familyOf, imageAddressFor, inferMethods, interfaceOf, mcuOf, methodsForPrebuilt, parseConfig } from "./flash/devices.js";
+import { applyTomlMethods, configFromImage, familyOf, imageAddressFor, inferMethods, interfaceOf, mcuOf, methodsForPrebuilt, parseConfig, serialBaud } from "./flash/devices.js";
 import { parseFirmware } from "./flash/firmware-file.js";
 
 /** The configuration schema this runtime reads (renderer.CONFIG_SCHEMA). */
@@ -355,6 +355,11 @@ function canBitrate(cfg) {
   return Number.isInteger(n) && n > 0 ? n : 1000000;
 }
 
+/** The UART's baud for a configuration that talks serial, else undefined, as flash-panel.js gives it. */
+function uartBaud(cfg) {
+  return cfg && interfaceOf(cfg) === "serial" ? serialBaud(cfg) : undefined;
+}
+
 const baseName = (path) => String(path).split(/[\\/]/).pop();
 
 /**
@@ -385,7 +390,7 @@ export function firmwareFromBuild(build, config) {
   return {
     image, methods, warnings, instructions: config.flash.instructions, mcu: build.mcu || mcuOf(cfg), project,
     family: familyOf(cfg), iface: interfaceOf(cfg), artifacts, source: "build", version: build.version || null,
-    label: `${project} ${build.version || ""}`.trim(), bitrate: canBitrate(cfg),
+    label: `${project} ${build.version || ""}`.trim(), bitrate: canBitrate(cfg), baud: uartBaud(cfg),
   };
 }
 
@@ -403,5 +408,6 @@ export function firmwareFromPrebuilt(config, image, bytes) {
     image, methods, warnings, instructions: config.flash.instructions, mcu: pre.mcu || image.mcu || null, project: "klipper",
     family: dictCfg ? familyOf(dictCfg) : null, iface: dictCfg ? interfaceOf(dictCfg) : null,
     artifacts: [{ name: baseName(pre.file), bytes }], source: "prebuilt", version: image.version || null, label: baseName(pre.file),
+    baud: uartBaud(dictCfg),
   };
 }

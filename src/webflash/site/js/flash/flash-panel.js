@@ -14,7 +14,7 @@
 
 import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin, sniffFormat, looksLikeText } from "./firmware-file.js";
-import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict } from "./devices.js";
+import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict, serialBaud } from "./devices.js";
 import { explainError, FlashError } from "./errors.js";
 
 /**
@@ -89,7 +89,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       .map((n) => ({ name: n, bytes: outputs.get(n) }));
     return {
       image, methods, warnings, instructions: tomlFlash().instructions, mcu, project, family: familyOf(cfg), iface: interfaceOf(cfg), artifacts,
-      source: "build", version: b.version || null, label: `${project} ${b.version || ""}`.trim(), bitrate: canBitrate(cfg),
+      source: "build", version: b.version || null, label: `${project} ${b.version || ""}`.trim(), bitrate: canBitrate(cfg), baud: uartBaud(cfg),
     };
   }
 
@@ -110,6 +110,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return {
       image, methods, warnings, instructions: tomlFlash().instructions, mcu: pre.mcu || image.mcu || null, project: "klipper",
       family: null, iface: interfaceOfImage(image), artifacts: [{ name: pre.file.split(/[\\/]/).pop(), bytes }], source: "prebuilt", version: image.version, label: pre.file,
+      baud: uartBaud(configFromImage(image)),
     };
   }
 
@@ -167,7 +168,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
       image: u.image, methods, warnings, instructions: tomlFlash().instructions, mcu, project,
       family: dictCfg ? familyOf(dictCfg) : cfg && fits ? familyOf(cfg) : fileFamily, iface: dictCfg ? interfaceOf(dictCfg) : cfg && fits ? interfaceOf(cfg) : null,
       artifacts: [{ name: u.name, bytes: u.bytes }], source: "upload", version: u.image.version,
-      label: u.name, bitrate: canBitrate(dictCfg || cfg), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
+      label: u.name, bitrate: canBitrate(dictCfg || cfg), baud: uartBaud(dictCfg || (cfg && fits ? cfg : null)), preferredMethod: u.preferredMethod || null, onClear: () => { state.uploaded = null; refresh(); },
     };
   }
 
@@ -183,6 +184,11 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const v = cfg ? configValue(cfg, "CANBUS_FREQUENCY") : null;
     const n = v ? parseInt(v, 10) : NaN;
     return Number.isInteger(n) && n > 0 ? n : 1000000;
+  }
+
+  /** The UART's baud for a configuration that talks serial, else undefined (nothing else opens at a baud). */
+  function uartBaud(cfg) {
+    return cfg && interfaceOf(cfg) === "serial" ? serialBaud(cfg) : undefined;
   }
 
   // What the panel was last given: the object the firmware came from (the
