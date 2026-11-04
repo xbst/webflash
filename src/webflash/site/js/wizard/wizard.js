@@ -4,8 +4,9 @@
 // Each step is a <section data-step="<id>"> inside the box, holding its own
 // .wiz-body and .wiz-foot; only the current one is shown. The step bar is
 // drawn from the steps list: the current step, the steps before it as links
-// back, the ones after as plain text, and skipped steps (Configure and Build
-// for a [prebuilt] board) left out. Moving to a step pushes a history entry
+// back, the ones after as plain text (a step marked free, Embed, is a link
+// from anywhere), and skipped steps (Configure and Build for a [prebuilt]
+// board) left out. Moving to a step pushes a history entry
 // whose state names it ({webflashStep, webflashN}) without changing the URL,
 // so the browser's Back and Forward move between steps and #toml= and
 // ?config= keep working.
@@ -22,7 +23,8 @@ export const STEPS = [
   { id: "configure", label: "Configure", wide: true },
   { id: "build", label: "Build" },
   { id: "flash", label: "Flash" },
-  { id: "embed", label: "Embed", wide: true },
+  // Embed needs no build: the bar links to it from every step.
+  { id: "embed", label: "Embed", wide: true, free: true },
 ];
 
 export class Wizard {
@@ -229,11 +231,11 @@ export class Wizard {
       const li = doc.createElement("li");
       li.className = i === here ? "now" : i < here ? "done" : "";
       li.dataset.for = step.id;
-      if (i < here) {
+      if (i < here || (step.free && i !== here)) {
         const b = doc.createElement("button");
         b.setAttribute("type", "button");
         b.textContent = step.label;
-        b.title = `Back to ${step.label}`;
+        b.title = i < here ? `Back to ${step.label}` : `Go to ${step.label}`;
         b.addEventListener("click", () => this.go(step.id));
         li.append(b);
       } else {
