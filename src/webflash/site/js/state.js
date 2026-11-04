@@ -550,7 +550,8 @@ export class Session {
   /**
    * Tick or untick Katapult beside the firmware, or change its version: {on,
    * version} (one undo step). Ticking it adds [katapult] (version "latest"
-   * unless named) and an empty Katapult defconfig to the configured setup
+   * unless named; a [katapult] another setup uses stays as it is) and an
+   * empty Katapult defconfig to the configured setup
    * (the configure code loads it with the firmware's chip); unticking takes
    * the configured setup's Katapult defconfig away, and [katapult] with it
    * once no setup has one (the loader refuses one without the other).
@@ -574,7 +575,6 @@ export class Session {
     } else if (!mine) {
       if (undoable) this.checkpoint();
       this._t.katapult = k ? { ...k } : { version: version || "latest", versions: "all", default: true };
-      if (k && version && version !== k.version) this._t.katapult.version = version;
       this._t.setups = this._t.setups.map((s, i) => (i === at && s.katapult === null ? { ...s, katapult: "" } : s));
       this._katapultEngine = freshKatapultEngine();
     } else {
