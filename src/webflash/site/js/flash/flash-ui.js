@@ -478,7 +478,8 @@ export function createFlashPanel(root, options = {}) {
       parts.push(`<p><strong>Flashed and verified.</strong> ${esc(r.deviceText || "")}${r.restarted ? " The board has restarted into the new firmware." : ""}</p>`);
     }
     if (r.hint) {
-      parts.push(`<p class="flash-muted">For printer.cfg (best effort; the serial name appears once Klipper runs):</p><pre class="flash-hint">${esc(r.hint)}</pre>`);
+      // What the hint does not know, it says in a # line of its own.
+      parts.push(`<p class="flash-muted">For printer.cfg:</p><pre class="flash-hint">${esc(r.hint)}</pre>`);
     }
     result.innerHTML = parts.join("");
     if (r.hint) result.appendChild(el("button", { class: "mini", onclick: (e) => { e.preventDefault(); copyText(r.hint); } }, ["Copy"]));
