@@ -21,7 +21,7 @@ import { ConfigTab, copyText } from "./configure/config-tab.js";
 import { OptionsPanel } from "./configure/options-panel.js";
 import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
-import { BuildPanel } from "./build/build-panel.js";
+import { BuildPanel, planErrorLine } from "./build/build-panel.js";
 
 const session = new Session();
 const configurator = new Configurator(session);
@@ -397,7 +397,7 @@ function setupPlan() {
     el.hidden = false;
     el.classList.toggle("warn", Boolean(p.error || (p.unavailable && p.unavailable.length)));
     if (p.error) {
-      el.textContent = `Could not work out what the build needs: ${p.error}`;
+      el.textContent = planErrorLine(p.error);
       return;
     }
     const missing = p.unavailable && p.unavailable.length

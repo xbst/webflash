@@ -58,6 +58,17 @@ export function splitFailure(message) {
   return { command: m[1].trim(), code: Number(m[2]), output: (m[3] || "").trim() };
 }
 
+/**
+ * The Build card's note for a plan that failed (main.js's #build-plan line).
+ * The bridge's refusal of an architecture WebFlash does not build (the twin
+ * of devices.js's unsupportedReason) is a whole sentence already; any other
+ * error says what could not be worked out.
+ */
+export function planErrorLine(error) {
+  const text = String(error || "");
+  return text.includes("cannot be built in WebFlash") ? text : `Could not work out what the build needs: ${text}`;
+}
+
 function seconds(ms) {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
 }
