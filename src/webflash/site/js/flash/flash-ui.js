@@ -87,6 +87,12 @@ export function progressText(phase, done, total, unit = "bytes") {
   return `${label}: ${pct}% (${counts})`;
 }
 
+/** A typed canbus_uuid as 12 lowercase hex digits (spaces, colons and dashes dropped), or null. */
+export function parseCanUuid(text) {
+  const clean = String(text || "").replace(/[\s:-]/g, "").toLowerCase();
+  return /^[0-9a-f]{12}$/.test(clean) ? clean : null;
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -619,21 +625,43 @@ export function createFlashPanel(root, options = {}) {
     prompt.appendChild(row);
   }
 
-  /** The CAN node choice: a list with radio buttons; resolves with the UUID or null. */
+  /**
+   * The CAN node choice: a list with radio buttons, and under it a folded
+   * canbus_uuid field for a node that does not answer the query (Klipper
+   * under a host); resolves with the UUID or null.
+   */
   function pickNode(nodes) {
     return new Promise((resolve) => {
       prompt.hidden = false;
       prompt.innerHTML = "";
-      prompt.appendChild(el("p", { text: `${nodes.length} node${nodes.length === 1 ? "" : "s"} answered on the bus; pick the one to flash:` }));
+      prompt.appendChild(el("p", { text: nodes.length ? `${nodes.length} node${nodes.length === 1 ? "" : "s"} answered on the bus; pick the one to flash:` : "No node answered on the bus." }));
       const list = el("div", { class: "flash-nodes" });
       nodes.forEach((n, i) => {
         const input = el("input", { type: "radio", name: "flash-node", value: n.uuidHex, id: `flash-node-${i}` });
         if (i === 0) input.checked = true;
         list.appendChild(el("label", { class: "flash-node" }, [input, ` ${n.uuidHex} `, el("span", { class: "flash-muted", text: `(${n.app}${n.app === "Klipper" ? ", will be restarted into Katapult" : ""})` })]));
       });
-      prompt.appendChild(list);
+      if (nodes.length) prompt.appendChild(list);
+      const field = el("input", { type: "text", id: "flash-node-uuid", placeholder: "aabbccddeeff", spellcheck: "false", autocomplete: "off" });
+      const wrong = el("p", { class: "flash-muted flash-node-uuid-error", text: "" });
+      wrong.hidden = true;
+      const useTyped = () => {
+        const uuid = parseCanUuid(field.value);
+        if (!uuid) { field.classList.add("bad"); wrong.textContent = "A canbus_uuid is 12 hex digits, like aabbccddeeff."; wrong.hidden = false; return; }
+        prompt.hidden = true;
+        resolve(uuid);
+      };
+      field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useTyped(); } });
+      const fold = el("details", { class: "flash-node-uuid" }, [
+        el("summary", { text: "Node not listed? Enter its canbus_uuid" }),
+        el("p", { class: "flash-muted", text: "Klipper under a host does not answer the query, but it restarts into Katapult when asked by its UUID." }),
+        el("div", { class: "flash-actions" }, [field, el("button", { onclick: (e) => { e.preventDefault(); useTyped(); } }, ["Use this UUID"])]),
+        wrong,
+      ]);
+      fold.open = !nodes.length;
+      prompt.appendChild(fold);
       const row = el("div", { class: "flash-actions" });
-      row.appendChild(el("button", { class: "primary", onclick: (e) => { e.preventDefault(); const chosen = prompt.querySelector("input[name=flash-node]:checked"); prompt.hidden = true; resolve(chosen ? chosen.value : null); } }, ["Use this node"]));
+      if (nodes.length) row.appendChild(el("button", { class: "primary", onclick: (e) => { e.preventDefault(); const chosen = prompt.querySelector("input[name=flash-node]:checked"); prompt.hidden = true; resolve(chosen ? chosen.value : null); } }, ["Use this node"]));
       row.appendChild(el("button", { onclick: (e) => { e.preventDefault(); prompt.hidden = true; resolve(null); } }, ["Cancel"]));
       prompt.appendChild(row);
     });

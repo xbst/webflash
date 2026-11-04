@@ -310,6 +310,8 @@
 .wf-app .flash-table td:first-child { color: var(--text-muted); white-space: nowrap; }
 .wf-app .flash-nodes { display: flex; flex-direction: column; gap: .3em; margin: .3em 0 .5em; }
 .wf-app .flash-node { display: flex; align-items: center; gap: .4em; font-family: var(--mono-font); font-size: .9em; cursor: pointer; }
+.wf-app .flash-node-uuid { margin: 0 0 .45em; }
+.wf-app .flash-node-uuid > summary { color: var(--text-muted); cursor: pointer; margin-bottom: .35em; }
 .wf-app .flash-progress-wrap { display: flex; flex-direction: column; gap: .3em; }
 .wf-app .flash-phase { font-size: .88em; color: var(--text-muted); }
 .wf-app .flash-result.ok { border-color: var(--ok); }
