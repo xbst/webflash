@@ -314,6 +314,39 @@ async function refreshThemes() {
 
 let optionsPanel = null;
 
+// Embed options. Its Katapult controls act as page 1's do (ticking loads
+// Katapult beside the firmware once configuring started); Edit on a setup
+// loads it into Configure and goes there.
+function setupOptionsPanel() {
+  optionsPanel = new OptionsPanel($("embed-options"), session, {
+    themes: () => themeList,
+    wantThemes: () => { if (!themeList.length) refreshThemes(); },
+    onVersion: switchVersion,
+    onKatapultVersion: (version) => {
+      session.setKatapultTable({ version });
+      if (session.katapult) loadKatapult("switch");
+    },
+    onKatapult: (on) => {
+      if (!on) {
+        session.removeKatapult();
+        return;
+      }
+      session.setKatapult({ on: true, version: firmwarePage ? firmwarePage.katapultVersion : "latest" });
+      loadKatapult("start");
+    },
+    loadSetup: (i) => configurePage.pickSetup(i),
+    editSetup: (i) => {
+      $("configure-to-embed").hidden = false;
+      wizard.go("configure");
+      return i === session.setupIndex ? Promise.resolve() : configurePage.pickSetup(i);
+    },
+  });
+  // Configure reached through Edit offers the way back to Embed, which needs
+  // no build; it goes once Configure is left.
+  $("configure-to-embed").addEventListener("click", () => wizard.go("embed"));
+  wizard.onLeave("configure", () => { $("configure-to-embed").hidden = true; });
+}
+
 // Embed options' Theme select lists the bundled themes, from Python: load
 // the list when the select is first reached for, not with the page.
 function setupThemes() {
@@ -661,7 +694,7 @@ async function init() {
   setupPanelTabs();
   setupTomlView();
   setupConfigure();
-  optionsPanel = new OptionsPanel($("embed-options"), session, { themes: () => themeList, onVersion: switchVersion });
+  setupOptionsPanel();
   setupThemes();
   new ConfigTab({
     textarea: $("config-text"), minimal: $("config-minimal"), copy: $("config-copy"),

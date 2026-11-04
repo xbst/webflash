@@ -16,8 +16,9 @@
 // Every change is announced as a "change" event whose detail names what
 // changed ({what, origin}); what is one of board, firmware, project,
 // version, config, options, flash, prebuilt, toml, files, index, ref, tree,
-// plan, sources, lock, undo, open, setup (another setup picked), katapult
-// (Katapult ticked, unticked or its
+// plan, sources, lock, undo, open, setup (another setup picked, or the
+// picked one's defconfigs replaced), setups (the list of setups changed),
+// katapult (Katapult ticked, unticked or its
 // version changed) and katapult-<part> (its engine side: ref, tree, config,
 // plan, sources, link). Undo and redo cover the tables (and the TOML's name
 // and files), Katapult's version and defconfig among them; a "restore" event
@@ -345,7 +346,7 @@ export class Session {
     this._t = snap.tables;
     this.tomlName = snap.tomlName;
     this.files = snap.files;
-    for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
     this._katapultReplaced(katapultBefore, origin);
     this._changed("katapult-config", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
@@ -393,7 +394,7 @@ export class Session {
     this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
     if (files !== null) this.files = files;
-    for (const what of ["board", "firmware", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
     if (katapultBefore || this.katapult) this._changed("katapult", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
       this._changed("project", origin);
@@ -514,6 +515,77 @@ export class Session {
     }
     this._changed("katapult", origin);
     this._sync(origin);
+  }
+
+  /**
+   * [katapult] fields as the Embed step edits them: version, versions,
+   * default. Works whichever setup Configure edits (setKatapult needs one
+   * with Katapult). Announced as a "katapult" change.
+   */
+  setKatapultTable(fields, { origin = "visual", undoable = true } = {}) {
+    const k = this._t.katapult;
+    if (!k) return;
+    const next = { ...k, ...fields };
+    // A pinned version must be one of the versions the reader picks from.
+    if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
+      next.versions = [...next.versions, next.version];
+    }
+    if (JSON.stringify(next) === JSON.stringify(k)) return;
+    if (undoable) this.checkpoint();
+    this._t.katapult = next;
+    this._changed("katapult", origin);
+    this._sync(origin);
+  }
+
+  /** Take Katapult out of the board TOML: [katapult] and every setup's Katapult defconfig (one undo step). */
+  removeKatapult({ origin = "visual", undoable = true } = {}) {
+    if (!this._t.katapult) return;
+    if (undoable) this.checkpoint();
+    this._t.katapult = null;
+    this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+    this._katapultEngine = freshKatapultEngine();
+    this._changed("katapult", origin);
+    this._changed("setups", origin);
+    this._sync(origin);
+  }
+
+  /**
+   * Replace the setups (the Embed step's setups editor), with the options
+   * and [katapult] that follow them, as one undo step: fields {setups,
+   * options?, katapult?} (configure/setups.js makes them); selected: the
+   * setup Configure edits afterwards. Announced as a "setups" change, plus
+   * "options", "setup" (the selected setup's defconfigs are not the ones
+   * loaded) and "katapult" as they apply. Resolves to {reload}: whether the
+   * configure code must load the selected setup into the engine.
+   */
+  setSetups({ setups, options, katapult }, { selected, origin = "visual", undoable = true } = {}) {
+    if (!this._t.firmware || !Array.isArray(setups) || !setups.length) return { reload: false };
+    const before = this.setup;
+    const katapultBefore = this.katapult;
+    const next = {
+      setups: setups.map(newSetup),
+      options: options ? normalizeTables({ firmware: this._t.firmware, options }).options : this._t.options,
+      katapult: katapult === undefined ? this._t.katapult : (katapult ? { ...katapult } : null),
+    };
+    const index = selected === undefined ? this.setupIndex : Math.max(0, Math.min(selected, next.setups.length - 1));
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const optionsChanged = !same(next.options, this._t.options);
+    if (same(next.setups, this._t.setups) && !optionsChanged && same(next.katapult, this._t.katapult) &&
+      index === this.setupIndex) return { reload: false };
+    if (undoable) this.checkpoint();
+    this._t.setups = next.setups;
+    this._t.options = next.options;
+    this._t.katapult = next.katapult;
+    this._setupIndex = index;
+    const after = this.setup;
+    const reload = !before || !after || before.defconfig !== after.defconfig || before.katapult !== after.katapult;
+    if (!this.katapult || reload) this._katapultEngine = freshKatapultEngine();
+    this._changed("setups", origin);
+    if (optionsChanged) this._changed("options", origin);
+    if (reload) this._changed("setup", origin);
+    if (Boolean(katapultBefore) !== Boolean(this.katapult)) this._changed("katapult", origin);
+    this._sync(origin);
+    return { reload };
   }
 
   /**

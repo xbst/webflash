@@ -182,6 +182,7 @@ export async function openGenerate(session) {
     `</div>` +
     `<p class="gen-warn" id="gen-theme-note" hidden></p>` +
     `<div class="gen-files" id="gen-files"></div>` +
+    `<p class="gen-note" id="gen-setups" hidden></p>` +
     `<p class="gen-warn" id="gen-warn" hidden></p>` +
     `<div class="gen-preview" id="gen-preview"></div>` +
     `<p class="gen-note"><span id="gen-inline-note"></span> The same page from the command line: ` +
@@ -204,10 +205,10 @@ export async function openGenerate(session) {
     const missing = refs.filter((r) => !r.bytes);
     const canInline = refs.length > 0 && missing.length === 0;
     const note = !refs.length
-      ? "The TOML names no image or firmware file, so there is nothing to embed."
+      ? "Nothing to embed: the TOML names no image or firmware file."
       : missing.length
         ? `To embed them, attach ${missing.map((r) => r.path).join(" and ")}.`
-        : "Embedding gives one self-contained file. Without it the page loads the files from beside it.";
+        : "-i makes one self-contained file; without it the page loads them from beside it.";
     const wasDisabled = inlineEl.disabled;
     inlineEl.disabled = !canInline;
     if (!canInline) inlineEl.checked = false;
@@ -239,8 +240,7 @@ export async function openGenerate(session) {
     const name = session.theme || "default";
     themeNote.hidden = bundled.has(name);
     themeNote.textContent = bundled.has(name) ? "" :
-      `This board TOML names the theme "${name}", which is not bundled with WebFlash, and the site renders with the bundled ` +
-      `themes only: pick one here, or render the page with the command line (webflash ${session.tomlName}) next to the theme's file.`;
+      `"${name}" is not a bundled theme: pick one here, or run webflash ${session.tomlName} beside its file.`;
     return bundled.has(name);
   };
 
@@ -297,6 +297,10 @@ export async function openGenerate(session) {
     const files = renderFiles(session);
     const image = refs.find((r) => r.role === "image");
     const tables = session.tables();
+    const setupsEl = body.querySelector("#gen-setups");
+    setupsEl.hidden = tables.setups.length < 2;
+    setupsEl.textContent = `The reader picks from ${tables.setups.length} setups: ` +
+      tables.setups.map((s, i) => `“${s.title || `Setup ${i + 1}`}”`).join(", ") + ".";
     const preview = previewToml(tables, engineUrl, { imageAttached: !image || Boolean(image.bytes) });
     try {
       const out = await runtime.render(session.tomlText, { inline: inlineEl.checked, files });

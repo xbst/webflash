@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import io
 import json
 import shutil
@@ -78,11 +79,12 @@ def init(assets_origin: str = "") -> str:
 
 
 def theme_catalog() -> str:
-    """Bundled theme names and display names, default first."""
+    """Bundled theme names, display names and [behavior] values, default first."""
     themes = []
     for path in sorted(_BUNDLED_THEMES.glob("*.toml"), key=lambda p: p.stem.lower()):
         theme = load_theme(path.stem, _board_path())
-        themes.append({"name": path.stem, "display": theme.name or path.stem})
+        themes.append({"name": path.stem, "display": theme.name or path.stem,
+                       "behavior": dataclasses.asdict(theme.behavior)})
     themes.sort(key=lambda t: (t["name"] != "default", t["display"].lower()))
     return json.dumps(themes)
 

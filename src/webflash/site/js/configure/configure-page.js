@@ -143,7 +143,7 @@ export class ConfigurePage {
       }
       if (what === "options") this.tree.render();
       if (["sources", "katapult-sources", "katapult-ref", "katapult", "lock", "ref", "index", "project", "version",
-        "firmware", "open", "prebuilt", "setup", "undo"].includes(what)) this.renderState();
+        "firmware", "open", "prebuilt", "setup", "setups", "undo"].includes(what)) this.renderState();
       else this.renderUndo();
     });
     configurator.onNotice((n) => this.renderNotice(n));
