@@ -915,7 +915,9 @@ class Evaluator:
     def _resolve(self, name: str) -> Optional[Target]:
         """Resolve a target: its explicit rules merged, with a pattern rule
         supplying the recipe (and its prerequisites) when no explicit rule has
-        one, searched the way GNU make searches implicit rules."""
+        one, searched the way GNU make searches implicit rules. The rule that
+        supplies the recipe, explicit or pattern, lists its prerequisites
+        first."""
         rules = self.explicit.get(name, [])
         prereqs: list[str] = []
         recipe_rule: Optional[Rule] = None
@@ -938,8 +940,11 @@ class Evaluator:
         found = self._implicit(name, depth=0)
         if found is not None:
             rule, stem, pattern_prereqs = found
-            merged = list(prereqs)
-            for p in pattern_prereqs:
+            # As for an explicit rule with a recipe, the pattern rule that
+            # supplies the recipe puts its prerequisites first (GNU make
+            # implicit.c, pattern_search), so $< is the rule's own source.
+            merged = list(dict.fromkeys(pattern_prereqs))
+            for p in prereqs:
                 if p not in merged:
                     merged.append(p)
             return Target(name, merged, rule, stem=stem, phony=phony)
