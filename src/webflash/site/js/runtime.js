@@ -177,23 +177,41 @@ export function isReady() { return _about !== null; }
 /** Versions reported by the worker once booted: {webflash, python, pyodide}. */
 export function about() { return _about; }
 
+const TRACEBACK = "Traceback (most recent call last):";
+const CHAINED = /^(During handling of the above exception, another exception occurred|The above exception was the direct cause of the following exception):$/;
+
 /**
  * Turn a Python exception into something worth showing someone.
  *
  * Pyodide puts the whole traceback in .message, so the sentence bridge.py
  * raises on purpose ends up last, behind frames and virtual filesystem paths
- * the reader has never seen. Keep the final line, which is the message.
+ * the reader has never seen. Keep the final exception's whole message, every
+ * line of it, without its class name and the frames before it. Text that is
+ * not a traceback (the worker's own errors, or a message call() has already
+ * turned into one) comes back as it is.
  */
 export function pythonMessage(e) {
   const raw = (e && e.message ? e.message : String(e)).trim();
-  if (!raw.includes("Traceback (most recent call last)")) return raw;
-  const lines = raw.split("\n").filter((l) => l.trim() && !/^\s+/.test(l));
-  const last = lines[lines.length - 1] || raw;
-  // Drop the exception class, keep what it says. Multi-line messages keep
-  // their tail, which is where bridge.py puts the actionable half.
-  const body = last.replace(/^\w[\w.]*(Error|Exception):\s*/, "");
-  const tail = raw.slice(raw.indexOf(last) + last.length).trim();
-  return tail ? `${body}\n${tail}` : body;
+  if (!raw.startsWith(TRACEBACK)) return raw;
+  const lines = raw.split("\n");
+  let message = [];
+  let i = 0;
+  while (i < lines.length) {
+    // A header, its frames (indented), then the exception's message, which
+    // runs to the end or to the line that chains the next traceback on.
+    i += 1;
+    while (i < lines.length && (/^\s/.test(lines[i]) || !lines[i].trim())) i += 1;
+    let end = lines.length;
+    for (let j = i; j < lines.length; j++) {
+      if (CHAINED.test(lines[j]) && !lines[j + 1] && lines[j + 2] === TRACEBACK) { end = j; break; }
+    }
+    message = lines.slice(i, end);
+    i = end + 2;
+  }
+  const text = message.join("\n").trim();
+  // Drop the exception class (dotted outside builtins), keep what it says.
+  const body = text.replace(/^[A-Za-z_][\w.]*:[ \t]*/, "").trim();
+  return body || text || raw;
 }
 
 /**
