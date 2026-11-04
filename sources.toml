@@ -19,6 +19,12 @@ age_days = 30
 # still fetch them.
 superseded_days = 2
 
+# How the gate checks a history snapshot (history_days below): "full" builds
+# every row of the parity matrix that applies, as for a ref; "reduced" runs
+# make-check on every row and builds one row per architecture. A history
+# snapshot that leaves the window stays listed for age_days.
+history_gate = "full"
+
 # One table per project, in the order the site lists them.
 #   title           the name the site shows
 #   repo            the git repository (https URL)
@@ -27,12 +33,18 @@ superseded_days = 2
 #   tags            how many of the newest tags to publish, by version order
 #   tag_pattern     optional regular expression a tag must match in full
 #   pin             refs (tags or branches) kept whatever the rules above say
+#   history_days    also keep a snapshot of every commit of the default branch
+#                   (first-parent) from the last N days, listed apart in
+#                   history/<project>.json under its git describe string, so a
+#                   user can build what their host runs; 0 (the default) is off
+#   history_max     optional cap on the number of those snapshots, newest kept
 [klipper]
 title = "Klipper"
 repo = "https://github.com/Klipper3d/klipper"
 default_branch = "master"
 tags = 3
 tag_pattern = 'v\d+\.\d+\.\d+'
+history_days = 365
 
 [kalico]
 title = "Kalico"
@@ -43,6 +55,7 @@ tags = 6
 # Monthly releases only: the repository also carries Klipper's old tags
 # (v0.1.0 to v0.12.0), which are Klipper versions, not Kalico releases.
 tag_pattern = 'v\d{4}\.\d{2}\.\d{2}'
+history_days = 365
 
 [katapult]
 title = "Katapult"
@@ -50,6 +63,7 @@ repo = "https://github.com/Arksine/katapult"
 default_branch = "master"
 tags = 3
 tag_pattern = 'v\d+\.\d+\.\d+'
+history_days = 730
 
 # The core bundle: paths relative to the repository root. `*` matches within a
 # folder, `**` any number of folders. A lib/<dir>/** line puts that folder in

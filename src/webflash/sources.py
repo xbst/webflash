@@ -14,7 +14,15 @@ snapshot of every ref that ``sources.toml`` selects, as immutable bundles:
   ``lib/<dir>``, named by the SHA-256 of its bytes, so identical trees share
   one file across refs and projects (Kalico's ``lib/stm32f4`` is Klipper's);
 - ``<project>/<sha>/ref.json`` (the snapshot's manifest) and
-  ``<project>/<sha>/make-check.json`` (the gate's report).
+  ``<project>/<sha>/make-check.json`` (the gate's report);
+- ``history/<project>.json``, for a project with ``history_days``: a snapshot
+  of every first-parent commit of the default branch from that many days,
+  newest first, each listed under its ``git describe`` string (what Mainsail
+  and Fluidd show for the host's Klipper), apart from the index so that it
+  stays small; the index names the file and its count. Most of these commits
+  change only what no bundle holds (the host's ``klippy/``, docs), so they
+  share their bundles, and a snapshot with the same bundles as one already
+  gated takes that gate's verdict.
 
 ``webflash sources build`` keeps its work in a cache folder, which the
 workflow restores and saves with ``actions/cache``: a full bare clone per
@@ -91,6 +99,7 @@ INDEX_FILE = "index.json"
 REF_FILE = "ref.json"
 REPORT_FILE = "make-check.json"
 BLOBS = "blobs"
+HISTORY = "history"
 _STATE_FILE = "state.json"
 _GIT = "git"
 _TREES = "trees"
@@ -114,9 +123,14 @@ class SourcesError(Exception):
 
 # ── Policy (sources.toml) ────────────────────────────────────────────
 
-_TOP_KEYS = ("age_days", "superseded_days")
+_TOP_KEYS = ("age_days", "superseded_days", "history_gate")
 _TABLES = ("core", "prune")
-_PROJECT_KEYS = ("title", "repo", "default_branch", "branches", "tags", "tag_pattern", "pin")
+_PROJECT_KEYS = ("title", "repo", "default_branch", "branches", "tags", "tag_pattern", "pin",
+                 "history_days", "history_max")
+# How the gate checks a history snapshot: "full" builds every row that applies,
+# like a ref's gate; "reduced" runs make-check on every row and builds one row
+# per architecture.
+HISTORY_GATES = ("full", "reduced")
 _CORE_KEYS = ("include",)
 _PRUNE_KEYS = ("keep", "drop", "always")
 _NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
@@ -137,6 +151,8 @@ class ProjectPolicy:
     tags: int = 0
     tag_pattern: str = ""
     pin: list[str] = field(default_factory=list)
+    history_days: int = 0
+    history_max: int = 0
 
 
 @dataclass
@@ -148,6 +164,7 @@ class Policy:
     always: list[str]
     age_days: int = 30
     superseded_days: int = 2
+    history_gate: str = "full"
     path: Path | None = None
 
     def digest(self) -> str:
@@ -207,7 +224,7 @@ def _load_project(name: str, table: object, fname: str) -> ProjectPolicy:
         _fail(f"{fname}", f"'{name}' must be a table, written as '[{name}]'")
     if not _NAME_RE.fullmatch(name):
         _fail(where, "a project name is lowercase letters, digits and dashes, starting with a letter")
-    if name in (_GIT, BLOBS, _TREES):
+    if name in (_GIT, BLOBS, _TREES, HISTORY):
         _fail(where, f"'{name}' is a folder name the cache uses; name the project otherwise")
     _check_keys(table, _PROJECT_KEYS, where)
     repo = _str(table, "repo", where)
@@ -224,6 +241,8 @@ def _load_project(name: str, table: object, fname: str) -> ProjectPolicy:
         tags=_count(table, "tags", where, 0),
         tag_pattern=_str(table, "tag_pattern", where, required=False),
         pin=_str_list(table, "pin", where),
+        history_days=_count(table, "history_days", where, 0),
+        history_max=_count(table, "history_max", where, 0),
     )
     for ref in [project.default_branch, *project.branches, *project.pin]:
         if not _REF_RE.fullmatch(ref) or ".." in ref:
@@ -266,6 +285,9 @@ def load_policy(path: Path) -> Policy:
     for key in _TOP_KEYS:
         if key in raw and isinstance(raw[key], dict):
             _fail(fname, f"'{key}' is a setting, not a table")
+    history_gate = _str(raw, "history_gate", fname, required=False, default="full")
+    if history_gate not in HISTORY_GATES:
+        _fail(fname, f"history_gate must be one of {', '.join(HISTORY_GATES)} (got {history_gate!r})")
     projects = {}
     for name, value in raw.items():
         if name in _TOP_KEYS or name in _TABLES:
@@ -298,6 +320,7 @@ def load_policy(path: Path) -> Policy:
         always=_patterns(prune, "always", where, folder_only_slash=True),
         age_days=_count(raw, "age_days", fname, 30),
         superseded_days=_count(raw, "superseded_days", fname, 2),
+        history_gate=history_gate,
         path=path,
     )
 
@@ -460,6 +483,42 @@ def select_refs(project: ProjectPolicy, remote: list[RemoteRef],
     return [heads[project.default_branch], *ordered_tags, *branches]
 
 
+def history_since(project: ProjectPolicy, today: _dt.date) -> int:
+    """The start of the history window, as a Unix time: midnight UTC
+    ``history_days`` days before today."""
+    start = _dt.datetime.combine(today - _dt.timedelta(days=project.history_days), _dt.time(),
+                                 _dt.timezone.utc)
+    return int(start.timestamp())
+
+
+def list_history(repo: Path, head: str, since: int) -> list[tuple[str, int]]:
+    """The first-parent commits of ``head`` committed at ``since`` or later,
+    newest first, as ``(sha, commit time)``, ``head`` itself included."""
+    start = _dt.datetime.fromtimestamp(since, _dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S +0000")
+    out = _git(["rev-list", "--first-parent", f"--since={start}", "--format=%ct", head], cwd=repo)
+    commits: list[tuple[str, int]] = []
+    sha = None
+    for line in out.decode("ascii", "replace").splitlines():
+        if line.startswith("commit "):
+            sha = line.split()[1]
+        elif sha and line.strip().isdigit():
+            commits.append((sha, int(line)))
+            sha = None
+    return commits
+
+
+def select_history(project: ProjectPolicy, commits: list[tuple[str, int]], head: str,
+                   since: int) -> list[tuple[str, int]]:
+    """The history snapshots the policy keeps: the default branch's
+    first-parent commits from the window (``commits`` as ``list_history``
+    gives them, newest first), without the head, which the index lists as
+    the default branch, and at most ``history_max`` of them."""
+    if not project.history_days:
+        return []
+    kept = [(sha, ct) for sha, ct in commits if sha != head and ct >= since]
+    return kept[:project.history_max] if project.history_max else kept
+
+
 # ── Files ────────────────────────────────────────────────────────────
 
 def _write_bytes(path: Path, data: bytes) -> None:
@@ -482,6 +541,21 @@ def _json_bytes(data: object) -> bytes:
 
 def _write_json(path: Path, data: object) -> None:
     _write_bytes(path, _json_bytes(data))
+
+
+def _history_bytes(history: dict) -> bytes:
+    """A history file: one snapshot per line, so it stays readable while
+    hundreds of entries keep it small."""
+    head = {k: v for k, v in history.items() if k not in ("refs", "blobs")}
+    dump = lambda v: json.dumps(v, separators=(",", ":"), ensure_ascii=True)
+    lines = [dump(head)[:-1] + ',"refs":[']
+    lines += [dump(ref) + ("," if i < len(history["refs"]) - 1 else "")
+              for i, ref in enumerate(history["refs"])]
+    lines.append('],"blobs":{')
+    items = list(history["blobs"].items())
+    lines += [f"{dump(k)}:{dump(v)}" + ("," if i < len(items) - 1 else "") for i, (k, v) in enumerate(items)]
+    lines.append("}}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def _read_json(path: Path) -> dict | None:
@@ -914,16 +988,31 @@ def _run(argv: list[str], cwd: Path, timeout: int) -> dict:
             "command": " ".join(["webflash", *argv[3:]]), "output": text}
 
 
+_ARCH_RE = re.compile(r"^CONFIG_(MACH_[A-Za-z0-9_]+)=y\s*$", re.M)
+
+
+def _row_arch(row: dict) -> str:
+    """The architecture a matrix row builds for: the first ``CONFIG_MACH_*``
+    its defconfig sets (``MACH_STM32``), else the project's default."""
+    m = _ARCH_RE.search(row["defconfig"])
+    return m.group(1) if m else ""
+
+
 def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
-             *, now: _dt.datetime, skip: str | None = None, run: str | None = None) -> dict:
+             *, now: _dt.datetime, skip: str | None = None, run: str | None = None,
+             mode: str = "full") -> dict:
     """Run the snapshot gate on a snapshot's bundles and write its report,
     ``<project>/<sha>/make-check.json``. ``checked`` is True when every row of
     the matrix that applies passed both commands, False when one failed, and
     None when the gate did not run (``skip`` or no engine) or no row applies.
-    ``run`` names the run, recorded so that a re-run can tell its own failures."""
+    ``run`` names the run, recorded so that a re-run can tell its own failures.
+    ``mode`` "reduced" (history snapshots, see ``HISTORY_GATES``) builds only
+    the first row that applies for each architecture; the other rows' builds
+    are recorded as skipped, and ``gate`` in the report says which it was."""
     project, sha = manifest["project"], manifest["sha"]
     report = {"schema": SCHEMA, "project": project, "sha": sha, "describe": describe,
-              "checked": None, "note": "", "webflash": __version__, "ran": _stamp(now)}
+              "checked": None, "note": "", "webflash": __version__, "ran": _stamp(now),
+              "gate": mode}
     if run is not None:
         report["run"] = run
     report["rows"] = []
@@ -956,6 +1045,7 @@ def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
         _extract(cache, manifest, tree)
         results = []
         defined = _defined_symbols(tree)
+        built_archs: dict[str, str] = {}
         for row in rows:
             name = row["name"]
             result = {"row": name}
@@ -972,10 +1062,16 @@ def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
             base = [sys.executable, "-m", "webflash"]
             result["make_check"] = _run([*base, "make-check", str(tree), "--config", str(config),
                                          "--project", project], work, 900)
-            result["build"] = _run([*base, "build", str(tree), "--config", str(config),
-                                    "--toolchain", "gcc", "--version", describe,
-                                    "-j", str(os.cpu_count() or 2), "--out", str(work / f"out-{name}")],
-                                   work, 1800)
+            arch = _row_arch(row)
+            if mode == "reduced" and arch in built_archs:
+                result["build"] = {"ok": True, "skipped": True, "seconds": 0.0,
+                                   "note": f"reduced gate: the row {built_archs[arch]} built this architecture"}
+            else:
+                built_archs.setdefault(arch, name)
+                result["build"] = _run([*base, "build", str(tree), "--config", str(config),
+                                        "--toolchain", "gcc", "--version", describe,
+                                        "-j", str(os.cpu_count() or 2), "--out", str(work / f"out-{name}")],
+                                       work, 1800)
             ok = result["make_check"]["ok"] and result["build"]["ok"]
             log(f"  gate: {name}: {'passed' if ok else 'FAILED'} "
                 f"(make-check {result['make_check']['seconds']} s, build {result['build']['seconds']} s)")
@@ -1038,6 +1134,14 @@ def _project_state(state: dict, name: str) -> dict:
     return project
 
 
+def record_history(state: dict, project: str, kept: list[tuple[str, int]], today: _dt.date) -> None:
+    """Remember that the policy kept these history snapshots today (``(sha,
+    commit time)``, as ``select_history`` gives them)."""
+    history = _project_state(state, project).setdefault("history", {})
+    for sha, ct in kept:
+        history[sha] = {"ct": ct, "seen": today.isoformat()}
+
+
 def _retire(project_state: dict, sha: str, today: _dt.date) -> None:
     """A snapshot no ref points at any more stays published for a while."""
     if all(ref["sha"] != sha for ref in project_state["refs"].values()):
@@ -1054,14 +1158,22 @@ def record_ref(state: dict, project: str, ref: RemoteRef, today: _dt.date) -> No
         _retire(project_state, previous["sha"], today)
 
 
+_ALL = object()
+
+
 def age_out(state: dict, today: _dt.date, days: int, superseded_days: int,
-            projects: list[str] | None = None) -> list[str]:
+            projects: list[str] | None = None, history_projects=_ALL) -> list[str]:
     """Drop refs the policy has not selected for more than ``days`` days, and
     superseded snapshots older than ``superseded_days``. ``projects`` limits
     the refs aged to those projects (whose whole policy ran): None ages every
     project's refs, an empty list (a ``--ref`` run, which records only the
     refs it rebuilt) ages none. Superseded snapshots age in every project.
-    Returns what was dropped, for the log."""
+    History snapshots the policy has not kept for more than ``days`` days
+    (they left the window, or ``history_max``) age the same way, in
+    ``history_projects`` (default: as ``projects``), the projects whose
+    history was listed in this run. Returns what was dropped, for the log."""
+    if history_projects is _ALL:
+        history_projects = projects
     dropped = []
     for name, project_state in state["projects"].items():
         if projects is None or name in projects:
@@ -1070,6 +1182,13 @@ def age_out(state: dict, today: _dt.date, days: int, superseded_days: int,
                     del project_state["refs"][ref_id]
                     _retire(project_state, ref["sha"], today)
                     dropped.append(f"{name} {ref_id} (last selected {ref['seen']})")
+        if history_projects is None or name in history_projects:
+            history = project_state.get("history", {})
+            old = [sha for sha, entry in history.items() if (today - _day(entry["seen"])).days > days]
+            for sha in old:
+                del history[sha]
+            if old:
+                dropped.append(f"{name}: {len(old)} history snapshot{'s' * (len(old) != 1)}")
         for sha, since in list(project_state.get("superseded", {}).items()):
             if (today - _day(since)).days >= superseded_days:
                 del project_state["superseded"][sha]
@@ -1100,14 +1219,78 @@ class _Neg:
         return self.key == other.key
 
 
+def _ref_entry(cache: Path, name: str, ref_id: str, kind: str, sha: str, manifest: dict,
+               blobs: dict[str, dict]) -> dict:
+    """A ref's entry in the index or a history file; adds its bundles' sizes
+    to ``blobs``."""
+    report = _read_json(snapshot_dir(cache, name, sha) / REPORT_FILE) or {}
+    describe = f"{ref_id}-0-g{manifest['abbrev']}" if kind == "tag" else manifest["describe"]
+    for info in [manifest["core"], *manifest["libs"].values()]:
+        blobs[info["blob"]] = {"size": info["size"], "unpacked": info["unpacked"],
+                               "files": info["files"]}
+    return {
+        "id": ref_id,
+        "kind": kind,
+        "sha": sha,
+        "describe": describe,
+        "date": manifest["date"],
+        "core": manifest["core"]["blob"],
+        "core_libs": manifest["core_libs"],
+        "libs": {lib: info["blob"] for lib, info in sorted(manifest["libs"].items())},
+        "archs": manifest["archs"],
+        "checked": report.get("checked"),
+        "check_report": f"{name}/{sha}/{REPORT_FILE}",
+    }
+
+
+def history_file(project: str) -> str:
+    """Where a project's history snapshots are listed, relative to ``/sources/``."""
+    return f"{HISTORY}/{project}.json"
+
+
+def make_histories(policy: Policy, cache: Path, state: dict,
+                   warnings: list[str] | None = None) -> dict[str, dict]:
+    """The history file of each project that keeps history snapshots
+    (``history/<project>.json``): its snapshots newest first, each with the
+    fields of an index ref and ``kind`` "commit", its ``id`` being its
+    ``git describe`` string, and a ``blobs`` table of their bundles. No time
+    stamp, so a run that keeps the same snapshots writes the same bytes."""
+    warnings = warnings if warnings is not None else []
+    out: dict[str, dict] = {}
+    for name in policy.projects:
+        project_state = _project_state(state, name)
+        history = project_state.get("history", {})
+        # Newest first: by day, then in the branch's own (first-parent) order,
+        # which commit times within a day do not always follow.
+        listed = project_state.get("history_list", {}).get("commits", [])
+        place = {sha: i for i, (sha, _ct) in enumerate(listed)}
+        order = lambda kv: (-(kv[1]["ct"] // 86400), place.get(kv[0], len(place)), -kv[1]["ct"], kv[0])
+        entries = []
+        blobs: dict[str, dict] = {}
+        for sha, entry in sorted(history.items(), key=order):
+            manifest = _read_json(snapshot_dir(cache, name, sha) / REF_FILE)
+            if manifest is None:
+                warnings.append(f"{name} {sha[:12]}: the history snapshot is missing from the "
+                                "cache, so the history file leaves it out")
+                continue
+            entries.append(_ref_entry(cache, name, manifest["describe"], "commit", sha, manifest, blobs))
+        if entries:
+            out[name] = {"schema": SCHEMA, "project": name, "refs": entries,
+                         "blobs": dict(sorted(blobs.items()))}
+    return out
+
+
 def make_index(policy: Policy, cache: Path, state: dict, now: _dt.datetime,
-               warnings: list[str] | None = None) -> dict:
+               warnings: list[str] | None = None, histories: dict[str, dict] | None = None) -> dict:
     """The index (SPEC 7.1) of every ref in the state, in policy order. Two
     additions to the SPEC's fields: each ref's ``core_libs`` (the lib/<dir>
     folders the core bundle holds, so a folder in neither list is missing),
     and a ``blobs`` table giving each bundle's size, unpacked size and file
-    count, for the sizes the site shows before a download."""
+    count, for the sizes the site shows before a download. A project with
+    history snapshots (``histories``, from ``make_histories``) names their
+    file and count in ``history``; their bundles are in that file's table."""
     warnings = warnings if warnings is not None else []
+    histories = histories or {}
     projects: dict[str, dict] = {}
     blobs: dict[str, dict] = {}
     for name, project in policy.projects.items():
@@ -1118,28 +1301,13 @@ def make_index(policy: Policy, cache: Path, state: dict, now: _dt.datetime,
                 warnings.append(f"{name} {ref_id}: the snapshot {ref['sha'][:12]} is missing "
                                 "from the cache, so the index leaves it out")
                 continue
-            report = _read_json(snapshot_dir(cache, name, ref["sha"]) / REPORT_FILE) or {}
-            describe = (f"{ref_id}-0-g{manifest['abbrev']}" if ref["kind"] == "tag"
-                        else manifest["describe"])
-            refs.append({
-                "id": ref_id,
-                "kind": ref["kind"],
-                "sha": ref["sha"],
-                "describe": describe,
-                "date": manifest["date"],
-                "core": manifest["core"]["blob"],
-                "core_libs": manifest["core_libs"],
-                "libs": {lib: info["blob"] for lib, info in sorted(manifest["libs"].items())},
-                "archs": manifest["archs"],
-                "checked": report.get("checked"),
-                "check_report": f"{name}/{ref['sha']}/{REPORT_FILE}",
-            })
-            for info in [manifest["core"], *manifest["libs"].values()]:
-                blobs[info["blob"]] = {"size": info["size"], "unpacked": info["unpacked"],
-                                       "files": info["files"]}
+            refs.append(_ref_entry(cache, name, ref_id, ref["kind"], ref["sha"], manifest, blobs))
         refs.sort(key=lambda r: _ref_order(project, r["id"], r["kind"]))
         projects[name] = {"title": project.title, "repo": project.repo,
                           "default_branch": project.default_branch, "refs": refs}
+        if name in histories:
+            projects[name]["history"] = {"file": history_file(name),
+                                         "count": len(histories[name]["refs"])}
     return {"schema": SCHEMA, "generated": _stamp(now), "projects": projects,
             "blobs": dict(sorted(blobs.items()))}
 
@@ -1194,15 +1362,20 @@ def _copy_if_changed(src: Path, dst: Path) -> None:
     _write_bytes(dst, data)
 
 
-def publish(cache: Path, out: Path, index: dict, state: dict) -> dict:
+def publish(cache: Path, out: Path, index: dict, state: dict,
+            histories: dict[str, dict] | None = None) -> dict:
     """Make ``out`` hold exactly what the site serves under ``/sources/``:
-    the index, the bundles, and each listed snapshot's manifest and report.
-    Files already there with the same bytes are left alone; files this
-    command wrote earlier that are no longer published are removed (nothing
-    else in ``out`` is touched). Returns counts for the log."""
+    the index, the history files, the bundles, and each listed snapshot's
+    manifest and report. Files already there with the same bytes are left
+    alone; files this command wrote earlier that are no longer published are
+    removed (nothing else in ``out`` is touched). Returns counts for the log."""
+    histories = histories or {}
     out.mkdir(parents=True, exist_ok=True)
     listed = {(name, ref["sha"]) for name, p in index["projects"].items() for ref in p["refs"]}
+    listed |= {(name, ref["sha"]) for name, h in histories.items() for ref in h["refs"]}
     blobs = _superseded_blobs(state, cache) | set(index["blobs"])
+    for h in histories.values():
+        blobs |= set(h["blobs"])
     wanted: set[Path] = set()
     copied = 0
     for blob in sorted(blobs):
@@ -1219,6 +1392,16 @@ def publish(cache: Path, out: Path, index: dict, state: dict) -> dict:
                 dst = snapshot_dir(out, name, sha) / fname
                 wanted.add(dst)
                 _copy_if_changed(src, dst)
+    for name, history in sorted(histories.items()):
+        dst = out / history_file(name)
+        wanted.add(dst)
+        data = _history_bytes(history)
+        try:
+            same = dst.read_bytes() == data
+        except OSError:
+            same = False
+        if not same:
+            _write_bytes(dst, data)
     changed = write_index(out, index, cache / INDEX_FILE)
     _copy_if_changed(out / INDEX_FILE, cache / INDEX_FILE)
     wanted.add(out / INDEX_FILE)
@@ -1226,6 +1409,7 @@ def publish(cache: Path, out: Path, index: dict, state: dict) -> dict:
     managed = list((out / BLOBS).glob("*.tar.gz")) if (out / BLOBS).is_dir() else []
     managed += [p for p in out.glob("*/*/*.json")
                 if _HEX40.fullmatch(p.parent.name) and p.name in (REF_FILE, REPORT_FILE)]
+    managed += list((out / HISTORY).glob("*.json")) if (out / HISTORY).is_dir() else []
     for path in managed:
         if path not in wanted:
             path.unlink()
@@ -1243,10 +1427,11 @@ def collect_garbage(cache: Path, state: dict) -> int:
         for ref in project_state.get("refs", {}).values():
             keep_snapshots.add((name, ref["sha"]))
         keep_snapshots.update((name, sha) for sha in project_state.get("superseded", {}))
+        keep_snapshots.update((name, sha) for sha in project_state.get("history", {}))
     removed = 0
     keep_blobs: set[str] = set()
     for folder in sorted(p for p in cache.glob("*/*") if p.is_dir() and _HEX40.fullmatch(p.name)):
-        if folder.parent.name in (_GIT, BLOBS, _TREES):
+        if folder.parent.name in (_GIT, BLOBS, _TREES, HISTORY):
             continue
         if (folder.parent.name, folder.name) not in keep_snapshots:
             removed += sum(1 for _ in folder.iterdir())
@@ -1274,7 +1459,8 @@ def validate_index(root: Path, *, hashes: bool = True) -> list[str]:
     """Check ``root/index.json`` against SPEC 7.1 and the files beside it:
     the fields and their types, the ref order, that every bundle exists with
     the size the index gives (and, with ``hashes``, the SHA-256 its name
-    says), and that every report exists. Returns the problems found."""
+    says), that every report exists, and each history file the index names
+    in the same way. Returns the problems found."""
     problems: list[str] = []
     try:
         index = json.loads((root / INDEX_FILE).read_bytes())
@@ -1294,6 +1480,7 @@ def validate_index(root: Path, *, hashes: bool = True) -> list[str]:
     if not isinstance(projects, dict) or not projects:
         return problems + ["projects is missing or empty"]
     referenced: set[str] = set()
+    hashed: set[str] = set()
     for name, project in projects.items():
         where = f"projects.{name}"
         if not isinstance(project, dict):
@@ -1308,50 +1495,10 @@ def validate_index(root: Path, *, hashes: bool = True) -> list[str]:
             continue
         seen_ids: set[str] = set()
         for i, ref in enumerate(refs):
-            rwhere = f"{where}.refs[{i}]"
-            if not isinstance(ref, dict):
-                problems.append(f"{rwhere} is not an object")
-                continue
-            ref_id = ref.get("id")
-            if not isinstance(ref_id, str) or not ref_id:
-                problems.append(f"{rwhere}.id is missing")
-            elif ref_id in seen_ids:
-                problems.append(f"{rwhere}: {ref_id!r} is listed twice")
-            seen_ids.add(ref_id)
-            if ref.get("kind") not in ("branch", "tag"):
-                problems.append(f"{rwhere}.kind is {ref.get('kind')!r}")
-            if not isinstance(ref.get("sha"), str) or not _HEX40.fullmatch(ref["sha"]):
-                problems.append(f"{rwhere}.sha is not a commit id")
-            if not isinstance(ref.get("describe"), str) or not ref.get("describe"):
-                problems.append(f"{rwhere}.describe is missing")
-            if not isinstance(ref.get("date"), str) or not _DATE_RE.fullmatch(ref["date"]):
-                problems.append(f"{rwhere}.date is not YYYY-MM-DD")
-            if not isinstance(ref.get("archs"), list) or not all(isinstance(a, str) for a in ref["archs"]):
-                problems.append(f"{rwhere}.archs is not a list of names")
-            if ref.get("checked") not in (True, False, None):
-                problems.append(f"{rwhere}.checked is {ref.get('checked')!r}")
-            libs = ref.get("libs")
-            if not isinstance(libs, dict) or not all(isinstance(k, str) and k.startswith("lib/")
-                                                     and k.count("/") == 1 for k in libs):
-                problems.append(f"{rwhere}.libs is not a map of lib/<dir> names")
-                libs = {}
-            core_libs = ref.get("core_libs")
-            if not isinstance(core_libs, list) or not all(isinstance(k, str) and k.startswith("lib/")
-                                                          for k in core_libs):
-                problems.append(f"{rwhere}.core_libs is not a list of lib/<dir> names")
-            elif set(core_libs) & set(libs):
-                problems.append(f"{rwhere}: {', '.join(sorted(set(core_libs) & set(libs)))} "
-                                "is both in the core and a bundle of its own")
-            for blob in [ref.get("core"), *libs.values()]:
-                if not isinstance(blob, str) or not _BLOB_RE.fullmatch(blob):
-                    problems.append(f"{rwhere}: not a bundle path: {blob!r}")
-                    continue
-                referenced.add(blob)
-            report = ref.get("check_report")
-            if report != f"{name}/{ref.get('sha')}/{REPORT_FILE}":
-                problems.append(f"{rwhere}.check_report is {report!r}")
-            elif not (root / report).is_file():
-                problems.append(f"{rwhere}: the report {report} does not exist")
+            referenced |= _check_ref(root, name, ref, f"{where}.refs[{i}]", ("branch", "tag"),
+                                     seen_ids, problems)
+        if "history" in project:
+            problems += _check_history(root, name, project["history"], seen_ids, hashed, hashes=hashes)
         # Order: the default branch first, then tags newest first, then branches.
         if refs and isinstance(refs[0], dict):
             first = refs[0]
@@ -1363,18 +1510,131 @@ def validate_index(root: Path, *, hashes: bool = True) -> list[str]:
             tags = [r.get("id") for r in refs if isinstance(r, dict) and r.get("kind") == "tag"]
             if tags != sorted(tags, key=version_key, reverse=True):
                 problems.append(f"{where}: the tags are not newest first")
+    problems += _check_blobs(root, referenced, blobs, hashed, hashes=hashes)
+    return problems
+
+
+def _check_ref(root: Path, name: str, ref: object, rwhere: str, kinds: tuple[str, ...],
+               seen_ids: set[str], problems: list[str]) -> set[str]:
+    """Check one entry of an index's or a history file's ``refs``; returns
+    the bundles it names."""
+    referenced: set[str] = set()
+    if not isinstance(ref, dict):
+        problems.append(f"{rwhere} is not an object")
+        return referenced
+    ref_id = ref.get("id")
+    if not isinstance(ref_id, str) or not ref_id:
+        problems.append(f"{rwhere}.id is missing")
+    elif ref_id in seen_ids:
+        problems.append(f"{rwhere}: {ref_id!r} is listed twice")
+    seen_ids.add(ref_id)
+    if ref.get("kind") not in kinds:
+        problems.append(f"{rwhere}.kind is {ref.get('kind')!r}")
+    if not isinstance(ref.get("sha"), str) or not _HEX40.fullmatch(ref["sha"]):
+        problems.append(f"{rwhere}.sha is not a commit id")
+    if not isinstance(ref.get("describe"), str) or not ref.get("describe"):
+        problems.append(f"{rwhere}.describe is missing")
+    if not isinstance(ref.get("date"), str) or not _DATE_RE.fullmatch(ref["date"]):
+        problems.append(f"{rwhere}.date is not YYYY-MM-DD")
+    if not isinstance(ref.get("archs"), list) or not all(isinstance(a, str) for a in ref["archs"]):
+        problems.append(f"{rwhere}.archs is not a list of names")
+    if ref.get("checked") not in (True, False, None):
+        problems.append(f"{rwhere}.checked is {ref.get('checked')!r}")
+    libs = ref.get("libs")
+    if not isinstance(libs, dict) or not all(isinstance(k, str) and k.startswith("lib/")
+                                             and k.count("/") == 1 for k in libs):
+        problems.append(f"{rwhere}.libs is not a map of lib/<dir> names")
+        libs = {}
+    core_libs = ref.get("core_libs")
+    if not isinstance(core_libs, list) or not all(isinstance(k, str) and k.startswith("lib/")
+                                                  for k in core_libs):
+        problems.append(f"{rwhere}.core_libs is not a list of lib/<dir> names")
+    elif set(core_libs) & set(libs):
+        problems.append(f"{rwhere}: {', '.join(sorted(set(core_libs) & set(libs)))} "
+                        "is both in the core and a bundle of its own")
+    for blob in [ref.get("core"), *libs.values()]:
+        if not isinstance(blob, str) or not _BLOB_RE.fullmatch(blob):
+            problems.append(f"{rwhere}: not a bundle path: {blob!r}")
+            continue
+        referenced.add(blob)
+    report = ref.get("check_report")
+    if report != f"{name}/{ref.get('sha')}/{REPORT_FILE}":
+        problems.append(f"{rwhere}.check_report is {report!r}")
+    elif not (root / report).is_file():
+        problems.append(f"{rwhere}: the report {report} does not exist")
+    return referenced
+
+
+def _check_blobs(root: Path, referenced: set[str], blobs: dict, hashed: set[str], *,
+                 hashes: bool, where: str = "") -> list[str]:
+    """Every bundle in ``referenced`` exists with the size ``blobs`` gives
+    (and the SHA-256 its name says), and ``blobs`` lists nothing else.
+    ``hashed`` remembers the bundles already hashed, which the index and the
+    history files share."""
+    problems = []
     for blob in sorted(referenced):
         path = root / blob
         info = blobs.get(blob)
         if not path.is_file():
-            problems.append(f"{blob} is referenced but does not exist")
+            problems.append(f"{where}{blob} is referenced but does not exist")
             continue
         if not isinstance(info, dict) or info.get("size") != path.stat().st_size:
-            problems.append(f"{blob}: the blobs table gives no size or the wrong one")
-        if hashes and hashlib.sha256(path.read_bytes()).hexdigest() != blob[len(BLOBS) + 1:-len(".tar.gz")]:
-            problems.append(f"{blob}: its SHA-256 does not match its name")
+            problems.append(f"{where}{blob}: the blobs table gives no size or the wrong one")
+        if hashes and blob not in hashed:
+            hashed.add(blob)
+            if hashlib.sha256(path.read_bytes()).hexdigest() != blob[len(BLOBS) + 1:-len(".tar.gz")]:
+                problems.append(f"{blob}: its SHA-256 does not match its name")
     for blob in sorted(set(blobs) - referenced):
-        problems.append(f"blobs lists {blob}, which no ref references")
+        problems.append(f"{where}blobs lists {blob}, which no ref references")
+    return problems
+
+
+def _check_history(root: Path, name: str, entry: object, ref_ids: set[str], hashed: set[str], *,
+                   hashes: bool) -> list[str]:
+    """Check a project's ``history`` entry in the index and the history file
+    it names: the file's fields, each snapshot as an index ref of kind
+    "commit" whose id is its describe string and no current ref's id, newest
+    first, the count, and the file's bundles and their table."""
+    where = f"projects.{name}.history"
+    if not isinstance(entry, dict):
+        return [f"{where} is not an object"]
+    if entry.get("file") != history_file(name):
+        return [f"{where}.file is {entry.get('file')!r}, expected {history_file(name)!r}"]
+    fname = entry["file"]
+    try:
+        history = json.loads((root / fname).read_bytes())
+    except (OSError, ValueError) as e:
+        return [f"cannot read {fname}: {e}"]
+    if not isinstance(history, dict):
+        return [f"{fname} is not an object"]
+    problems = []
+    if history.get("schema") != SCHEMA:
+        problems.append(f"{fname}: schema is {history.get('schema')!r}, expected {SCHEMA}")
+    if history.get("project") != name:
+        problems.append(f"{fname}: project is {history.get('project')!r}, expected {name!r}")
+    refs = history.get("refs")
+    if not isinstance(refs, list) or not refs:
+        return problems + [f"{fname}: refs is missing or empty"]
+    if entry.get("count") != len(refs):
+        problems.append(f"{where}.count is {entry.get('count')!r}, but {fname} lists {len(refs)}")
+    blobs = history.get("blobs")
+    if not isinstance(blobs, dict):
+        problems.append(f"{fname}: blobs is not an object")
+        blobs = {}
+    referenced: set[str] = set()
+    seen_ids: set[str] = set()
+    for i, ref in enumerate(refs):
+        rwhere = f"{fname}: refs[{i}]"
+        referenced |= _check_ref(root, name, ref, rwhere, ("commit",), seen_ids, problems)
+        if isinstance(ref, dict):
+            if ref.get("id") != ref.get("describe"):
+                problems.append(f"{rwhere}: id {ref.get('id')!r} is not its describe string")
+            if ref.get("id") in ref_ids:
+                problems.append(f"{rwhere}: {ref.get('id')!r} is also a ref of the index")
+    dates = [r.get("date") for r in refs if isinstance(r, dict) and isinstance(r.get("date"), str)]
+    if dates != sorted(dates, reverse=True):
+        problems.append(f"{fname}: the snapshots are not newest first")
+    problems += _check_blobs(root, referenced, blobs, hashed, hashes=hashes, where=f"{fname}: ")
     return problems
 
 
@@ -1386,25 +1646,35 @@ def _size(n: int) -> str:
     return f"{n / 1048576:.2f} MB"
 
 
-def size_summary(index: dict) -> list[str]:
-    """Lines for the log: per project, the bundles its refs reference and what
-    they would weigh without sharing; then the totals and the cross-project
-    sharing."""
+def size_summary(index: dict, histories: dict[str, dict] | None = None) -> list[str]:
+    """Lines for the log: per project, the bundles its refs and history
+    snapshots reference and what they would weigh without sharing; then the
+    totals and the cross-project sharing."""
+    histories = histories or {}
     sizes = {blob: info["size"] for blob, info in index["blobs"].items()}
+    for h in histories.values():
+        sizes.update((blob, info["size"]) for blob, info in h["blobs"].items())
     users: dict[str, set[str]] = {}
     lines = []
     naive_total = 0
     for name, project in index["projects"].items():
         own: set[str] = set()
         naive = 0
-        for ref in project["refs"]:
+        history = histories.get(name, {}).get("refs", [])
+        if history:
+            current = {b for ref in project["refs"] for b in [ref["core"], *ref["libs"].values()]}
+            extra = {b for ref in history for b in [ref["core"], *ref["libs"].values()]} - current
+            lines.append(f"  {name} history: {len(history)} snapshots, {len(extra)} bundles of "
+                         f"their own, {_size(sum(sizes[b] for b in extra))}")
+        for ref in project["refs"] + history:
             refs_blobs = [ref["core"], *ref["libs"].values()]
             own.update(refs_blobs)
             naive += sum(sizes[b] for b in refs_blobs)
             for blob in refs_blobs:
                 users.setdefault(blob, set()).add(name)
         naive_total += naive
-        lines.append(f"  {name}: {len(project['refs'])} refs, {len(own)} bundles, "
+        lines.append(f"  {name}: {len(project['refs'])} refs"
+                     + (f" and {len(history)} history snapshots" if history else "") + f", {len(own)} bundles, "
                      f"{_size(sum(sizes[b] for b in own))} (without sharing {_size(naive)})")
     total = sum(sizes.values())
     shared = [b for b, names in users.items() if len(names) > 1]
@@ -1428,15 +1698,129 @@ def _check_folders(out: Path, cache: Path) -> None:
         raise ValueError("--out and --cache must be different folders")
 
 
+def _build_history(policy: Policy, project: ProjectPolicy, head: str, cache: Path, repos: _Repos,
+                   state: dict, today: _dt.date, now: _dt.datetime, *, gate: bool, matrix: Path,
+                   run: str | None, deadline: float | None, gate_minutes: float | None, log,
+                   warnings: list[str]) -> list[str]:
+    """Snapshot and gate a project's history: the first-parent commits of
+    the default branch in its window. The commit list is kept in the state
+    with the head it was listed from, so a run whose default branch has not
+    moved needs no clone. Returns the snapshots that failed the gate."""
+    name = project.name
+    project_state = _project_state(state, name)
+    if not project.history_days:
+        project_state.pop("history_list", None)
+        return []
+    since = history_since(project, today)
+    listed = project_state.get("history_list")
+    if listed and listed["head"] == head and listed["since"] <= since:
+        commits = [(sha, ct) for sha, ct in listed["commits"]]
+    else:
+        commits = list_history(repos.get(project), head, since)
+        project_state["history_list"] = {"head": head, "since": since,
+                                         "commits": [[sha, ct] for sha, ct in commits]}
+    kept = select_history(project, commits, head, since)
+    window = _dt.datetime.fromtimestamp(since, _dt.timezone.utc).strftime("%Y-%m-%d")
+    new = gated = reused = 0
+    failed: list[str] = []
+    verdicts = None
+    for sha, _ct in kept:
+        manifest = snapshot_current(policy, cache, name, sha)
+        if manifest is None:
+            manifest = build_snapshot(policy, project, sha, cache, repos.get(project), lambda _m: None,
+                                      warnings)
+            new += 1
+            log(f"{name} history {manifest['describe']}: new snapshot")
+        report = _read_json(snapshot_dir(cache, name, sha) / REPORT_FILE)
+        if gate and gate_needed(report, matrix, gate=gate, run=run):
+            # Most commits change only what no bundle holds (the host's
+            # klippy/, docs/, config/): a snapshot with the same bundles as
+            # one already gated builds the same firmware but for the version
+            # string, so it takes that verdict.
+            if verdicts is None:
+                verdicts = _gate_verdicts(cache, name, matrix, run, policy.history_gate)
+            same = verdicts.get(_bundle_key(manifest))
+            if same:
+                report = _reuse_gate(cache, manifest, same, now=now, run=run)
+                reused += 1
+                if report["checked"] is False:
+                    failed.append(f"{name} {manifest['describe']}")
+                continue
+        if gate_needed(report, matrix, gate=gate, run=run):
+            skip = None if gate else "it was skipped (--no-gate)"
+            if skip is None and deadline is not None and time.monotonic() > deadline:
+                skip = (f"this run's {gate_minutes:g} minutes for the gate ran out; "
+                        "a later run gates it")
+            if skip is None:
+                log(f"{name} history {manifest['describe']}: gate")
+                gated += 1
+            report = run_gate(cache, manifest, manifest["describe"], matrix,
+                              log if skip is None else (lambda _m: None), now=now, skip=skip,
+                              run=run, mode=policy.history_gate)
+            if report["checked"] is False:
+                failed.append(f"{name} {manifest['describe']}")
+            if skip is None and verdicts is not None and report.get("rows"):
+                verdicts[_bundle_key(manifest)] = report
+    record_history(state, name, kept, today)
+    log(f"{name}: {len(kept)} history snapshots since {window} ({new} new, {gated} gated"
+        + (f", {reused} with the verdict of the same bundles" if reused else "") + ")")
+    return failed
+
+
+def _bundle_key(manifest: dict) -> tuple:
+    """What a snapshot's firmware is built from: its core and lib bundles."""
+    return (manifest["core"]["blob"], tuple(sorted(lib["blob"] for lib in manifest["libs"].values())))
+
+
+def _gate_verdicts(cache: Path, project: str, matrix: Path, run: str | None, mode: str) -> dict:
+    """The gate reports of a project's cached snapshots that a snapshot with
+    the same bundles may take: the gate ran (it has rows), is not due to run
+    again (``gate_needed``), and was at least as thorough as ``mode`` (a full
+    gate stands for a reduced one). By ``_bundle_key``."""
+    verdicts: dict[tuple, dict] = {}
+    folder = cache / project
+    for path in sorted(folder.glob(f"*/{REPORT_FILE}")) if folder.is_dir() else []:
+        report = _read_json(path)
+        if not report or not report.get("rows"):
+            continue
+        if gate_needed(report, matrix, gate=True, run=run):
+            continue
+        if report.get("gate", "full") not in ("full", mode):
+            continue
+        manifest = _read_json(path.parent / REF_FILE)
+        if manifest:
+            verdicts.setdefault(_bundle_key(manifest), report)
+    return verdicts
+
+
+def _reuse_gate(cache: Path, manifest: dict, source: dict, *, now: _dt.datetime,
+                run: str | None) -> dict:
+    """Give a snapshot the gate report of another with the same bundles,
+    naming it in ``same_as``."""
+    report = dict(source, sha=manifest["sha"], describe=manifest["describe"], ran=_stamp(now),
+                  same_as=source["sha"],
+                  note=f"The same bundles as {source['describe']}, whose gate this is.")
+    if run is not None:
+        report["run"] = run
+    else:
+        report.pop("run", None)
+    _write_json(snapshot_dir(cache, manifest["project"], manifest["sha"]) / REPORT_FILE, report)
+    return report
+
+
 def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None = None,
           refs: list[str] | None = None, gate: bool = True, matrix: Path = DEFAULT_MATRIX,
           clones: Path | None = None, run: str | None = None, now: _dt.datetime | None = None,
-          log=_log) -> int:
+          history: bool = True, gate_minutes: float | None = None, log=_log) -> int:
     """``webflash sources build``: snapshot what the policy selects, gate the
     new snapshots, age out old refs, and publish into ``out``. The full
     clones go to ``clones`` (default ``<cache>/git``); ``run`` names this run
-    (see ``gate_needed``). Returns the exit code: 0, or 2 when a listed
-    snapshot failed the gate in this run."""
+    (see ``gate_needed``). The refs come first, then the history snapshots
+    (``history`` False, or a ``--ref`` run, leaves those as recorded); once
+    ``gate_minutes`` have passed since the start, history snapshots are
+    published ungated (checked: null) and a later run gates them. Returns the
+    exit code: 0, or 2 when a listed snapshot failed the gate in this run."""
+    started = time.monotonic()
     now = now or _dt.datetime.now(_dt.timezone.utc)
     today = now.astimezone(_dt.timezone.utc).date()
     _check_folders(out, cache)
@@ -1454,9 +1838,11 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
         del state["projects"][name]
     matched_refs: set[str] = set()
     failed_now: list[str] = []
+    heads: dict[str, str] = {}
     for name in names:
         project = policy.projects[name]
         selected = select_refs(project, list_refs(project), warnings)
+        heads[name] = selected[0].sha
         if refs:
             matched_refs.update(r.name for r in selected if r.name in refs)
             selected = [r for r in selected if r.name in refs]
@@ -1482,21 +1868,29 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
         missing = sorted(set(refs) - matched_refs)
         if missing:
             raise ValueError(f"the policy selects no ref named {', '.join(missing)}")
+    history_ran = [] if refs or not history else names
+    deadline = None if gate_minutes is None else started + gate_minutes * 60
+    for name in history_ran:
+        failed_now += _build_history(policy, policy.projects[name], heads[name], cache, repos, state,
+                                     today, now, gate=gate, matrix=matrix, run=run,
+                                     deadline=deadline, gate_minutes=gate_minutes, log=log,
+                                     warnings=warnings)
     dropped = age_out(state, today, policy.age_days, policy.superseded_days,
-                      [] if refs else names)
+                      [] if refs else names, history_ran)
     for line in dropped:
         log(f"aged out: {line}")
     save_state(cache, state)
     removed = collect_garbage(cache, state)
-    index = make_index(policy, cache, state, now, warnings)
-    result = publish(cache, out, index, state)
+    histories = make_histories(policy, cache, state, warnings)
+    index = make_index(policy, cache, state, now, warnings, histories)
+    result = publish(cache, out, index, state, histories)
     for warning in warnings:
         print(f"Warning: {warning}", file=sys.stderr, flush=True)
     log(f"index: {'written' if result['index_changed'] else 'unchanged'}, "
         f"{result['copied']} bundles copied, {result['removed']} files removed from {out}"
         + (f", {removed} cache files dropped" if removed else ""))
     log("sizes:")
-    for line in size_summary(index):
+    for line in size_summary(index, histories):
         log(line)
     # A run fails for the gate failures it found itself (SPEC 7.5): a ref that
     # failed an earlier run, under the same engine and matrix, is only a
@@ -1508,6 +1902,11 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
     if earlier:
         print(f"Warning: still checked: false from an earlier run: {', '.join(earlier)}",
               file=sys.stderr, flush=True)
+    for name, h in histories.items():
+        old = [r for r in h["refs"] if r["checked"] is False and f"{name} {r['id']}" not in failed_now]
+        if old:
+            print(f"Warning: {name}: {len(old)} history snapshots still checked: false from an earlier "
+                  f"run, the newest {old[0]['id']}", file=sys.stderr, flush=True)
     if failed_now:
         print(f"Error: the snapshot gate failed for {', '.join(failed_now)}: published with "
               "checked: false (see each ref's make-check.json)", file=sys.stderr, flush=True)
@@ -1530,8 +1929,9 @@ def rebuild_index(policy: Policy, out: Path, cache: Path, *,
         log(f"aged out: {line}")
     save_state(cache, state)
     warnings: list[str] = []
-    index = make_index(policy, cache, state, now, warnings)
-    result = publish(cache, out, index, state)
+    histories = make_histories(policy, cache, state, warnings)
+    index = make_index(policy, cache, state, now, warnings, histories)
+    result = publish(cache, out, index, state, histories)
     for warning in warnings:
         print(f"Warning: {warning}", file=sys.stderr, flush=True)
     log(f"index: {'written' if result['index_changed'] else 'unchanged'}, "
@@ -1576,6 +1976,13 @@ def _parser() -> argparse.ArgumentParser:
                    help="An id for this run, such as $GITHUB_RUN_ID. A snapshot that failed the "
                         "gate under the same id is checked again, so a re-run of a failed run "
                         "does not pass on the first attempt's cache.")
+    b.add_argument("--no-history", action="store_true",
+                   help="Leave the history snapshots (history_days) as an earlier run recorded "
+                        "them: no listing, no new ones, no aging.")
+    b.add_argument("--gate-minutes", type=float, default=None, metavar="M",
+                   help="Gate history snapshots only until M minutes have passed since the start; "
+                        "the rest are published with checked: null and a later run gates them. "
+                        "The refs are always gated.")
 
     i = sub.add_parser("index", help="rewrite the index from the cache",
                        description="Age out old refs and write the index and the bundles into "
@@ -1603,16 +2010,23 @@ def main(argv: list[str]) -> int:
                 return 1
             index = json.loads((args.out / INDEX_FILE).read_bytes())
             refs = sum(len(p["refs"]) for p in index["projects"].values())
+            history = sum(p["history"]["count"] for p in index["projects"].values() if "history" in p)
+            blobs = {blob: info["size"] for blob, info in index["blobs"].items()}
+            for p in index["projects"].values():
+                if "history" in p:
+                    h = json.loads((args.out / p["history"]["file"]).read_bytes())
+                    blobs.update((blob, info["size"]) for blob, info in h["blobs"].items())
             print(f"{args.out / INDEX_FILE}: valid, {len(index['projects'])} projects, "
-                  f"{refs} refs, {len(index['blobs'])} bundles "
-                  f"({_size(sum(b['size'] for b in index['blobs'].values()))})")
+                  f"{refs} refs, {history} history snapshots, {len(blobs)} bundles "
+                  f"({_size(sum(blobs.values()))})")
             return 0
         policy = load_policy(args.policy)
         if args.action == "index":
             return rebuild_index(policy, args.out, args.cache)
         return build(policy, args.out, args.cache, projects=args.project, refs=args.ref,
                      gate=not args.no_gate, matrix=args.matrix, clones=args.clones,
-                     run=args.run or None)
+                     run=args.run or None, history=not args.no_history,
+                     gate_minutes=args.gate_minutes)
     except (ValueError, SourcesError, OSError) as e:
         for line in str(e).splitlines() or [""]:
             print(f"Error: {line}", file=sys.stderr)
