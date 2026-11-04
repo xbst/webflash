@@ -264,6 +264,7 @@ class Evaluator:
         self.makefiles: list[str] = []
         self._frames: list[dict[str, str]] = []
         self._expanding: set[str] = set()
+        self._building_env = False
         self._done: dict[str, bool] = {}
         self._updating: list[str] = []
         self._mentioned_cache: Optional[set[str]] = None
@@ -1012,11 +1013,30 @@ class Evaluator:
         }
 
     def _recipe_env(self) -> dict[str, str]:
+        """The environment of a recipe or a ``$(shell)``: the exported
+        variables, expanded. A variable being expanded is left out, as GNU
+        make leaves it out, and a ``$(shell)`` reached while the environment
+        is being built gets only the simple variables, so an exported
+        variable whose value runs ``$(shell)`` does not recurse."""
         env = dict(self.env)
-        for var in self.vars.exported():
-            if var.origin == ORIGIN_AUTOMATIC:
-                continue
-            env[var.name] = self.expand(var.value) if var.recursive else var.value
+        nested = self._building_env
+        self._building_env = True
+        try:
+            for var in self.vars.exported():
+                if var.origin == ORIGIN_AUTOMATIC or var.name in self._expanding:
+                    continue
+                if not var.recursive:
+                    env[var.name] = var.value
+                    continue
+                if nested:
+                    continue
+                self._expanding.add(var.name)
+                try:
+                    env[var.name] = self.expand(var.value)
+                finally:
+                    self._expanding.discard(var.name)
+        finally:
+            self._building_env = nested
         return env
 
     async def _update(self, name: str, dry_run: bool, remaking_makefiles: bool = False) -> bool:
