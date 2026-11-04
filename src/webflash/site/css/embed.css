@@ -1,20 +1,22 @@
-/* The embed runtime's controls (js/embed/), on a generated page. Only the
-   theme's variables are used (--accent, --control-bg, --log-bg, ...: the
-   page defines them for light and dark), and sizes are in em, so the theme's
-   font_scale reaches everything. The page's own stylesheet styles the card,
-   the title, the description and the photo. The flash panel's rules match
-   the classes js/flash/flash-ui.js writes. */
+/* The embed runtime's card (js/embed/), on a generated page: the site's
+   wizard in a card. Only the theme's variables are used (--accent,
+   --control-bg, --log-bg, ...: the page defines them for light and dark),
+   and sizes are in em, so the theme's font_scale reaches everything. The
+   page's own stylesheet styles the card box, the title, the description and
+   the photo. The build rows match the classes js/build/build-panel.js
+   writes, the flash panel's those of js/flash/flash-ui.js. The frame is the
+   viewport, so the media queries follow the card's width. */
 
-.wf-app { display: flex; flex-direction: column; gap: .8em; }
+.wf-app { display: flex; flex-direction: column; }
 .wf-app [hidden] { display: none !important; }
 .wf-app .wf-title { margin: 0; }
 .wf-app .wf-desc p:last-child { margin-bottom: 0; }
-.wf-app .wf-image { margin: 0 auto; }
-.wf-app .wf-box p, .wf-app .wf-version p, .wf-app .wf-option-note, .wf-app .wf-foot, .wf-app > p { margin: 0; }
-.wf-app h2.wf-section {
-  margin: 0; font-size: .8em; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted);
-}
+.wf-app .wf-box p, .wf-app .wf-option-note, .wf-app .wf-fixed { margin: 0; }
 .wf-muted { color: var(--text-muted); }
+.wf-app :focus { outline: none; }
+.wf-app :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A step's title takes the focus when the step shows, for keyboard and screen reader users. */
+.wf-app [data-wiz-title]:focus-visible { outline: none; }
 
 /* --- Controls --- */
 
@@ -26,6 +28,8 @@
 .wf-app button:hover:not(:disabled) { border-color: var(--accent); }
 .wf-app button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .wf-app button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.wf-app button.ghost { background: none; border-color: transparent; color: var(--text-muted); }
+.wf-app button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--control-border); }
 .wf-app button:disabled { opacity: .5; cursor: default; }
 .wf-app button.mini { padding: .1em .55em; font-size: .78em; font-weight: 400; }
 .wf-app select, .wf-app input[type="text"] {
@@ -34,11 +38,87 @@
 }
 .wf-app select { cursor: pointer; }
 .wf-app select:disabled, .wf-app input:disabled { opacity: .55; cursor: default; }
-.wf-app input[type="checkbox"], .wf-app input[type="radio"] { accent-color: var(--accent); width: 1.1em; height: 1.1em; margin: 0; }
-.wf-app :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wf-app input[type="checkbox"], .wf-app input[type="radio"] { accent-color: var(--accent); width: 1.1em; height: 1.1em; margin: 0; flex: none; }
 .wf-app progress { width: 100%; height: .5em; accent-color: var(--accent); }
 
-/* --- Boxes: notices, errors, the download list --- */
+/* --- The steps --- */
+
+.wf-steps { display: flex; list-style: none; gap: .3em; margin: 0 0 1.1em; padding: 0; }
+.wf-steps li { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .4em; font-size: .8em; color: var(--text-muted); }
+.wf-steps li::before { content: ""; height: 3px; border-radius: 2px; background: var(--divider); }
+.wf-steps li.done::before { background: var(--accent); opacity: .5; }
+.wf-steps li.now { color: var(--text); font-weight: 500; }
+.wf-steps li.now::before { background: var(--accent); }
+.wf-steps li > span, .wf-steps li > button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-app .wf-steps li > button {
+  padding: 0; background: none; border: 0; color: inherit; font-size: inherit; text-align: left; font-weight: inherit;
+}
+.wf-app .wf-steps li > button:hover { color: var(--text); text-decoration: underline; }
+
+.wf-app .wiz-step { display: flex; flex-direction: column; }
+.wf-app .wiz-body { display: flex; flex-direction: column; gap: .8em; min-width: 0; }
+.wf-app .wiz-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5em .6em;
+  margin-top: 1.1em; padding-top: .8em; border-top: 1px solid var(--divider);
+}
+.wf-app .wiz-hint { flex: 1 1 12em; min-width: 0; color: var(--text-muted); font-size: .85em; }
+.wf-app .wiz-hint:empty { visibility: hidden; }
+.wf-app .wf-page { margin: 0; font-size: 1.15em; font-weight: 600; line-height: 1.3; }
+.wf-app .wf-lead { margin: -.5em 0 0; color: var(--text-muted); font-size: .9em; }
+.wf-app .wf-lead:empty { display: none; }
+.wf-app h2.wf-sec {
+  margin: .4em 0 -.3em; font-size: .75em; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted);
+}
+.wf-strip { margin: 0; font-size: .85em; color: var(--text-muted); }
+.wf-strip strong { color: var(--text); font-weight: 500; }
+
+/* --- Page 1: the board, what to flash --- */
+
+.wf-board { display: flex; flex-direction: column; gap: .4em; }
+.wf-board.wf-has-image { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 11em); gap: 1em; align-items: start; }
+.wf-card[data-show-image="false"] .wf-board.wf-has-image { display: flex; }
+.wf-board-text { display: flex; flex-direction: column; gap: .4em; min-width: 0; }
+.wf-app .wf-board .wf-image { margin: 0; width: 100%; height: auto; max-height: 12em; object-fit: contain; border-radius: 8px; }
+
+.wf-fw {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .6em .9em; align-items: center;
+  padding: .75em .9em; border: 1px solid var(--panel-border); border-radius: 10px;
+}
+.wf-fw.off .what .sub { opacity: .7; }
+.wf-fw .what { display: flex; flex-direction: column; gap: .1em; min-width: 0; }
+.wf-fw .name { font-weight: 500; }
+.wf-fw label.check { display: inline-flex; align-items: center; gap: .5em; cursor: pointer; }
+.wf-fw .sub { color: var(--text-muted); font-size: .85em; }
+.wf-fw .ver { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: .7em; min-width: 0; }
+.wf-ver-label { color: var(--text-muted); font-size: .85em; min-width: 3.6em; padding-top: .45em; }
+.wf-fw .ver .wf-fixed { padding-top: .25em; }
+.wf-picker { flex: 1; min-width: 0; }
+.wf-fixed { font-size: .93em; font-family: var(--mono-font); }
+.wf-fixed .wf-why { font-family: inherit; font-size: .9em; }
+.wf-fixedname { font-weight: 500; }
+.wf-seg { display: inline-flex; border: 1px solid var(--control-border); border-radius: 7px; overflow: hidden; }
+.wf-app .wf-seg button { border: 0; border-radius: 0; padding: .35em .9em; background: none; color: var(--text); }
+.wf-app .wf-seg button + button { border-left: 1px solid var(--control-border); }
+.wf-app .wf-seg button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.wf-app .wf-seg button.on, .wf-app .wf-seg button.on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); font-weight: 600;
+}
+.wf-pick-note { margin: 0; font-size: .85em; }
+.wf-app .wf-file { margin: 0; font-size: .93em; }
+.wf-pick { display: flex; flex-direction: column; gap: .7em; }
+
+/* The version picker (configure/version-picker.js styles itself): its list
+   opens in the flow here, so the card grows and the frame with it. */
+.wf-app .wf-vp { max-width: none; }
+.wf-app .wf-vp-input { font-size: .93em; }
+.wf-app .wf-vp-list {
+  position: static; flex-basis: 100%; margin-top: .2em; max-height: 18em; box-shadow: none;
+  background: var(--control-bg); color: var(--control-text);
+}
+.wf-app .wf-vp-option { color: var(--control-text); }
+.wf-app .wf-vp-option.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* --- Boxes: notices, errors --- */
 
 .wf-notes { display: flex; flex-direction: column; gap: .5em; }
 .wf-notes:empty { display: none; }
@@ -49,35 +129,24 @@
 .wf-box.wf-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
 .wf-box.wf-error { border-color: var(--error); background: color-mix(in srgb, var(--error) 8%, transparent); }
 .wf-box.wf-info { border-color: var(--accent); }
-.wf-box.wf-consent { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .wf-box.wf-error strong { color: var(--error); }
 .wf-box pre {
   margin: 0; padding: .45em .6em; max-height: 16em; overflow: auto; width: 100%;
   background: var(--log-bg); color: var(--log-text); border-radius: 4px;
   font-family: var(--mono-font); font-size: .85em; white-space: pre-wrap; word-break: break-word;
 }
-.wf-downloads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25em; width: 100%; }
-.wf-downloads li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15em .7em; }
-.wf-downloads li > span:first-child { flex: 1 1 60%; min-width: 0; }
-.wf-size { font-family: var(--mono-font); font-size: .9em; white-space: nowrap; }
-.wf-cached { font-size: .85em; color: var(--ok); white-space: nowrap; }
-.wf-badge {
+.wf-badge, .wf-app .wf-vp-badge {
   display: inline-block; padding: 0 .45em; border: 1px solid var(--warn); border-radius: 1em;
-  color: var(--warn); font-size: .75em; line-height: 1.5; vertical-align: middle;
+  color: var(--warn); font-size: .75em; line-height: 1.5; vertical-align: middle; font-family: var(--ui-font);
 }
 
-/* --- Firmware: project, version, options --- */
+/* --- Options --- */
 
-.wf-fw { display: flex; flex-direction: column; gap: .7em; }
-.wf-version p { margin: 0; }
-.wf-fixed { font-size: .95em; }
-.wf-fixed strong { font-weight: 600; }
-.wf-row, .wf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5em .8em; }
-.wf-field { display: inline-flex; align-items: center; gap: .45em; color: var(--text-muted); font-size: .93em; min-width: 0; }
-.wf-field select { color: var(--control-text); }
-
-.wf-options { display: flex; flex-direction: column; gap: .55em; padding: .6em 0; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
-.wf-option { display: grid; grid-template-columns: minmax(8em, 1fr) minmax(0, 1.6fr); gap: .25em .8em; align-items: center; }
+.wf-options { display: flex; flex-direction: column; gap: .55em; }
+.wf-opts { display: flex; flex-direction: column; gap: .8em; }
+.wf-opts:empty { display: none; }
+.wf-opts .wf-options { padding: .7em .9em; border: 1px solid var(--panel-border); border-radius: 10px; }
+.wf-option { display: grid; grid-template-columns: minmax(8em, 1fr) minmax(0, 1.4fr); gap: .25em .8em; align-items: center; }
 .wf-option-label { font-weight: 500; }
 .wf-option-control { display: flex; align-items: center; gap: .4em; min-width: 0; flex-wrap: wrap; }
 .wf-option-control select, .wf-option-control input[type="text"] { width: 100%; }
@@ -88,16 +157,83 @@
 .wf-option-help p:last-child { margin-bottom: 0; }
 .wf-more p { margin-top: .3em; }
 
-/* --- Build: the button, the progress, the result --- */
+/* --- Setup: one card per [[setup]] --- */
 
-.wf-status { font-size: .88em; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-status.busy { color: var(--text); }
-.wf-status.ok { color: var(--ok); }
-.wf-status.error { color: var(--error); }
-.wf-progress { display: flex; flex-direction: column; gap: .3em; }
-.wf-step { font-family: var(--mono-font); font-size: .82em; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-choices { display: flex; flex-direction: column; gap: .5em; }
+.wf-choice {
+  display: flex; gap: .8em; align-items: flex-start; padding: .75em .9em; cursor: pointer;
+  border: 1px solid var(--panel-border); border-radius: 10px;
+}
+.wf-choice input { margin-top: .2em; }
+.wf-choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.wf-choice.no { opacity: .5; cursor: not-allowed; }
+.wf-choice-main { display: flex; flex-direction: column; gap: .15em; min-width: 0; flex: 1; }
+.wf-choice .name { font-weight: 500; }
+.wf-choice .sub { color: var(--text-muted); font-size: .88em; }
+.wf-choice-opts:empty { display: none; }
+.wf-choice-opts { margin-top: .5em; cursor: default; }
 
-.wf-app .memory { border-collapse: collapse; font-size: .85em; width: 100%; }
+/* --- Build: the prerequisites, one row per firmware, the result --- */
+
+.wf-build { display: flex; flex-direction: column; gap: .7em; }
+.wf-build .build-pre { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25em 1em; font-size: .85em; color: var(--text-muted); }
+.wf-build .build-pre:empty { display: none; }
+.wf-build .build-pre li { display: inline-flex; align-items: center; gap: .35em; }
+.wf-build .build-pre li.pre-ok::before { content: "\2713"; color: var(--ok); }
+.wf-build .build-pre li.pre-wait::before { content: "\25CB"; }
+.wf-build .build-jobs { display: flex; flex-direction: column; gap: .5em; }
+.wf-build .build-jobs:empty { display: none; }
+.wf-app .job { border: 1px solid var(--panel-border); border-radius: 10px; padding: .7em .9em; display: flex; flex-direction: column; gap: .5em; }
+.wf-app .job-head { display: flex; align-items: baseline; gap: .5em; min-width: 0; }
+.wf-app .job-name { font-weight: 500; }
+.wf-app .job-version { font-family: var(--mono-font); font-size: .75em; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-app .job-status { margin-left: auto; color: var(--text-muted); font-size: .85em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-app .job-status.done { color: var(--ok); }
+.wf-app .job-status.done::before { content: "\2713  "; }
+.wf-app .job-status.failed { color: var(--error); }
+.wf-app .job-bar { height: .4em; }
+.wf-app .job-files:empty { display: none; }
+.wf-app .job-error:empty { display: none; }
+.wf-app .build-error, .wf-app .job-error {
+  padding: .6em .8em; border: 1px solid var(--error); border-left-width: 3px; border-radius: 6px; font-size: .9em;
+  background: color-mix(in srgb, var(--error) 8%, transparent); display: flex; flex-direction: column; gap: .35em;
+}
+.wf-app .build-error strong, .wf-app .job-error strong { color: var(--error); }
+.wf-app .build-error p, .wf-app .job-error p { margin: 0; }
+.wf-app .build-error pre, .wf-app .job-error pre {
+  margin: 0; padding: .45em .6em; max-height: 14em; overflow: auto; background: var(--log-bg); color: var(--log-text);
+  border-radius: 4px; font-family: var(--mono-font); font-size: .82em; white-space: pre-wrap; word-break: break-word;
+}
+.wf-app .build-start ul { margin: 0; padding-left: 1.2em; }
+.wf-app .build-start li { display: flex; gap: .7em; }
+.wf-app .build-start .dl-size, .wf-app .build-start .dl-cached { color: var(--text-muted); font-family: var(--mono-font); font-size: .9em; }
+.wf-app .build-start-actions { display: flex; gap: .5em; }
+.wf-card[data-compact="true"] .wf-mem { display: none !important; }
+
+.wf-app .spinner, .wf-app .flash-write .spinner {
+  display: inline-block; width: .8em; height: .8em; border: 2px solid var(--panel-border); border-top-color: var(--accent);
+  border-radius: 50%; animation: wf-spin .8s linear infinite; flex: none;
+}
+@keyframes wf-spin { to { transform: rotate(360deg); } }
+
+.wf-app .progress-list {
+  list-style: none; margin: .4em 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  max-height: 12em; overflow: auto; font-family: var(--mono-font); font-size: .78em;
+}
+.wf-app .progress-list:empty { display: none; }
+.wf-app .build-row { display: flex; align-items: center; gap: .5em; min-height: 1.4em; }
+.wf-app .build-row .row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-app .build-row .row-note { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wf-app .row-icon { width: .9em; height: .9em; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.wf-app .build-row.running .row-icon { border: 2px solid var(--panel-border); border-top-color: var(--accent); border-radius: 50%; animation: wf-spin .8s linear infinite; }
+.wf-app .build-row.done { color: var(--text-muted); }
+.wf-app .build-row.done .row-icon::before { content: "\2713"; color: var(--ok); }
+.wf-app .build-row.failed .row-icon::before { content: "\2715"; color: var(--error); }
+.wf-app .build-row.failed .row-text { color: var(--error); }
+.wf-app .build-row.cancelled { color: var(--text-muted); }
+.wf-app .build-row.cancelled .row-icon::before { content: "\2013"; }
+
+.wf-app .memory { border-collapse: collapse; font-size: .85em; width: 100%; margin-top: .4em; }
 .wf-app .memory caption { text-align: left; color: var(--text-muted); padding-bottom: .25em; }
 .wf-app .memory th { text-align: left; font-weight: 500; padding: .1em .8em .1em 0; white-space: nowrap; width: 1%; }
 .wf-app .memory td { padding: .1em 0; }
@@ -114,10 +250,10 @@
 .wf-app .artifacts-version { font-family: var(--mono-font); }
 .wf-app .artifacts-stale { color: var(--warn); }
 .wf-app .artifact-buttons { display: flex; flex-wrap: wrap; gap: .4em; }
-.wf-app button.artifact { display: inline-flex; align-items: baseline; gap: .45em; font-family: var(--mono-font); font-size: .82em; }
+.wf-app button.artifact { display: inline-flex; align-items: baseline; gap: .45em; font-family: var(--mono-font); font-size: .78em; }
 .wf-app .artifact-size { opacity: .7; font-size: .9em; }
 
-/* --- Logs --- */
+/* --- Folds and logs --- */
 
 .wf-app .log-box summary, .wf-app .help-box summary, .wf-app .wf-more summary {
   display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-size: .88em; list-style: none;
@@ -132,10 +268,19 @@
   font-family: var(--mono-font); font-size: .8em; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
 }
+.wf-app .wf-about-fold { margin-top: .2em; padding-top: .7em; border-top: 1px solid var(--divider); }
+.wf-app .wf-about { font-size: .85em; }
+.wf-app .wf-about h3 { margin: .9em 0 .3em; font-size: .85em; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
+.wf-app .about-table { border-collapse: collapse; width: 100%; }
+.wf-app .about-table td { padding: .2em .6em .2em 0; vertical-align: top; border-bottom: 1px solid var(--divider); }
+.wf-app .about-table td:first-child { color: var(--text-muted); width: 40%; }
+.wf-app .about-note { color: var(--text-muted); font-size: .9em; }
+.wf-app .about-licenses { margin: 0; padding-left: 1.2em; }
+.wf-app .about-links { display: flex; flex-wrap: wrap; align-items: center; gap: .5em 1.2em; margin: .9em 0 0; }
 
 /* --- The flash panel (js/flash/flash-ui.js) --- */
 
-.wf-flash { display: flex; flex-direction: column; gap: .5em; padding-top: .7em; border-top: 1px solid var(--divider); }
+.wf-flash { display: flex; flex-direction: column; gap: .5em; }
 .wf-app .flash-panel { display: flex; flex-direction: column; gap: .6em; }
 .wf-app .flash-panel .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; }
 .wf-app .flash-panel .card-spacer { display: none; }
@@ -177,9 +322,8 @@
 .wf-app .flash-help-body p { margin-top: .4em; color: var(--text-muted); line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes { margin: .4em 0 0 1.2em; padding: 0; line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes li { margin-bottom: .4em; }
-/* The flash panel's write list, numbered steps and device line (U06; U07 restyles the card). */
-.wf-app .flash-writes { list-style: none; margin: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; font-size: .9em; }
-.wf-app .flash-write { display: flex; align-items: center; gap: .6em; padding: .4em .7em; }
+.wf-app .flash-writes { list-style: none; margin: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 8px; font-size: .9em; }
+.wf-app .flash-write { display: flex; align-items: center; gap: .6em; padding: .45em .8em; }
 .wf-app .flash-write + .flash-write { border-top: 1px solid var(--panel-border); }
 .wf-app .fw-icon { width: 1.2em; display: inline-flex; justify-content: center; color: var(--text-muted); flex: none; }
 .wf-app .flash-write.ok .fw-icon { color: var(--ok); }
@@ -190,20 +334,28 @@
 .wf-app .flash-device { display: flex; align-items: center; gap: .45em; color: var(--ok); overflow-wrap: anywhere; }
 .wf-app .flash-dot { width: .5em; height: .5em; border-radius: 50%; background: var(--ok); flex: none; }
 .wf-app .flash-warn { color: var(--warn); }
-.wf-app .flash-write .spinner { width: .8em; height: .8em; border: 2px solid var(--panel-border); border-top-color: var(--accent); border-radius: 50%; animation: wf-spin .8s linear infinite; }
-@keyframes wf-spin { to { transform: rotate(360deg); } }
 .wf-app .flash-log { max-height: 14em; }
 
-/* --- Foot --- */
+/* --- The footer's link --- */
 
-.wf-foot { display: flex; justify-content: flex-end; font-size: .85em; }
+.wf-open { font-size: .88em; margin-left: auto; }
 .wf-open::after { content: " \2197"; }
 
 /* --- Narrow cards --- */
 
 @media (max-width: 480px) {
+  .wf-steps li { font-size: 0; gap: 0; }
+  .wf-steps li.now { font-size: .8em; gap: .4em; }
+  .wf-board.wf-has-image { display: flex; }
+  .wf-app .wf-board .wf-image { max-height: 10em; }
+  .wf-fw { grid-template-columns: minmax(0, 1fr); }
+  .wf-seg { display: flex; }
+  .wf-app .wf-seg button { flex: 1; }
+  .wf-fw .ver { flex-wrap: wrap; }
   .wf-option { grid-template-columns: minmax(0, 1fr); }
   .wf-option-note, .wf-option-help { grid-column: 1; }
-  .wf-app .flash-panel .field, .wf-field { flex: 1 1 100%; }
-  .wf-app .flash-panel .field select, .wf-field select { flex: 1; }
+  .wf-app .wiz-hint { flex-basis: 100%; order: -1; }
+  .wf-app .wiz-foot > button:last-child, .wf-app .wiz-foot > a:last-child { margin-left: auto; }
+  .wf-app .flash-panel .field { flex: 1 1 100%; }
+  .wf-app .flash-panel .field select { flex: 1; }
 }

@@ -55,6 +55,8 @@ _ENGINE_FOLDERS = {
     "build": ("js", "build"),
     "configure": ("js", "configure"),
     "workers": ("js", "workers"),
+    # The card's steps are the site's wizard (wizard.js), with page 1's download hint.
+    "wizard": ("js", "wizard"),
     "css": ("css",),
 }
 # Served from an --assets folder.

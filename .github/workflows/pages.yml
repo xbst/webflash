@@ -83,7 +83,7 @@ jobs:
           # The embed runtime, laid out as the local server serves it
           # (serve.py's engine_files): js/embed/ at its root beside the
           # modules of js/ it imports, then flash/, build/, configure/,
-          # workers/ and css/.
+          # workers/, wizard/ and css/.
           PYTHONPATH=src python -c "from webflash.serve import stage_engine; print(stage_engine('$site', '_site/engine/v1'), 'files in engine/v1')"
           find _site -name __pycache__ -type d -prune -exec rm -rf {} +
           echo "$SITE_DOMAIN" > _site/CNAME
@@ -231,7 +231,8 @@ jobs:
                       for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
           engine = site / "engine" / "v1"
           parts = {"": src / "js" / "embed", "flash/": src / "js" / "flash", "build/": src / "js" / "build",
-                   "configure/": src / "js" / "configure", "workers/": src / "js" / "workers", "css/": src / "css"}
+                   "configure/": src / "js" / "configure", "workers/": src / "js" / "workers", "wizard/": src / "js" / "wizard",
+                   "css/": src / "css"}
           expected = {prefix + name: data for prefix, folder in parts.items() if folder.is_dir()
                       for name, data in files(folder).items()}
           for name in ("runtime.js", "state.js", "toml-io.js", "dialogs.js"):

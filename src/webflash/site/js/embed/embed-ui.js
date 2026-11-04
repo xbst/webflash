@@ -1,19 +1,27 @@
-// The card a generated page shows once its runtime runs (SPEC 13): the
-// title, the description and the photo (the fallback's own image element,
-// kept: with -i it is the image's only copy), notices for what this browser
-// or this frame cannot do, the firmware part of a board built from source
-// (embed-build.js, loaded only for one), the flash panel (js/flash/
-// flash-ui.js, compact) and "Open in WebFlash". A [prebuilt] board's file
+// The card a generated page shows once its runtime runs: the site's wizard,
+// sized for a frame in a docs page (SPEC 2.2 of the guided UI). A step bar
+// (on a phone only the current step's name), then one step at a time, each
+// with its footer: Firmware (the board's title, description and photo, the
+// fallback's own image element, kept: with -i it is the image's only copy;
+// notices for what this browser or this frame cannot do; what to flash),
+// Setup (when the TOML offers several), Build and Flash (the flash panel,
+// js/flash/flash-ui.js, compact, and "Open in WebFlash"). The firmware steps
+// are embed-build.js's, loaded only for a board built from source. A
+// [prebuilt] board has Firmware (the board and its file) and Flash: its file
 // comes from the page (-i) or from beside it, and nothing of the build loads
 // for it: no Python, no compiler.
+//
+// The steps move without the browser's history (the card lives in someone
+// else's page), and every move asks the page to report its height.
 //
 // ?mock=<katapult|dfu|picoboot|can|uf2>[&fail=...] on the page's URL runs the
 // flash panel against the scripted devices of js/flash/mocks/, as on the site.
 
 import { createFlashPanel, renderInline } from "./flash/flash-ui.js";
 import { capabilities, explainError } from "./flash/errors.js";
-import { extractKlipperDict, parseFirmware } from "./flash/firmware-file.js";
-import { behaviorOf, firmwareFromBuild, firmwareFromPrebuilt, frameNotice, framePermissions, platformFor } from "./embed-model.js";
+import { describe as describeImage, extractKlipperDict, parseFirmware } from "./flash/firmware-file.js";
+import { Wizard } from "./wizard/wizard.js";
+import { behaviorOf, firmwareFromPrebuilt, frameNotice, framePermissions, platformFor } from "./embed-model.js";
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -34,6 +42,13 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 
 const relayout = () => dispatchEvent(new Event("webflash-relayout"));
 
+export const CARD_STEPS = [
+  { id: "firmware", label: "Firmware" },
+  { id: "setup", label: "Setup" },
+  { id: "build", label: "Build" },
+  { id: "flash", label: "Flash" },
+];
+
 /** What flashing from this page cannot do, as notices: [{kind, html}]. */
 function platformNotices(perms, caps, { mocked }) {
   const out = [];
@@ -45,8 +60,7 @@ function platformNotices(perms, caps, { mocked }) {
     const which = caps.browser === "firefox" ? "Firefox" : caps.browser === "safari" ? "Safari" : "This browser";
     out.push({
       kind: "warn",
-      html: `<p>${which} cannot flash a board from a web page (it has neither WebUSB nor Web Serial): build here and download the files, ` +
-        `then flash them with Chrome or Edge on a computer, or with the usual tools.</p>`,
+      html: `<p>${which} cannot flash from a web page: build here, download the files, then flash them with Chrome or Edge, or your usual tools.</p>`,
     });
   }
   return out;
@@ -65,10 +79,21 @@ async function prebuiltBytes(config) {
   return new Uint8Array(await resp.arrayBuffer());
 }
 
+// One step: <section data-step> with its body and footer, as wizard.js
+// expects them. foot lists the footer's parts in order.
+function stepSection(id, { title = null, foot = [] } = {}) {
+  const body = el("div", { class: "wiz-body" });
+  if (title) body.append(title);
+  const section = el("section", { class: "wiz-step", "data-step": id, hidden: true }, [body, el("div", { class: "wiz-foot" }, foot)]);
+  return { section, body };
+}
+
 /**
- * Replace the card's fallback with the controls for config (readConfig's)
- * and env (embed.js's runtimeLocation). Resolves once the card is in place;
- * the firmware part keeps loading the list of versions after that.
+ * Replace the card's fallback with the steps for config (readConfig's) and
+ * env (embed.js's runtimeLocation). Resolves once the card is in place, to
+ * {wizard, flow (embed-build.js's FirmwareFlow, null for [prebuilt]),
+ * panel (the flash panel)}; the firmware steps keep loading the list of
+ * versions after that.
  */
 export async function mountCard(card, config, env) {
   const behavior = behaviorOf(card.dataset);
@@ -93,86 +118,125 @@ export async function mountCard(card, config, env) {
   // the host's frame would shrink by the photo's height before it grows.
   let mounted = false;
   const relayoutMounted = () => { if (mounted) relayout(); };
-  const mount = () => {
-    card.replaceChildren(app);
-    mounted = true;
-    relayout();
-  };
   const fallback = card.querySelector(".wf-static");
   const app = el("div", { class: "wf-app" });
-  app.append(el("h1", { class: "wf-title", text: config.board.title }));
+
+  // ── The steps ─────────────────────────────────────────────────────
+  const bar = el("ol", { class: "wf-steps", "aria-label": "Steps" });
+  const button = (text, attrs = {}) => el("button", { type: "button", ...attrs, text });
+  const hint = () => el("span", { class: "wiz-hint", "data-wiz-hint": true });
+  const back = () => button("Back", { class: "ghost", "data-wiz-back": true });
+  const next = (text = "Next") => button(text, { class: "primary", "data-wiz-next": true });
+  const strip = () => el("p", { class: "wf-strip" });
+  const strips = [];
+
+  // Page 1: the board.
+  const titleEl = el("h1", { class: "wf-title", text: config.board.title, tabindex: "-1", "data-wiz-title": true });
+  const head = el("div", { class: "wf-board" });
+  const words = el("div", { class: "wf-board-text" }, [titleEl]);
   const description = renderInline(config.board.description);
-  if (description) app.append(el("div", { class: "wf-desc", html: description }));
+  if (description) words.append(el("div", { class: "wf-desc", html: description }));
+  head.append(words);
   const image = fallback ? fallback.querySelector(".wf-image") : null;
   if (image) {
     image.addEventListener("load", relayoutMounted);
-    app.append(image);
+    head.append(image);
+    head.classList.add("wf-has-image");
   }
-  const notes = el("div", { class: "wf-notes" });
-  app.append(notes);
-  const note = (kind, html) => {
-    notes.append(el("div", { class: `wf-box wf-${kind}`, html }));
+  const notesHome = el("div", { class: "wf-notes" });
+  const notesFlash = el("div", { class: "wf-notes" });
+  const note = (kind, html, { flash = true } = {}) => {
+    notesHome.append(el("div", { class: `wf-box wf-${kind}`, html }));
+    if (flash) notesFlash.append(el("div", { class: `wf-box wf-${kind}`, html }));
     relayoutMounted();
   };
 
+  const firmware = stepSection("firmware", { foot: [hint(), next()] });
+  firmware.body.append(head, notesHome);
+  const setup = stepSection("setup", {
+    title: el("h2", { class: "wf-page", tabindex: "-1", "data-wiz-title": true, text: "How is the board connected?" }),
+    foot: [back(), hint(), next("Build")],
+  });
+  const setupList = el("div", { class: "wf-choices", role: "radiogroup", "aria-label": "Setups" });
+  setup.body.prepend(strips[strips.push(strip()) - 1]);
+  setup.body.append(setupList);
+  const cancel = button("Cancel", { hidden: true, title: "Stop the build" });
+  const rebuild = button("Build", { class: "ghost" });
+  const build = stepSection("build", { foot: [back(), hint(), cancel, rebuild, next()] });
+  build.body.append(strips[strips.push(strip()) - 1]);
+  const buildBody = el("div", { class: "wf-build" });
+  build.body.append(buildBody);
+  const link = el("a", {
+    class: "wf-open", target: "_blank", rel: "noopener", text: "Open in WebFlash",
+    title: "Open this board on the WebFlash site, with every option of make menuconfig",
+  });
+  const flash = stepSection("flash", {
+    title: el("h2", { class: "wf-page", tabindex: "-1", "data-wiz-title": true, text: "Flash" }),
+    foot: [back(), hint(), config.firmware ? link : null],
+  });
+  flash.body.prepend(strips[strips.push(strip()) - 1]);
+  const flashRoot = el("div", { class: "wf-flash" });
+  flash.body.append(notesFlash, flashRoot);
+
+  const box = el("div", { class: "wf-wizard" }, [bar, firmware.section, setup.section, build.section, flash.section]);
+  app.append(box);
+  const wizard = new Wizard({ box, bar, steps: CARD_STEPS, history: null, win: null, scroll: false });
+  if (!config.firmware || config.setups.length < 2) wizard.setSkipped("setup");
+  if (!config.firmware) wizard.setSkipped("build");
+  wizard.onStep(() => relayoutMounted());
+
+  const setStrip = (what) => {
+    for (const s of strips) {
+      s.replaceChildren(el("strong", { text: config.board.title }), what ? ` · ${what}` : "");
+    }
+  };
+
+  // ── Notices and the flash panel ──────────────────────────────────
   const perms = framePermissions(document, window);
   const platform = mocks ? { nav: mocks.nav, win: mocks.win } : platformFor(navigator, window, perms);
   const caps = capabilities(platform.nav || navigator, platform.win || window);
   for (const n of platformNotices(perms, caps, { mocked: Boolean(mocks) })) note(n.kind, n.html);
 
-  const flashSection = el("section", { class: "wf-flash", hidden: true });
-  const flashHead = el("h2", { class: "wf-section", text: "Flash" });
-  const flashRoot = el("div");
-  flashSection.append(flashHead, flashRoot);
-  let panel = null;
-  let shown = null;
-  const showFirmware = (fw) => {
-    if (fw === shown) return;
-    shown = fw;
-    flashSection.hidden = !fw;
-    if (fw) {
-      if (!panel) {
-        panel = createFlashPanel(flashRoot, {
-          compact: true, title: null, confirmFlash: behavior.confirmFlash, nav: platform.nav, win: platform.win,
-        });
-      }
-      panel.setFirmware(fw);
-    }
+  const panel = createFlashPanel(flashRoot, {
+    compact: true, title: null, confirmFlash: behavior.confirmFlash, nav: platform.nav, win: platform.win,
+  });
+  const flashLog = flashRoot.querySelector(".log-box");
+  if (flashLog && behavior.showLog) flashLog.open = true;
+  for (const d of flashRoot.querySelectorAll("details")) d.addEventListener("toggle", relayoutMounted);
+  const showFirmware = (fw, opts = {}) => {
+    panel.setFirmware(fw, opts);
+    relayoutMounted();
+  };
+
+  const mount = () => {
+    card.replaceChildren(app);
+    mounted = true;
     relayout();
   };
 
+  let flow = null;
   if (config.firmware) {
-    const firmwareSection = el("section", { class: "wf-fw" });
-    const link = el("a", {
-      class: "wf-open", target: "_blank", rel: "noopener", text: "Open in WebFlash",
-      title: "Open this board's configuration on the WebFlash site, with every option of make menuconfig",
-    });
-    app.append(firmwareSection, flashSection, el("p", { class: "wf-foot" }, [link]));
+    const pick = el("div", { class: "wf-pick" });
+    const options = el("div", { class: "wf-opts" });
+    const about = el("div");
+    firmware.body.append(pick, options, about);
+    // Next waits for the firmware steps, which load now.
+    wizard.setNext("firmware", { enabled: false, reason: "Loading…" });
     mount();
-    const { FirmwareSection } = await import("./embed-build.js");
-    // The flash panel follows the build, and lets it go while the settings
-    // differ from the build's (the reader would flash what they did not pick).
-    let current = { build: null, fw: null };
-    new FirmwareSection(firmwareSection, config, env, {
-      behavior,
+    const { FirmwareFlow } = await import("./embed-build.js");
+    flow = new FirmwareFlow(config, env, {
+      behavior, wizard,
+      els: { pick, options, about, setups: setupList, build: buildBody, cancel, rebuild },
+      onFirmware: showFirmware,
       onLink: (href) => { link.href = href; },
-      onBuild: (build) => {
-        if (build !== current.build) {
-          let fw = null;
-          try {
-            fw = build ? firmwareFromBuild(build, config) : null;
-          } catch (e) {
-            note("error", `<p>The build's firmware could not be read: ${esc(e.message)}</p>`);
-          }
-          current = { build, fw };
-        }
-        showFirmware(current.fw);
-      },
-      onRelayout: relayout,
+      onTitle: setStrip,
+      onRelayout: relayoutMounted,
     });
   } else {
-    const loading = el("p", { class: "wf-muted", text: `Loading ${config.prebuilt.file}…` });
-    app.append(loading, flashSection);
+    const fileLine = el("p", { class: "wf-file wf-muted", text: `Loading ${config.prebuilt.file}…` });
+    firmware.body.append(fileLine);
+    setStrip(config.prebuilt.file.split(/[\\/]/).pop());
+    showFirmware(null, { empty: `Loading ${config.prebuilt.file}…` });
     mount();
     try {
       const bytes = await prebuiltBytes(config);
@@ -184,12 +248,18 @@ export async function mountCard(card, config, env) {
       } catch (e) {
         image.dict = null;
       }
-      loading.remove();
-      showFirmware(firmwareFromPrebuilt(config, image, bytes));
+      const fw = firmwareFromPrebuilt(config, image, bytes);
+      const d = describeImage(image);
+      fileLine.className = "wf-file";
+      fileLine.replaceChildren(el("strong", { text: fw.label }), ` · ${d.rangeText}${fw.mcu ? ` · ${fw.mcu}` : ""}`);
+      showFirmware(fw);
     } catch (e) {
-      loading.remove();
-      note("error", `<p>${esc(explainError(e, {}).message)}</p>`);
+      const message = explainError(e, {}).message;
+      fileLine.remove();
+      note("error", `<p>${esc(message)}</p>`);
+      showFirmware(null, { empty: message });
     }
   }
   relayout();
+  return { wizard, flow, panel };
 }
