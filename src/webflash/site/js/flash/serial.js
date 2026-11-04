@@ -64,6 +64,7 @@ export class SerialLink {
     this.queued = 0;        // bytes in queue
     this.waiters = [];      // resolvers of pending reads
     this.readError = null;  // why the reader loop stopped, if it failed
+    this.lastSerialError = null;  // the latest break, framing, parity or overrun error the loop read past
     this.loop = null;
   }
 
@@ -103,27 +104,55 @@ export class SerialLink {
     if (this.raw.writable) this.writer = this.raw.writable.getWriter();
   }
 
+  // Web Serial reports a break, a framing or parity error and a buffer
+  // overrun by erroring the current readable while the port stays open;
+  // port.readable then hands out a new stream. Those errors are ordinary on
+  // a USB-UART adapter around a board reset, so the loop takes the new
+  // stream and goes on. Anything else (the device went away) ends it. A
+  // burst of them (a wrong baud rate) counts as a failure too.
   async _readLoop() {
-    const reader = this.reader;
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength) {
-          const bytes = value instanceof Uint8Array ? value : new Uint8Array(value.buffer || value);
-          this.queue.push(bytes);
-          this.queued += bytes.byteLength;
-          this._wake();
+    const recent = [];  // times of the latest non-fatal errors
+    for (;;) {
+      const reader = this.reader;
+      if (!reader) break;
+      let again = false;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength) {
+            const bytes = value instanceof Uint8Array ? value : new Uint8Array(value.buffer || value);
+            this.queue.push(bytes);
+            this.queued += bytes.byteLength;
+            this._wake();
+          }
         }
+      } catch (e) {
+        if (isNonFatalSerialError(e)) {
+          const now = Date.now();
+          recent.push(now);
+          while (recent.length && now - recent[0] > NON_FATAL_WINDOW_MS) recent.shift();
+          this.lastSerialError = e;
+          again = recent.length <= NON_FATAL_LIMIT;
+        }
+        if (!again) this.readError = e;
+      } finally {
+        try { reader.releaseLock(); } catch (e) { /* already released */ }
+        if (this.reader === reader) this.reader = null;
       }
-    } catch (e) {
-      this.readError = e;
-      this._wake();
-    } finally {
-      try { reader.releaseLock(); } catch (e) { /* already released */ }
-      if (this.reader === reader) this.reader = null;
-      this._wake();
+      // close() during the swap starts no new reader.
+      if (!again || !this.opened || !this.raw.readable) {
+        if (again && this.opened) this.readError = this.lastSerialError;
+        break;
+      }
+      try {
+        this.reader = this.raw.readable.getReader();
+      } catch (e) {
+        this.readError = e;
+        break;
+      }
     }
+    this._wake();
   }
 
   _wake() {
@@ -312,13 +341,21 @@ function mapOpenError(e) {
   return new FlashError(`The serial port could not be opened (${msg}).`, { code: "busy", cause: e });
 }
 
+// More non-fatal errors than this within the window end the reader loop.
+const NON_FATAL_LIMIT = 20;
+const NON_FATAL_WINDOW_MS = 2000;
+
+function isNonFatalSerialError(e) {
+  return !!e && (e.name === "BufferOverrunError" || e.name === "BreakError" || e.name === "FramingError" || e.name === "ParityError");
+}
+
 function mapReadError(e) {
   if (e instanceof FlashError) return e;
   const msg = String(e && e.message ? e.message : e);
   if (e && (e.name === "NetworkError" || e.name === "NotFoundError" || /disconnected|lost|device has been lost/i.test(msg))) {
     return new FlashError(`The serial port went away: ${msg}`, { code: "disconnected", cause: e });
   }
-  if (e && (e.name === "BufferOverrunError" || e.name === "BreakError" || e.name === "FramingError" || e.name === "ParityError")) {
+  if (isNonFatalSerialError(e)) {
     return new FlashError(`A serial error happened: ${e.name}.`, { code: "protocol", cause: e });
   }
   return new FlashError(`The serial port failed: ${msg}`, { code: "protocol", cause: e });

@@ -10,7 +10,8 @@
 //
 // port.emit(bytes) is device -> host; port.lose() makes the port vanish the
 // way a re-enumerating board does (the reader errors, the navigator fires
-// "disconnect").
+// "disconnect"); port.serialError(name) is a break, framing, parity or
+// overrun error, which errors the current readable and leaves a new one.
 
 export class MockSerialPort {
   constructor(device, { info = {}, name = "mock port" } = {}) {
@@ -36,10 +37,7 @@ export class MockSerialPort {
     if (this.device.onOpen) await this.device.onOpen(options, this);
     this.opened = true;
     this.openOptions = options;
-    this.readable = new ReadableStream({
-      start: (controller) => { this._controller = controller; },
-      cancel: () => { this._controller = null; },
-    });
+    this._newReadable();
     this.writable = new WritableStream({
       write: async (chunk) => {
         if (this.lost) throw domError("NetworkError", "The device has been lost.");
@@ -48,6 +46,29 @@ export class MockSerialPort {
         if (this.device.onWrite) await this.device.onWrite(bytes, this);
       },
     });
+  }
+
+  _newReadable() {
+    let own = null;
+    this.readable = new ReadableStream({
+      start: (controller) => { own = controller; this._controller = controller; },
+      cancel: () => { if (this._controller === own) this._controller = null; },
+    });
+  }
+
+  /**
+   * A non-fatal read error ("BreakError", "FramingError", "ParityError",
+   * "BufferOverrunError"): Web Serial errors the current readable and, the
+   * port staying open, port.readable gives a fresh stream.
+   */
+  serialError(name = "FramingError") {
+    if (!this.opened || this.lost) return;
+    const controller = this._controller;
+    this._controller = null;
+    if (controller) {
+      try { controller.error(domError(name, `A ${name} happened on the serial line.`)); } catch (e) { /* closed */ }
+    }
+    this._newReadable();
   }
 
   /** Device -> host bytes. */
