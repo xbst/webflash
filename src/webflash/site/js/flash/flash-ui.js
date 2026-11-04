@@ -7,7 +7,7 @@
 // choice, address prompt for a .bin).
 
 import { FlashError, explainError, isCancel, capabilities } from "./errors.js";
-import { describe as describeImage, hex8, formatSize, extractKlipperDict, fromBin } from "./firmware-file.js";
+import { describe as describeImage, hex8, formatSize, extractKlipperDict, fromBin, parseAddress } from "./firmware-file.js";
 import { METHODS, familyFromMcu } from "./devices.js";
 import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable, probeConnection } from "./flash.js";
 import { enterFromKlipperUsb, manualInstructions, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
@@ -591,14 +591,13 @@ export function createFlashPanel(root, options = {}) {
         prompt.hidden = false;
         prompt.innerHTML = "";
         const input = el("input", { type: "text", id: "flash-address", value: defaultAddress !== null && defaultAddress !== undefined ? hex8(defaultAddress) : "0x08000000", spellcheck: "false" });
-        prompt.appendChild(el("p", { text: `${name} is a raw .bin, which carries no address. Where does it go? For an STM32 that is 0x08000000 without a bootloader or 0x08002000 with an 8 KiB Katapult; for an RP2040 0x10000100 without and 0x10004000 with Katapult.` }));
+        prompt.appendChild(el("p", { text: `${name} is a raw .bin, which carries no address. Where does it go? For an STM32 that is 0x08000000 without a bootloader or 0x08002000 with an 8 KiB Katapult; for an RP2040 0x10000100 without and 0x10004000 with Katapult. The address is read as hex, with or without 0x.` }));
         const row = el("div", { class: "flash-actions" }, [
           el("label", { class: "field" }, ["Address ", input]),
           el("button", { class: "primary", onclick: (e) => {
             e.preventDefault();
-            const v = input.value.trim();
-            const n = /^0x/i.test(v) ? parseInt(v, 16) : parseInt(v, 10);
-            if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) { input.classList.add("bad"); return; }
+            const n = parseAddress(input.value);
+            if (n === null) { input.classList.add("bad"); return; }
             prompt.hidden = true;
             resolve(n);
           } }, ["Use this address"]),

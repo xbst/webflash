@@ -347,6 +347,16 @@ export function hex8(n) {
   return `0x${(n >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+/**
+ * A flash address as typed: hex digits, with or without 0x, 1 to 8 of
+ * them, since addresses are always written in hex. Anything else, such
+ * as a value with a stray character or more than 8 digits, is null.
+ */
+export function parseAddress(text) {
+  const m = /^(?:0x)?([0-9a-f]{1,8})$/i.exec(String(text ?? "").trim());
+  return m ? parseInt(m[1], 16) : null;
+}
+
 export function formatSize(n) {
   if (n < 1024) return `${n} bytes`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n % 1024 ? 1 : 0)} KiB`;
