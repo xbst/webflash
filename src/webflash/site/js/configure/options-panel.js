@@ -583,8 +583,11 @@ export class OptionsPanel {
     const s = this.session;
     const e = this.el;
     const setups = s.firmware ? s.tables().setups : [];
-    if (this._methodTarget >= setups.length || setups.length < 2) this._methodTarget = -1;
-    e.methodTargetRow.hidden = setups.length < 2;
+    // A lone setup's own methods override [flash] methods: For stays until
+    // "As for every setup" clears them.
+    const pick = setups.length > 1 || setups.some((st) => st.methods);
+    if (this._methodTarget >= setups.length || !pick) this._methodTarget = -1;
+    e.methodTargetRow.hidden = !pick;
     fill(e.methodTarget, `<option value="-1">Every setup</option>` +
       setups.map((st, i) => `<option value="${i}">${esc(setupTitle(st, i))}</option>`).join(""));
     e.methodTarget.value = String(this._methodTarget);

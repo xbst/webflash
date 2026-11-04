@@ -137,6 +137,18 @@ export function titleOptional(tables, i) {
   return asConfigTable(tables.setups_form, [untitled(tables, i)]);
 }
 
+// Why setup i may not be untitled: its own methods or its description,
+// when they are all that keeps it from a [config] table.
+function untitledError(tables, i) {
+  const s = tables.setups[i];
+  const bare = { ...untitled(tables, i), description: "", methods: null };
+  if (tables.setups.length === 1 && asConfigTable(tables.setups_form, [bare])) {
+    if (s.methods) return "A setup with its own flashing methods needs a title: set them to “As for every setup” under Flashing first.";
+    if (s.description) return "A setup with a description needs a title: clear the description first.";
+  }
+  return "A setup needs a title.";
+}
+
 /**
  * A new title for setup i; its id follows when it is one made here. Empty
  * is allowed only for a lone setup that then fits a [config] table again.
@@ -150,7 +162,7 @@ export function retitleSetup(tables, i, title) {
   const rename = {};
   let id = s.id;
   if (!t) {
-    if (!titleOptional(tables, i)) return { error: "A setup needs a title." };
+    if (!titleOptional(tables, i)) return { error: untitledError(tables, i) };
     id = untitled(tables, i).id;
   } else if (isAutoId(s)) {
     id = setupIdFor(t, setups.filter((_, k) => k !== i));
