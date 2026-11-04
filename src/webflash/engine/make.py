@@ -779,6 +779,10 @@ class Evaluator:
             return args[2].replace(args[0], args[1]) if args[0] else args[2]
         if name == "patsubst":
             pattern, repl, text = args
+            if "%" not in pattern:
+                # Without a % the pattern matches whole words and the
+                # replacement is taken as written, % and all (function.c).
+                return " ".join(repl if w == pattern else w for w in split_words(text))
             return " ".join(_pattern_subst(repl, s) if (s := _pattern_match(pattern, w)) is not None else w
                             for w in split_words(text))
         if name == "strip":
