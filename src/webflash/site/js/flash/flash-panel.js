@@ -182,8 +182,25 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return Number.isInteger(n) && n > 0 ? n : 1000000;
   }
 
+  // What the panel was last given: the object the firmware came from (the
+  // upload, session.build or the prebuilt file's bytes) and everything else
+  // about it as text. A session change that leaves both alone (a Kconfig
+  // click that changes neither the methods nor the address) is no new firmware.
+  let shown = null;
+
+  function firmwareKey(firmware) {
+    if (!firmware) return { origin: null, text: "null" };
+    const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? session.build : (firmware.artifacts[0] || {}).bytes;
+    const skip = new Set(["image", "artifacts", "onClear"]);
+    const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "");
+    return { origin, text };
+  }
+
   function refresh() {
     const firmware = fromUpload() || fromBuild() || fromPrebuilt();
+    const key = firmwareKey(firmware);
+    if (shown && shown.origin === key.origin && shown.text === key.text) return;
+    shown = key;
     panel.setFirmware(firmware);
   }
 

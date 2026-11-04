@@ -87,6 +87,7 @@ export function createFlashPanel(root, options = {}) {
     error: null,
     log: [],
     countdownTimer: null,
+    pending: null,        // {firmware}: what setFirmware gave while a device was picked or written
   };
   root.innerHTML = "";
   root.classList.add("flash-panel");
@@ -349,7 +350,7 @@ export function createFlashPanel(root, options = {}) {
       connection = await connectDevice(state.method, { nav: opts.nav || undefined, win: opts.win || undefined, serialScope });
     } catch (e) {
       state.phase = "ready";
-      renderAll();
+      if (!applyPending()) renderAll();
       if (isCancel(e)) { log("No device was picked."); return; }
       throw e;
     }
@@ -372,11 +373,14 @@ export function createFlashPanel(root, options = {}) {
         state.connection = null;
         state.phase = "ready";
         try { if (connection.device && typeof connection.device.close === "function") await connection.device.close(); } catch (e2) { /* fine */ }
-        renderAll();
+        if (!applyPending()) renderAll();
         throw e;
       }
     }
     state.phase = "connected";
+    // A firmware that arrived meanwhile is not what the user connected for:
+    // it takes over and the device is released, to be connected again.
+    if (applyPending()) return;
     if (!opts.confirmFlash) {
       renderAll();
       await doFlash();
@@ -399,7 +403,7 @@ export function createFlashPanel(root, options = {}) {
       });
     } catch (e) {
       state.phase = "ready";
-      renderAll();
+      if (!applyPending()) renderAll();
       progressWrap.hidden = true;
       if (isCancel(e)) { log("No Klipper port was picked."); return; }
       throw e;
@@ -411,7 +415,7 @@ export function createFlashPanel(root, options = {}) {
       return;
     }
     state.phase = "ready";
-    renderAll();
+    if (!applyPending()) renderAll();
     const label = outcome.expect.label || "the device";
     showPrompt(`The touch was sent. The board should now show up as ${label}; the browser needs you to pick it once.`, [
       button(`Pick ${label}`, () => connectAndConfirm(), { primary: true }),
@@ -481,7 +485,9 @@ export function createFlashPanel(root, options = {}) {
       showFailure(e, method);
     } finally {
       if (connection.kind === "usb" || connection.kind === "serial") { try { await connection.device.close(); } catch (e) { /* gone */ } }
-      renderAll();
+      // A firmware that arrived during the flash replaces the one flashed, and
+      // the result box keeps saying how the flash went.
+      if (!applyPending({ keepResult: true })) renderAll();
     }
   }
 
@@ -527,6 +533,31 @@ export function createFlashPanel(root, options = {}) {
     renderAll();
   }
 
+  // ── Firmware ────────────────────────────────────────────────────
+  function applyFirmware(firmware, { keepResult = false } = {}) {
+    const dropped = state.connection;
+    state.firmware = firmware || null;
+    closeConnection();
+    if (!keepResult || !firmware) state.phase = firmware ? "ready" : "idle";
+    if (!keepResult) result.hidden = true;
+    if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
+    renderAll();
+    if (dropped) log("The firmware changed, so the device was released: connect again to flash the new one.");
+    if (firmware) {
+      const d = describeImage(firmware.image);
+      log(`Firmware: ${firmware.label || firmware.image.name || "image"}, ${d.rangeText}${firmware.mcu ? `, MCU ${firmware.mcu}` : ""}; methods: ${firmware.methods.map((m) => m.id).join(", ")}`);
+    }
+  }
+
+  /** Apply a firmware that setFirmware put off; false when there is none. */
+  function applyPending(options) {
+    if (!state.pending) return false;
+    const { firmware } = state.pending;
+    state.pending = null;
+    applyFirmware(firmware, options);
+    return true;
+  }
+
   // ── Events ──────────────────────────────────────────────────────
   methodSelect.addEventListener("change", async () => {
     if (busy()) { methodSelect.value = state.method; return; }
@@ -540,18 +571,15 @@ export function createFlashPanel(root, options = {}) {
   const api = {
     element: root,
     log,
-    /** A firmware to flash: {image, methods: [{id, reason}], warnings, instructions, mcu, project, family, artifacts, source, version, label, uuid, baud, bitrate, onClear}. */
+    /**
+     * A firmware to flash: {image, methods: [{id, reason}], warnings, instructions, mcu, project, family, artifacts, source, version, label, uuid, baud, bitrate, onClear}.
+     * While a device is being picked or written, the card keeps showing that
+     * and the firmware is applied once it ends (the last one given wins).
+     */
     setFirmware(firmware) {
-      state.firmware = firmware || null;
-      closeConnection();
-      state.phase = firmware ? "ready" : "idle";
-      result.hidden = true;
-      if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
-      renderAll();
-      if (firmware) {
-        const d = describeImage(firmware.image);
-        log(`Firmware: ${firmware.label || firmware.image.name || "image"}, ${d.rangeText}${firmware.mcu ? `, MCU ${firmware.mcu}` : ""}; methods: ${firmware.methods.map((m) => m.id).join(", ")}`);
-      }
+      if (busy()) { state.pending = { firmware: firmware || null }; return; }
+      state.pending = null;
+      applyFirmware(firmware);
     },
     get method() { return state.method; },
     set method(id) { if (busy()) return; state.method = id; renderAll(); },
