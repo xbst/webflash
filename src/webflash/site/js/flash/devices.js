@@ -153,6 +153,29 @@ export function familyOf(cfg) {
   return typeof mcu === "string" ? familyFromMcu(mcu) : null;
 }
 
+// The families the projects offer that WebFlash does not build: its
+// toolchain is clang for arm-none-eabi only. The twin of engine/methods.py's
+// UNSUPPORTED_ARCH.
+const UNSUPPORTED_ARCH = {
+  avr: "Atmega AVR",
+  pru: "Beaglebone PRU",
+  ar100: "Allwinner AR100",
+  linux: "Linux process",
+  simulator: "Host simulator",
+};
+
+/** The name of a configuration's architecture when WebFlash cannot build it (AVR, PRU, AR100, Linux, the simulator), else null. */
+export function unsupportedArch(cfg) {
+  return UNSUPPORTED_ARCH[familyOf(cfg)] || null;
+}
+
+/** The sentence that refuses a build of such an architecture, else "" (the twin of methods.py's unsupported_reason). */
+export function unsupportedReason(cfg) {
+  const title = unsupportedArch(cfg);
+  return title ? `${title} firmware cannot be built in WebFlash: it builds for Arm chips only ` +
+    "(STM32, RP2040/RP2350, LPC176x, SAM/SAMD, HC32F460)" : "";
+}
+
 /**
  * CONFIG_MCU ("stm32g0b1xx", "rp2040", ...), or for a bare defconfig the
  * name Klipper's Kconfig gives the chosen MACH_ symbol, or null.

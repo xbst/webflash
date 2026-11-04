@@ -273,12 +273,27 @@ class Driver:
         base = _basename(argv[0])
         if base.startswith("avr-"):
             raise DriverError("AVR is not supported in the browser build")
+        if self.kind == "clang":
+            self._check_arm_tool(base)
         if self.kind == "gcc":
             cmd = Command(argv[0], list(argv), kind, list(argv))
         else:
             cmd = self._translate_clang(argv, kind, tree)
         self._fill_files(cmd)
         return cmd
+
+    @staticmethod
+    def _check_arm_tool(base: str) -> None:
+        """Refuse a tool clang cannot stand in for: a cross tool for another
+        target (``pru-gcc``, ``or1k-elf-gcc``) or the host's own compiler
+        (``gcc``, ``cc``: the Linux process and the simulator). Bare ``cpp``
+        stays, as the Makefiles preprocess linker scripts with it."""
+        name = base[:-4] if base.endswith(".exe") else base
+        if name in ("gcc", "cc", "g++", "c++"):
+            raise DriverError(f"{base} is the host's compiler, and WebFlash builds for Arm chips only")
+        family = tool_family(name)
+        if family and name not in _LLVM_TOOLS and not name.startswith(("arm-none-eabi-", "llvm-")):
+            raise DriverError(f"{base} is not an Arm tool, and WebFlash builds for Arm chips only")
 
     def _translate_clang(self, argv: list[str], kind: str, tree: Optional[Path]) -> Command:
         family = tool_family(argv[0]) or ""

@@ -23,6 +23,7 @@ from .driver import Driver, parse_memory_usage
 from .inspect import image_memory, linker_memory, parse_elf
 from .kconfig import Session
 from .make import Evaluator, MakeError, Target, run_sync
+from .methods import unsupported_reason
 from .pyrun import PyRunner
 from .shell import Shell, ShellError
 from .uf2 import elf2uf2, family_for_config
@@ -126,6 +127,9 @@ class Build:
         session = Session(self.tree, version=self.version)
         for warning in session.load(self.config_text):
             self.log(f"warning: {warning}")
+        reason = unsupported_reason(session.values())
+        if reason:
+            raise BuildError(reason)
         config = session.config_text()
         defconfig = session.defconfig_text()
         session.write_config()

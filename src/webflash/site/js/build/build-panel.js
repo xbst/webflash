@@ -24,6 +24,7 @@ import { chosenWorkerCount, defaultWorkerCount, setChosenWorkerCount, workerCoun
 import { cachedFlags, clearCache, storageEstimate } from "./cache.js";
 import { buildMatches, buildRecord, configKey, renderArtifacts, renderMemory } from "./artifacts.js";
 import { BuildCancelled, Builder, treePath } from "./builder.js";
+import { unsupportedReason } from "../flash/devices.js";
 
 const AUTO_KEY = "webflash.build.auto";
 // Run every job of a worker on one long-lived instance (toolchain.js's
@@ -132,6 +133,8 @@ export class BuildPanel {
     if (!s.firmware) return { ok: false, reason: "This board TOML flashes a prebuilt firmware file: there is nothing to build." };
     if (s.sources.state !== "ready" || !s.ref) return { ok: false, reason: "Load the configuration first (the Configure tab)." };
     if (s.locked) return { ok: false, reason: s.locked };
+    const unsupported = unsupportedReason(s.configText || "");
+    if (unsupported) return { ok: false, reason: unsupported };
     const p = s.plan;
     if (!p || p.ref !== s.ref.id) return { ok: false, reason: "Working out what the build needs…" };
     if (p.error) return { ok: false, reason: `What the build needs could not be worked out: ${p.error}` };

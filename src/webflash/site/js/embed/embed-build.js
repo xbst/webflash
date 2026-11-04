@@ -28,6 +28,7 @@ import { configKey, splitFailure } from "./build/build-panel.js";
 import { workerCount } from "./build/toolchain-pool.js";
 import { isCached } from "./workers/blob-cache.js";
 import { renderInline } from "./flash/flash-ui.js";
+import { unsupportedReason } from "./flash/devices.js";
 import { openInSiteUrl } from "./toml-io.js";
 import { applyChoices, isCurrent, linkToml, liveOption, optionModel } from "./embed-model.js";
 
@@ -159,6 +160,12 @@ export class FirmwareSection {
     if (this.running) return this.running === "build" ? "A build is running." : "The configuration is loading.";
     const { ref, error } = this.resolve();
     if (!ref) return error;
+    // Before the configuration loads, the defconfig names the architecture
+    // when it sets one; afterwards the resolved .config always does.
+    const config = this.loaded ? s.configText
+      : applyChoices((this.config.config || {}).defconfig || "", this.config.options, this.pending);
+    const unsupported = unsupportedReason(config || "");
+    if (unsupported) return unsupported;
     const p = s.plan;
     if (this.loaded && p && p.ref === ref.id && p.unavailable && p.unavailable.length) {
       return `This snapshot does not include ${p.unavailable.join(", ")}, which the build needs.`;
@@ -677,6 +684,10 @@ export class FirmwareSection {
         this.finishLoaded();
         return;
       }
+      // A defconfig that leaves the architecture to the Kconfig's default
+      // shows it only now (Klipper's is AVR).
+      const unsupported = unsupportedReason(s.configText || "");
+      if (unsupported) throw new Error(unsupported);
       const tc = await untilAborted(this.builder.discover(), stop.signal);
       this.builder.begin();
       this.checkCancelled();

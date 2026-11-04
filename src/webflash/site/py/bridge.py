@@ -364,12 +364,19 @@ async def plan(config_text: str) -> str:
     directories the build needs: ``{"dirs": [dirs-y], "libs": [lib/<dir>],
     "missing": [the ones not in the tree yet], "targets": [target-y]}``.
     A coroutine (the make interpreter is asynchronous and Pyodide's loop is
-    always running): the worker awaits it, as it does ``build``."""
+    always running): the worker awaits it, as it does ``build``. An
+    architecture WebFlash cannot build (AVR, PRU, AR100, Linux, the
+    simulator) raises ValueError with the sentence the site shows, before
+    the Makefiles are read."""
     from webflash.engine.make import Evaluator
+    from webflash.engine.methods import unsupported_reason
     from webflash.engine.shell import Shell
     tree = _tree()
     session = _get_session()
     session.load(config_text if config_text else None)
+    reason = unsupported_reason(session.values())
+    if reason:
+        raise ValueError(reason)
     session.write_config()
     ev = Evaluator(tree, Shell(tree))
     await ev.load()

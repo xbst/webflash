@@ -17,8 +17,40 @@ METHODS = ("dfu", "picoboot", "uf2", "katapult", "katapult-can", "download")
 _DFU_ROM_CHIP = re.compile(r"MACH_STM32(F042|F072|F4\w*|F7\w*|G0\w*|G4\w*|L4\w*|H7\w*)|MACH_AT32F403")
 
 
+# The architectures the projects offer that WebFlash does not build: its
+# toolchain is clang for arm-none-eabi only. The twin of devices.js's
+# UNSUPPORTED_ARCH.
+UNSUPPORTED_ARCH = (
+    ("MACH_AVR", "Atmega AVR"),
+    ("MACH_PRU", "Beaglebone PRU"),
+    ("MACH_AR100", "Allwinner AR100"),
+    ("MACH_LINUX", "Linux process"),
+    ("MACH_SIMU", "Host simulator"),
+)
+
+
 def _flag(values: Mapping[str, str], name: str) -> bool:
     return values.get(name, "n") == "y"
+
+
+def unsupported_arch(values: Mapping[str, str]) -> str | None:
+    """The name of a configuration's architecture when WebFlash cannot build
+    it (AVR, PRU, AR100, the Linux process, the simulator), else None.
+    ``values`` maps symbol names without ``CONFIG_`` to their values."""
+    for name, title in UNSUPPORTED_ARCH:
+        if _flag(values, name):
+            return title
+    return None
+
+
+def unsupported_reason(values: Mapping[str, str]) -> str | None:
+    """The sentence that refuses a build of an architecture WebFlash cannot
+    build, else None (the twin of devices.js's ``unsupportedReason``)."""
+    title = unsupported_arch(values)
+    if title is None:
+        return None
+    return (f"{title} firmware cannot be built in WebFlash: it builds for Arm chips only "
+            "(STM32, RP2040/RP2350, LPC176x, SAM/SAMD, HC32F460)")
 
 
 def _number(values: Mapping[str, str], name: str) -> int:
