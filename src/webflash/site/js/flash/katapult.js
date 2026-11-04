@@ -597,9 +597,13 @@ export async function assignNode(adapter, uuidBytes, nodeId = CANBUS_NODEID_OFFS
 
 /**
  * Flash an image through a link: connect, check the MCU, (over CAN) verify
- * the UUID, write, verify, complete. Always sends COMPLETE after a write
- * attempt, as flashtool does, so the bootloader leaves. Returns the
- * bootloader info plus {verified, sha1}.
+ * the UUID, write, verify, complete. COMPLETE is sent once the whole image
+ * was written, even when the verification then fails, as flashtool does,
+ * so the bootloader leaves. It is not sent when the connect, the MCU or
+ * UUID check or the write fails, where flashtool would send it anyway:
+ * Katapult's COMPLETE starts the application without checking it, so a
+ * board with a partial image stays in Katapult, ready for another Flash.
+ * Returns the bootloader info plus {verified, sha1}.
  */
 export async function flashKatapult(link, image, { mcu = null, uuid = null, prime = false, timing = {}, verify = true } = {}, { log = null, progress = null } = {}) {
   const flasher = new KatapultFlasher(link, { timing, prime, log });
