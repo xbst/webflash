@@ -474,7 +474,9 @@ class Evaluator:
             if end < 0 or comma < 0:
                 raise MakeError(f"{where}: invalid syntax in conditional")
             left = rest[1:comma].rstrip()
-            right = rest[comma + 1:end].strip()
+            # GNU make (read.c, conditional_line) strips the blanks after the
+            # first argument and before the second, and keeps the rest.
+            right = rest[comma + 1:end].lstrip(" \t")
         else:
             parts = []
             j = 0
