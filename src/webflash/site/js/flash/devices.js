@@ -653,8 +653,11 @@ export function defaultInstructions(method, family = null, { fromKlipper = true,
   }
 }
 
-/** The printer.cfg line after a successful flash (SPEC 11.10), best effort. */
-export function printerConfigHint({ method, mcu = null, serial = null, uuid = null, project = "klipper", iface = null } = {}) {
+/**
+ * The printer.cfg line after a successful flash (SPEC 11.10), best effort.
+ * baud is the firmware's UART baud, written when it is not Klipper's default.
+ */
+export function printerConfigHint({ method, mcu = null, serial = null, uuid = null, project = "klipper", iface = null, baud = null } = {}) {
   if (project === "katapult") return null;
   // The firmware's interface decides the form, not the transport it was
   // flashed over: a CAN node flashed through the ROM's USB DFU, or a USB to
@@ -669,7 +672,9 @@ export function printerConfigHint({ method, mcu = null, serial = null, uuid = nu
       : `[mcu]\ncanbus_uuid: <the node's UUID>\n# ${query}`;
   }
   if (kind === "serial") {
-    return "[mcu]\nserial: /dev/serial/by-id/<the USB-UART adapter>\n# ls /dev/serial/by-id/ on the host shows the adapter's name";
+    // Klipper opens the UART at 250000 unless [mcu] names another baud.
+    const rate = Number.isInteger(baud) && baud > 0 && baud !== 250000 ? `\nbaud: ${baud}` : "";
+    return `[mcu]\nserial: /dev/serial/by-id/<the USB-UART adapter>${rate}\n# ls /dev/serial/by-id/ on the host shows the adapter's name`;
   }
   const name = mcu || "<mcu>";
   const known = !!(serial && /^[0-9A-Fa-f]{8,}$/.test(serial));

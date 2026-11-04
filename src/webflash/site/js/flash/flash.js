@@ -312,7 +312,7 @@ export function fasthash64(bytes, seed) {
 function hintFor(options, { method, mcu = null, serial = null, uuid = null }) {
   const iface = options.iface || null;
   const id = uuid || (iface === "can" || iface === "usbcan" ? options.uuid || null : null);
-  return printerConfigHint({ method, mcu, serial, uuid: id, iface, project: options.project });
+  return printerConfigHint({ method, mcu, serial, uuid: id, iface, project: options.project, baud: options.baud });
 }
 
 /** The CAN UUID (12 hex digits) a Klipper bridge derives from its USB serial number (its chip id). */
