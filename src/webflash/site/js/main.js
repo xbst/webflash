@@ -486,7 +486,7 @@ function setupToolbar() {
     openAbout({
       sources: st.state === "ready" && st.ref
         ? `${st.detail} (${st.ref.describe}), ${formatBytes(st.size)}${st.cached ? ", from the browser's cache" : ""}` : "",
-      toolchain: buildPanel ? buildPanel.aboutText() : "",
+      toolchain: buildPanel ? () => buildPanel.aboutText() : "",
       extend: buildPanel ? (el) => buildPanel.extendAbout(el) : null,
       onClearCache: async () => {
         if (buildPanel) await buildPanel.cacheCleared();

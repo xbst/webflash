@@ -364,14 +364,16 @@ const LICENSES = [
 
 /**
  * The About box. sources says which snapshot is loaded, as the toolbar's
- * status does; toolchain (HTML) describes the compiler; extend(el) fills the
- * build section (the build panel's worker count and cache size);
- * onClearCache runs after Clear cache emptied the cache.
+ * status does; toolchain (HTML, or a function returning it, which Clear cache
+ * asks again) describes the compiler; extend(el) fills the build section (the
+ * build panel's worker count and cache size); onClearCache runs after Clear
+ * cache emptied the cache.
  */
 export function openAbout({ sources = "", toolchain = "", extend = null, onClearCache = null } = {}) {
   const { body } = openModal("About WebFlash");
   const about = runtime.about();
-  const row = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+  const row = (k, v, id = "") => `<tr><td>${esc(k)}</td><td${id ? ` id="${id}"` : ""}>${v}</td></tr>`;
+  const toolchainText = () => (typeof toolchain === "function" ? toolchain() : toolchain) || "loads with the first build";
   body.innerHTML =
     `<p>WebFlash configures, builds and flashes Klipper, Kalico and Katapult firmware for ` +
     `3D printer boards from the browser. It runs <code>make menuconfig</code> with the ` +
@@ -383,7 +385,7 @@ export function openAbout({ sources = "", toolchain = "", extend = null, onClear
     `<h3>Versions</h3><table class="about-table">` +
     row("WebFlash", about ? esc(about.webflash) : "loads with the Python runtime") +
     row("Python", about ? `${esc(about.python)} (Pyodide ${esc(about.pyodide)})` : `Pyodide ${esc(runtime.PYODIDE_VERSION)}, not loaded yet`) +
-    row("Toolchain", toolchain || "loads with the first build") +
+    row("Toolchain", toolchainText(), "about-toolchain") +
     row("Sources", sources ? esc(sources) : "a version's source snapshot loads when you configure it") +
     `</table>` +
     `<div id="about-build"></div>` +
@@ -403,6 +405,7 @@ export function openAbout({ sources = "", toolchain = "", extend = null, onClear
     clear.textContent = (await clearCache()) ? "Cache cleared" : "Nothing cached";
     if (onClearCache) await onClearCache();
     // What the cache holds now, where About shows it.
+    body.querySelector("#about-toolchain").innerHTML = toolchainText();
     if (extend) extend(body.querySelector("#about-build"));
   });
 }
