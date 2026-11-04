@@ -255,7 +255,10 @@ export function createFlashPanel(root, options = {}) {
   }
 
   function renderDownloads(container, fw) {
-    const files = fw.artifacts && fw.artifacts.length ? fw.artifacts : [{ name: fw.image.name || "firmware.bin", bytes: null }];
+    const listed = fw.artifacts && fw.artifacts.length ? fw.artifacts : [{ name: fw.image.name || "firmware.bin", bytes: null }];
+    // The file the panel would flash comes first, as the primary button: the
+    // build lists its outputs in the engine's order, the .elf before the .bin.
+    const files = [...listed.filter((f) => f.name === fw.image.name), ...listed.filter((f) => f.name !== fw.image.name)];
     for (const f of files) {
       container.appendChild(button(`Download ${f.name} (${formatSize(f.bytes ? f.bytes.length : fw.image.size)})`, async () => {
         const bytes = f.bytes || (await rawBytes(fw));
