@@ -185,6 +185,23 @@ export function explainError(err, context = {}) {
       case "wrong-mcu":
         if (!fixes.length) fixes.push("Build the firmware for the micro-controller the board reports, or connect the board this firmware was built for.");
         break;
+      case "read-protected":
+        if (!fixes.length) fixes.push(
+          "Remove the read-out protection with STM32CubeProgrammer, through the ROM bootloader over USB or with an ST-LINK: set RDP back to level 0 (AA) under Option bytes. That erases the whole chip, a bootloader such as Katapult included.",
+          "Then put the board back in its ROM bootloader (hold BOOT0 and tap RESET) and flash again.",
+        );
+        break;
+      case "wrong-family":
+        if (fixes.length) break;
+        if (method === "picoboot") {
+          fixes.push("Build or pick a firmware for the chip that is connected (the RP2040 and the RP2350 take different files), or connect the board this firmware was built for.");
+        } else {
+          fixes.push(
+            "Build or pick a .uf2 for the chip the drive belongs to: the RP2040's drive is named RPI-RP2 and the RP2350's RP2350, and neither takes the other's files.",
+            "Or, if the firmware is the right one, pick the drive of the board it was built for.",
+          );
+        }
+        break;
       case "reenumeration":
         if (!fixes.length) fixes.push("Put the board in its bootloader by hand (hold BOOT0 or BOOTSEL and tap RESET, or double-tap RESET for Katapult), then click Connect and pick it.");
         break;
