@@ -120,8 +120,8 @@ export class FirmwareFlow {
     });
 
     wizard.onNext("firmware", () => this.next());
-    wizard.onEnter("build", () => {
-      this.autoBuild = true;
+    wizard.onEnter("build", (from) => {
+      this.autoBuild = !from || wizard.indexOf(from) < wizard.indexOf("build");
       this.tryAutoBuild();
     });
     wizard.onLeave("build", () => { this.autoBuild = false; });
@@ -408,9 +408,10 @@ export class FirmwareFlow {
   // ── Building ─────────────────────────────────────────────────────
 
   /**
-   * The Build step builds on arrival, once the engine holds the picks and
-   * the choices, unless the builds on record still match. It waits while
-   * the step is shown and starts at most once per arrival.
+   * The Build step builds on arrival from a step before it (Back from Flash
+   * starts nothing), once the engine holds the picks and the choices, unless
+   * the builds on record still match. It waits while the step is shown and
+   * starts at most once per arrival.
    */
   tryAutoBuild() {
     const bp = this.buildPanel;

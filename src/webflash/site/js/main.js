@@ -287,10 +287,11 @@ let renderPlanNote = () => {};
 
 // ── Build ────────────────────────────────────────────────────────────
 
-// The Build step starts the build on arrival, unless the build on record
-// still matches the configuration. It waits for what the build needs (the
-// sources, the plan) while the step is shown, and starts at most once per
-// arrival.
+// The Build step starts the build on arrival from Configure or a step
+// before it, unless the build on record still matches the configuration;
+// coming back to it from Flash or Embed starts nothing. It waits for what
+// the build needs (the sources, the plan) while the step is shown, and
+// starts at most once per arrival.
 let autoBuild = false;
 
 function tryAutoBuild() {
@@ -316,8 +317,8 @@ function renderBuildStep() {
 }
 
 function setupBuildStep() {
-  wizard.onEnter("build", () => {
-    autoBuild = true;
+  wizard.onEnter("build", (from) => {
+    autoBuild = !from || wizard.indexOf(from) < wizard.indexOf("build");
     tryAutoBuild();
   });
   wizard.onLeave("build", () => { autoBuild = false; });
