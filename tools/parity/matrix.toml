@@ -5,6 +5,11 @@
 # `webflash make-check` compares the make interpreter with GNU make on each
 # row; `webflash parity` builds each row with GCC and clang and compares the
 # results; `.github/workflows/ci.yml` runs both. See README.md beside this file.
+#
+# A row's keys: `name`, `projects`, `why`, `defconfig`, and optionally
+# `unless`, a list of Kconfig symbols (without CONFIG_): the row does not
+# apply to a tree whose Kconfig defines any of them, so a row for an older
+# layout is skipped on the trees that have the newer one.
 
 [[row]]
 name = "stm32g0b1-usb"
@@ -87,6 +92,15 @@ why = "Cortex-M33 multilib"
 defconfig = """
 CONFIG_MACH_RPXXXX=y
 CONFIG_MACH_RP2350=y
+"""
+
+[[row]]
+name = "rp2040-usb-legacy"
+projects = ["klipper"]
+why = "MACH_RP2040 before v0.13.0's MACH_RPXXXX; lib/rp2040/elf2uf2"
+unless = ["MACH_RPXXXX"]
+defconfig = """
+CONFIG_MACH_RP2040=y
 """
 
 [[row]]

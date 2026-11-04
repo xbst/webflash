@@ -67,6 +67,9 @@ include = [
     "lib/fast-hash/**",
     "lib/can2040/**",
     "lib/elf2uf2/**",
+    # Where Klipper kept elf2uf2 before v0.13.0. Its main.cpp builds the host
+    # tool that makes klipper.uf2, and lib/rp2040's pruning keeps no *.cpp.
+    "lib/rp2040/elf2uf2/**",
     "klippy/msgproto.py",
     "klippy/__init__.py",
     "COPYING",

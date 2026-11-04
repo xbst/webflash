@@ -1,6 +1,6 @@
 # The parity matrix
 
-`matrix.toml` lists one configuration per MCU family and flashing path (WebFlash SPEC Appendix B, plus Kalico's INDX heater for the C++ rules): a minimal defconfig, the projects it applies to and why it is there. Two maintainer commands run over it, and `.github/workflows/ci.yml` runs both on every push to `dev`, `master` and `wf/**`.
+`matrix.toml` lists one configuration per MCU family and flashing path (WebFlash SPEC Appendix B, plus Kalico's INDX heater for the C++ rules): a minimal defconfig, the projects it applies to and why it is there. A row may also name `unless`, a list of Kconfig symbols (without `CONFIG_`): it then does not apply to a tree whose Kconfig defines any of them. `rp2040-usb-legacy` uses it for Klipper before v0.13.0, whose `MACH_RP2040` became a choice under `MACH_RPXXXX`: it builds the old layout (with `lib/rp2040/elf2uf2`) and is skipped on newer trees, which `rp2040-usb` covers. `make-check` and `parity` print such a row as skipped and pass when every row is skipped; the snapshot gate records it as not applying, as it does a row that sets a symbol the tree's Kconfig does not define. Two maintainer commands run over it, and `.github/workflows/ci.yml` runs both on every push to `dev`, `master` and `wf/**`.
 
 ## `webflash make-check`
 

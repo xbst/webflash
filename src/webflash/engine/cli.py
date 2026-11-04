@@ -56,8 +56,13 @@ def _error(message: object) -> int:
 
 # ── The matrix ───────────────────────────────────────────────────────
 
+_SYMBOL_RE = re.compile(r"(?!CONFIG_)[A-Za-z0-9_]+")
+_KCONFIG_SYMBOL_RE = re.compile(r"^\s*(?:menu)?config\s+([A-Za-z0-9_]+)", re.M)
+
+
 def load_matrix(path: Path) -> list[dict]:
-    """The rows of ``matrix.toml``: ``name``, ``projects``, ``defconfig``, ``why``."""
+    """The rows of ``matrix.toml``: ``name``, ``projects``, ``defconfig``,
+    ``why`` and ``unless`` (the symbols of the trees the row is not for)."""
     try:
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as e:
@@ -70,9 +75,47 @@ def load_matrix(path: Path) -> list[dict]:
         for key in ("name", "projects", "defconfig"):
             if key not in row:
                 raise ValueError(f"{path}: [[row]] #{i} has no '{key}'")
+        unless = row.get("unless", [])
+        if not (isinstance(unless, list) and all(isinstance(s, str) and _SYMBOL_RE.fullmatch(s) for s in unless)):
+            raise ValueError(f"{path}: [[row]] {row['name']!r}: unless must be a list of Kconfig symbol "
+                             "names without CONFIG_, such as \"MACH_RPXXXX\"")
         out.append({"name": row["name"], "projects": list(row["projects"]),
-                    "defconfig": row["defconfig"], "why": row.get("why", "")})
+                    "defconfig": row["defconfig"], "why": row.get("why", ""), "unless": list(unless)})
     return out
+
+
+def kconfig_symbols(tree: Path) -> set[str]:
+    """Every symbol the tree's Kconfig files define (``config`` and
+    ``menuconfig`` lines), the same scan as the snapshot gate's."""
+    defined: set[str] = set()
+    for path in Path(tree).rglob("Kconfig*"):
+        # The name test again, case-sensitive: on Windows the glob is not, and
+        # would also read lib/kconfiglib/kconfiglib.py.
+        if path.is_file() and path.name.startswith("Kconfig"):
+            defined.update(_KCONFIG_SYMBOL_RE.findall(path.read_text("utf-8", "replace")))
+    return defined
+
+
+def split_by_unless(tree: Path, rows: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """The rows that apply to the tree, and the rows whose ``unless`` names a
+    symbol the tree defines, each with why it does not apply."""
+    if not any(r.get("unless") for r in rows):
+        return rows, []
+    defined = kconfig_symbols(tree)
+    applies, skipped = [], []
+    for row in rows:
+        present = sorted(s for s in row.get("unless", []) if s in defined)
+        if present:
+            skipped.append((row, f"the row is for trees without {', '.join(present)}, "
+                                 "which this tree's Kconfig defines"))
+        else:
+            applies.append(row)
+    return applies, skipped
+
+
+def print_skipped(project: str, skipped: list[tuple[dict, str]]) -> None:
+    for row, why in skipped:
+        print(f"{project} {row['name']}: skipped, does not apply ({why})")
 
 
 def matrix_path(args: argparse.Namespace) -> Path:
@@ -241,11 +284,17 @@ def cmd_make_check(args: argparse.Namespace) -> int:
             configs = [(Path(args.config).stem, Path(args.config).read_text(encoding="utf-8"))]
         else:
             rows = matrix_rows(matrix_path(args), project, args.row)
+            if not rows:
+                return _error(f"no matrix row applies to {project}")
+            rows, skipped = split_by_unless(tree, rows)
+            print_skipped(project, skipped)
             configs = [(r["name"], r["defconfig"]) for r in rows]
     except (OSError, ValueError) as e:
         return _error(e)
     if not configs:
-        return _error(f"no matrix row applies to {project}")
+        # Every row was skipped: nothing to compare is not a failure.
+        print(f"{project}: no row applies to this tree")
+        return 0
     failed = 0
     for name, text in configs:
         try:
@@ -629,10 +678,16 @@ def cmd_parity(args: argparse.Namespace) -> int:
             return _error(f"unknown toolchain {v!r} (choose from {', '.join(VARIANTS)})")
     try:
         rows = matrix_rows(matrix_path(args), project, args.row)
+        if not rows:
+            return _error(f"no matrix row applies to {project}")
+        rows, skipped = split_by_unless(tree, rows)
     except (OSError, ValueError) as e:
         return _error(e)
+    print_skipped(project, skipped)
     if not rows:
-        return _error(f"no matrix row applies to {project}")
+        # Every row was skipped: nothing to build is not a failure.
+        print(f"{project}: no row applies to this tree")
+        return 0
     version = args.version or git_describe(tree)
     toolchains = {}
     try:

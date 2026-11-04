@@ -819,7 +819,7 @@ def _engine_identity(matrix: Path) -> str:
 
 def _matrix_rows(matrix: Path, project: str) -> list[dict]:
     """The parity matrix rows (``[[row]]`` with ``name``, ``projects`` and
-    ``defconfig``) that name this project."""
+    ``defconfig``, and optionally ``unless``) that name this project."""
     raw = tomllib.loads(matrix.read_bytes().decode("utf-8-sig"))
     rows = raw.get("row")
     if not isinstance(rows, list):
@@ -832,25 +832,54 @@ def _matrix_rows(matrix: Path, project: str) -> list[dict]:
         if project in projects:
             if not isinstance(row.get("defconfig"), str):
                 raise ValueError(f"{matrix}: row {row['name']!r} needs a defconfig")
+            unless = row.get("unless", [])
+            if not (isinstance(unless, list)
+                    and all(isinstance(s, str) and _SYMBOL_RE.fullmatch(s) for s in unless)):
+                raise ValueError(f"{matrix}: row {row['name']!r}: unless must be a list of Kconfig "
+                                 "symbol names without CONFIG_, such as \"MACH_RPXXXX\"")
             out.append(row)
     return out
 
 
 _KCONFIG_SYMBOL_RE = re.compile(r"^\s*(?:menu)?config\s+([A-Za-z0-9_]+)", re.M)
 _DEFCONFIG_SYMBOL_RE = re.compile(r"^\s*(?:#\s*)?CONFIG_([A-Za-z0-9_]+)", re.M)
+_SYMBOL_RE = re.compile(r"(?!CONFIG_)[A-Za-z0-9_]+")
 
 
-def _missing_symbols(tree: Path, defconfig: str) -> list[str]:
-    """The symbols a row sets that this tree's Kconfig files never define: a
-    row for an MCU an old tag predates does not apply to that tag."""
+def _defined_symbols(tree: Path) -> set[str]:
+    """Every symbol this tree's Kconfig files define."""
     defined: set[str] = set()
     for path in tree.rglob("Kconfig*"):
         # The name test again, case-sensitive: on Windows the glob is not, and
         # would also read lib/kconfiglib/kconfiglib.py.
         if path.is_file() and path.name.startswith("Kconfig"):
             defined.update(_KCONFIG_SYMBOL_RE.findall(path.read_text("utf-8", "replace")))
+    return defined
+
+
+def _missing_symbols(tree: Path, defconfig: str, defined: set[str] | None = None) -> list[str]:
+    """The symbols a row sets that this tree's Kconfig files never define: a
+    row for an MCU an old tag predates does not apply to that tag."""
+    if defined is None:
+        defined = _defined_symbols(tree)
     wanted = _DEFCONFIG_SYMBOL_RE.findall(defconfig)
     return sorted({s for s in wanted if s not in defined})
+
+
+def _row_skip_reason(tree: Path, row: dict, defined: set[str] | None = None) -> str | None:
+    """Why a matrix row does not apply to this tree, or None when it does: it
+    sets a symbol the tree's Kconfig never defines, or the tree defines a
+    symbol the row's ``unless`` names (the newer layout an older row stands in
+    for, such as MACH_RPXXXX for a row of Klipper's MACH_RP2040)."""
+    if defined is None:
+        defined = _defined_symbols(tree)
+    missing = _missing_symbols(tree, row["defconfig"], defined)
+    if missing:
+        return f"this tree's Kconfig does not define {', '.join(missing)}"
+    present = sorted(s for s in row.get("unless", []) if s in defined)
+    if present:
+        return f"the row is for trees without {', '.join(present)}, which this tree's Kconfig defines"
+    return None
 
 
 def _extract(cache: Path, manifest: dict, tree: Path) -> None:
@@ -926,13 +955,14 @@ def run_gate(cache: Path, manifest: dict, describe: str, matrix: Path, log,
         tree = work / "tree"
         _extract(cache, manifest, tree)
         results = []
+        defined = _defined_symbols(tree)
         for row in rows:
             name = row["name"]
             result = {"row": name}
-            missing = _missing_symbols(tree, row["defconfig"])
-            if missing:
+            why_not = _row_skip_reason(tree, row, defined)
+            if why_not:
                 result["applies"] = False
-                result["note"] = f"this tree's Kconfig does not define {', '.join(missing)}"
+                result["note"] = why_not
                 log(f"  gate: {name}: does not apply ({result['note']})")
                 results.append(result)
                 continue
