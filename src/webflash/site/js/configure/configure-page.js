@@ -15,7 +15,7 @@ import * as runtime from "../runtime.js";
 import { esc, openModal } from "../dialogs.js";
 import { KconfigTree, slotOfId } from "./kconfig-tree.js";
 import { carryText, withLowLevel } from "./configurator.js";
-import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./sources.js";
+import { blobUrl, formatBytes, headSize, isChecked, projectTitle, resolveVersionAsync, uncheckedText } from "./sources.js";
 import { isCached } from "../workers/blob-cache.js";
 
 /** "Klipper", "Klipper and Katapult": the projects Configure sets up. */
@@ -364,7 +364,14 @@ export class ConfigurePage {
       el.innerHTML = `<p>Loading the list of versions…</p>`;
       return;
     }
-    const { ref, error, note } = this.configurator.resolve();
+    let { ref, error, note, pending } = this.configurator.resolve();
+    if (pending) {
+      // An older commit: its project's history file says which snapshot it is.
+      el.innerHTML = `<p>Loading the list of older commits…</p>`;
+      const want = (el.dataset.ref = `${s.project}/${s.version}`);
+      ({ ref, error, note } = await resolveVersionAsync(index, s.project, s.version));
+      if (el.dataset.ref !== want || s.index !== index || s.sources.state !== "idle") return;
+    }
     if (!ref) {
       el.innerHTML = `<p class="kc-error-text">${esc(error)}</p>`;
       return;

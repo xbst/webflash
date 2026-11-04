@@ -22,7 +22,7 @@ import * as runtime from "./runtime.js";
 import { renderAbout } from "./dialogs.js";
 import { Session } from "./state.js";
 import { Configurator } from "./configure/configurator.js";
-import { blobUrl, isChecked, projectTitle, resolveVersion, uncheckedText } from "./configure/sources.js";
+import { blobUrl, isChecked, loadHistory, projectTitle, resolveVersion, uncheckedText } from "./configure/sources.js";
 import { mountVersionPicker } from "./configure/version-picker.js";
 import { checkNumber } from "./configure/kconfig-tree.js";
 import { BuildPanel } from "./build/build-panel.js";
@@ -627,7 +627,7 @@ export class FirmwareFlow {
       if (o.project !== project || o.index !== index || o.value !== value || o.versions !== versions || o.disabled !== busy) picker.update(opts);
       return picker;
     }
-    const { ref, error } = index ? resolveVersion(index, project, value) : { ref: null, error: "" };
+    const { ref, error } = index ? this._resolve(project, value) : { ref: null, error: "" };
     const why = !index ? (this.indexError ? `The list of versions did not load: ${this.indexError}` : "") : ref ? "" : error;
     fixed.replaceChildren(ref ? refText(ref) : value);
     fixed.title = ref ? `${ref.describe || ref.id}${ref.date ? `, ${ref.date}` : ""}` : why;
@@ -636,6 +636,27 @@ export class FirmwareFlow {
     }
     if (why) fixed.append(el("span", { class: "wf-muted wf-why", text: ` ${why}` }));
     return picker;
+  }
+
+  // What a version names. An older commit (a describe string) resolves once
+  // its project's history file is here: it loads once per index and project,
+  // without a picker too, and the card renders again; a failure is kept
+  // (Next tries again, as it loads the version).
+  _resolve(project, version) {
+    const index = this.session.index;
+    const resolved = resolveVersion(index, project, version);
+    if (!resolved.pending) return resolved;
+    if (!this._histories) this._histories = new WeakMap();
+    if (!this._histories.has(index)) this._histories.set(index, new Map());
+    const loads = this._histories.get(index);
+    const had = loads.get(project);
+    if (typeof had === "string") return { ref: null, error: had };
+    if (!had) {
+      const again = () => { if (this.session.index === index) this.render(); };
+      loads.set(project, loadHistory(index, project).then(() => { loads.delete(project); again(); },
+        (e) => { loads.set(project, e.message); again(); }));
+    }
+    return { ref: null, pending: true, error: "Loading the list of older commits…" };
   }
 
   renderSetups() {
@@ -837,7 +858,7 @@ export class FirmwareFlow {
       : [[p.project, p.version, s.sources], ...(p.katapult && this.config.katapult ? [["katapult", p.katapultVersion, s.katapult ? s.katapult.sources : null]] : [])];
     const sources = [];
     for (const [project, version, st] of parts) {
-      const { ref } = resolveVersion(s.index, project, version);
+      const { ref } = this._resolve(project, version);
       if (!ref) continue;
       const on = st && st.ref;
       const loaded = Boolean(on) && on.id === ref.id && ["loading", "ready"].includes(st.state);
