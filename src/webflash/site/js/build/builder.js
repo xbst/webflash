@@ -1,5 +1,5 @@
 // A build, without its view: what the site's Build card (build-panel.js) and
-// a generated page's card (chunk 08's embed) both run.
+// a generated page's card (js/embed/embed-build.js) both run.
 //
 // prepare() makes the compiler ready: the release named by
 // toolchain/current.json, its files through Cache Storage with their checks

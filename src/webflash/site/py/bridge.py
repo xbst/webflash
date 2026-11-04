@@ -188,7 +188,7 @@ def _progress(phase: str, detail: str = "", done=None, total=None) -> None:
     """``webflash_js.progress(phase, detail, done, total)`` when the worker
     registered it (Pyodide); nothing under CPython unless a test installs a
     module of that name. A worker whose ``progress`` takes two arguments
-    (chunk 01's) gets the two."""
+    (an older engine worker) gets the two."""
     try:
         import webflash_js  # type: ignore[import-not-found]
     except ImportError:
@@ -208,7 +208,7 @@ def _progress(phase: str, detail: str = "", done=None, total=None) -> None:
 
 def _cancelled() -> bool:
     """Whether the page cancelled the running call (``webflash_js.cancelled``,
-    which chunk 05's worker provides for calls sent with ``long: true``)."""
+    which the engine worker provides for calls sent with ``long: true``)."""
     try:
         import webflash_js  # type: ignore[import-not-found]
     except ImportError:

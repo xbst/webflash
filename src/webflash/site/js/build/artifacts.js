@@ -109,7 +109,7 @@ export function renderMemory(table, memory) {
 }
 
 /**
- * The build result as the flash panel reads it (chunk 07's session.build):
+ * The build result as the flash panel reads it (session.build):
  * {project, ref, version, config, outputs: Map<name, Uint8Array>,
  * appAddress, mcu} plus what else the engine reported. appAddress is where
  * the main .bin goes: CONFIG_FLASH_APPLICATION_ADDRESS for Klipper and

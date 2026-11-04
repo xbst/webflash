@@ -795,7 +795,7 @@ def gate_unavailable() -> str | None:
         spec = None
     if spec is None:
         return ("the build engine is not installed, so webflash make-check and webflash build "
-                "do not exist yet (chunk 03)")
+                "cannot run")
     return None
 
 

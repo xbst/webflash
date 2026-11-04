@@ -51,7 +51,7 @@
       <input type="file" id="open-toml" accept=".toml,image/*,.bin,.hex,.uf2,.elf" multiple>
     </label>
     <button id="save-toml" title="Save the board TOML (Ctrl+S)">Save TOML</button>
-    <button id="upload-firmware" disabled title="Flash a firmware file you upload (chunk 07)">Upload firmware</button>
+    <button id="upload-firmware" disabled title="Flash a firmware file you upload">Upload firmware</button>
     <span class="separator"></span>
     <label class="field">
       Theme
@@ -150,7 +150,7 @@
           <h2>Flash</h2>
           <span class="card-spacer"></span>
           <label class="field">Method
-            <select id="flash-method" disabled title="How to write the firmware to the board (chunk 07)">
+            <select id="flash-method" disabled title="How to write the firmware to the board">
               <option>Download</option>
             </select>
           </label>
@@ -158,15 +158,15 @@
         <div class="flash-step" id="flash-step">
           <p class="flash-instructions" id="flash-instructions">Pick a method once a firmware is built or uploaded.</p>
           <div class="flash-actions">
-            <button id="flash-connect" class="primary" disabled title="Pick the board in the browser's device list (chunk 07)">Connect</button>
-            <button id="flash-write" disabled title="Write and verify the firmware (chunk 07)">Flash</button>
+            <button id="flash-connect" class="primary" disabled title="Pick the board in the browser's device list">Connect</button>
+            <button id="flash-write" disabled title="Write and verify the firmware">Flash</button>
           </div>
           <progress id="flash-progress" max="100" value="0" hidden></progress>
           <div class="flash-result" id="flash-result" hidden></div>
         </div>
         <details class="help-box" id="flash-help">
           <summary>What went wrong?</summary>
-          <p>Common problems and their fixes appear here: drivers on Windows, permissions on Linux, a board that is not in its bootloader (chunk 07).</p>
+          <p>Common problems and their fixes appear here: drivers on Windows, permissions on Linux, a board that is not in its bootloader.</p>
         </details>
       </div>
     </section>

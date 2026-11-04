@@ -4,8 +4,8 @@
 //
 // inferMethods(configText) reads the few CONFIG_ symbols the rules need
 // from the .config text in JavaScript. It has the same shape as the
-// bridge's infer_methods (chunk 03), so the panel can switch to the Python
-// side without changing callers.
+// bridge's infer_methods (engine/methods.py), so the panel can switch to the
+// Python side without changing callers.
 
 // ── USB ids ─────────────────────────────────────────────────────────
 

@@ -143,7 +143,7 @@ export class Session {
   /**
    * The board TOML read into objects, as toml-io.js's parseToml reads the
    * text Save TOML writes ([[option]] as option, keys at their defaults left
-   * out): the shape chunk 01's session offered, which the flash panel reads.
+   * out): the shape the flash panel reads.
    */
   get toml() {
     if (this._tomlParsed === undefined || this._tomlParsedFrom !== this.tomlText) {
@@ -239,7 +239,7 @@ export class Session {
     this._sync(origin);
   }
 
-  /** The theme of the generated page: [board] theme. Always applies (chunk 01's callers check the result). */
+  /** The theme of the generated page: [board] theme. Always applies (callers check the result). */
   setTheme(name) {
     if (name && name !== this.theme) this.setBoard({ theme: name });
     return true;

@@ -1,5 +1,5 @@
-// A toolchain worker: one copy of the WebAssembly LLVM (chunk 02's
-// toolchain.js and llvm.js) running a build's compiler commands, one at a
+// A toolchain worker: one copy of the WebAssembly LLVM (the webflash-toolchain
+// release's toolchain.js and llvm.js) running a build's compiler commands, one at a
 // time. The pool (js/build/toolchain-pool.js) starts several and the engine
 // worker sends each its jobs directly, over a MessagePort, so a compile never
 // waits on the page's main thread.

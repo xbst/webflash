@@ -132,7 +132,7 @@ export class Configurator {
       // A prebuilt board TOML configures nothing: whatever was loaded no longer applies.
       if ((what === "open" || what === "prebuilt") && !session.firmware &&
           (this.loaded || session.sources.state !== "idle")) this.unload();
-      // A build (chunk 06) loads the built .config into the engine's Kconfig
+      // A build (js/build/) loads the built .config into the engine's Kconfig
       // session, which pins every symbol; load the defconfig again so later
       // edits follow the defaults as before.
       if (what === "build" && this.loaded && session.firmware) this.reapply();
@@ -184,7 +184,7 @@ export class Configurator {
    * Run fn alone on the engine, after every operation queued so far and
    * before any queued later: a build, which must not have the tree changed
    * under it. A plan still waiting for changes to settle is dropped; the next
-   * change (the reload after the build, chunk 07's "build" event) plans again.
+   * change (the reload after the build's "build" event) plans again.
    */
   exclusive(fn) {
     clearTimeout(this._planTimer);

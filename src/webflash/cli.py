@@ -135,19 +135,19 @@ def _run_command(argv: list[str]) -> None:
     implements it takes the whole of ``argv`` and returns an exit code."""
     command = argv[0]
     if command == _SOURCES_COMMAND:
-        name, missing, chunk = "webflash.sources", ("webflash.sources",), "04"
+        name, missing = "webflash.sources", ("webflash.sources",)
     else:
-        name, missing, chunk = "webflash.engine.cli", ("webflash.engine", "webflash.engine.cli"), "03"
+        name, missing = "webflash.engine.cli", ("webflash.engine", "webflash.engine.cli")
     try:
         # import_module, not "from . import": that raises a bare ImportError
         # for a missing submodule, which cannot be told from a broken one.
         module = importlib.import_module(name)
     except ModuleNotFoundError as e:
         # Only the module itself being absent: a module that exists and fails
-        # to import is a bug to see, not an unbuilt command.
+        # to import is a bug to see, not a missing command.
         if e.name not in missing:
             raise
-        _error(f"this command is not available yet (chunk {chunk})")
+        _error(f"this installation of webflash has no {name}, which runs this command")
     code = module.main(argv)
     if code:
         sys.exit(code)

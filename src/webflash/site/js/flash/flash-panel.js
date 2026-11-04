@@ -2,10 +2,10 @@
 //
 // This is the one flash module that knows the site's state. The firmware
 // comes, in this order of preference, from a file the user uploaded with
-// the toolbar's Upload firmware, from session.build (chunk 06: the
-// in-browser build's outputs), or from a [prebuilt] board TOML whose file
-// was opened beside it. The methods come from the configuration
-// (session.configText from chunk 05, else the TOML's defconfig) through
+// the toolbar's Upload firmware, from session.build (the in-browser build's
+// outputs), or from a [prebuilt] board TOML whose file was opened beside it.
+// The methods come from the configuration (session.configText, the
+// configure code's full .config, else the TOML's defconfig) through
 // devices.js's inferMethods, narrowed by the TOML's [flash].methods; a file
 // with no configuration gets the methods its MCU or address allow.
 //
@@ -58,7 +58,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return t.prebuilt && typeof t.prebuilt === "object" ? t.prebuilt : null;
   }
 
-  /** The build's firmware (chunk 06's state.build), as a panel firmware, or null. */
+  /** The build's firmware (session.build), as a panel firmware, or null. */
   function fromBuild() {
     const b = session.build;
     if (!b || !b.outputs) return null;

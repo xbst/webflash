@@ -247,7 +247,7 @@ export async function render(tomlText, { themeName = "", inline = false, files =
   return { html: out.html, warnings: out.warnings || [] };
 }
 
-// ── Sources and Kconfig (the engine, chunk 03's bridge methods) ─────
+// ── Sources and Kconfig (the engine's bridge methods) ─────────────
 
 /**
  * Make one ref of a project the tree the engine configures and builds: the
@@ -307,7 +307,7 @@ export function fetchBlob(url, { onProgress = null, phase = "download", detail =
   return call("fetchBlob", [url, { phase, detail, size }], { onProgress, early: true });
 }
 
-// ── The build (chunk 06) ────────────────────────────────────────────
+// ── The build ───────────────────────────────────────────────────────
 
 /** Extract one lib/<dir> bundle (gzipped or not) into the engine's tree: {name, files}. */
 export async function addLib(name, bytes) {
