@@ -809,7 +809,9 @@ def refresh_describes(cache: Path, project: ProjectPolicy, state: dict, remote: 
     snapshotted (Kalico tags existing commits of its default branch) changes
     the label of that commit and of every snapshotted commit after it. Each
     manifest the state keeps is described again in the fetched clone and
-    rewritten when its label differs. Returns how many changed."""
+    rewritten when its label differs, with git's abbreviation of today (a
+    tag's ``<tag>-0-g<abbrev>``). The gate reports keep the label the gate
+    built with. Returns how many changed."""
     project_state = _project_state(state, project.name)
     key = _tags_key(remote)
     if project_state.get("tags") == key:
@@ -825,8 +827,10 @@ def refresh_describes(cache: Path, project: ProjectPolicy, state: dict, remote: 
             if not _has_commit(repo, sha):
                 continue        # gone upstream (a force-pushed branch): it keeps its label
             describe = _git(["describe", "--tags", "--long", "--always", sha], cwd=repo).decode().strip()
-            if describe != manifest.get("describe"):
+            abbrev = _git(["rev-parse", "--short", sha], cwd=repo).decode().strip()
+            if describe != manifest.get("describe") or abbrev != manifest.get("abbrev"):
                 manifest["describe"] = describe
+                manifest["abbrev"] = abbrev
                 _write_json(snapshot_dir(cache, project.name, sha) / REF_FILE, manifest)
                 changed += 1
     if changed:
