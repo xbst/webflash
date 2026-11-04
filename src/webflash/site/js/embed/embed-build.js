@@ -13,7 +13,7 @@
 // a click: the Python runtime, the version's sources, the compiler. Then the
 // configuration loads (the defconfig, then each choice the reader made), the
 // options follow the Kconfig tree, and the build runs. Once a build worked in
-// this browser, later ones start at once (everything is cached by then).
+// this browser and its cache kept the compiler, later ones start at once.
 
 import * as runtime from "./runtime.js";
 import { esc } from "./dialogs.js";
@@ -23,6 +23,7 @@ import { blobSize, blobUrl, formatBytes, groupRefs, isChecked, projectTitle, res
 import { versionOptions } from "./configure/version-picker.js";
 import { checkNumber } from "./configure/kconfig-tree.js";
 import { BuildCancelled, Builder, untilAborted } from "./build/builder.js";
+import { cachedFlags } from "./build/cache.js";
 import { buildRecord, renderArtifacts, renderMemory } from "./build/artifacts.js";
 import { configKey, splitFailure } from "./build/build-panel.js";
 import { workerCount } from "./build/toolchain-pool.js";
@@ -32,7 +33,8 @@ import { unsupportedReason } from "./flash/devices.js";
 import { openInSiteUrl } from "./toml-io.js";
 import { applyChoices, isCurrent, linkToml, liveOption, optionModel } from "./embed-model.js";
 
-// A build worked in this browser (this site's storage): later ones start at once.
+// A build worked in this browser with the compiler in Cache Storage (this
+// site's storage): later ones start at once.
 const AUTO_KEY = "webflash.embed.auto";
 const ENGINE_PHASES = new Set(["configure", "plan", "build", "step", "done", "log", "failed", "finished"]);
 
@@ -692,7 +694,11 @@ export class FirmwareSection {
       this.builder.begin();
       this.checkCancelled();
       await this.builder.prepare(tc, { step: (text) => this.step(text) });
-      remember(AUTO_KEY, "1");
+      // Later builds start without asking only when the release is in Cache
+      // Storage: one held in memory (a browser without Cache Storage, or one
+      // that evicted it) would download again.
+      this.builder.cached = (await cachedFlags(tc.files)).every(Boolean);
+      if (this.builder.cached) remember(AUTO_KEY, "1");
       const job = { project: s.project, ref: s.ref, configText: s.configText, defconfigText: s.defconfigText };
       s.setLocked("A build is running.");
       const out = await this.configurator.exclusive(() => {
