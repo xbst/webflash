@@ -123,6 +123,7 @@ export function createFlashPanel(root, options = {}) {
     empty: "",            // why there is no firmware, when setFirmware said
     written: null,        // {phase, done, total} of the running flash, for the write list
     flashed: null,        // the firmware the last flash wrote, while its result is shown
+    failed: null,         // {firmware, method, written}: where the last flash failed
   };
   root.innerHTML = "";
   root.classList.add("flash-panel");
@@ -357,12 +358,18 @@ export function createFlashPanel(root, options = {}) {
     }
     const total = rows.reduce((n, r) => n + r.size, 0) || 1;
     const w = state.written;
-    // How far the flash is, as a fraction of the bytes: rows are written in
-    // address order and read back in the same order.
     // A firmware that arrived during the flash keeps its result box, but none
     // of its rows was written.
     const doneHere = state.phase === "done" && state.flashed === fw;
+    // How far the flash is, as a fraction of the bytes: rows are written in
+    // address order and read back in the same order.
     const at = doneHere ? 1 : state.phase === "flashing" && w && w.total ? w.done / w.total : 0;
+    // Where the last flash of this firmware with this method stopped, until
+    // the next one starts: the row it was writing, or the row whose read-back
+    // (a segment or a chunk at a time) it had just finished.
+    const f = (state.phase === "ready" || state.phase === "failed") && state.failed && state.failed.firmware === fw &&
+      state.failed.method === method ? state.failed.written : null;
+    const failedAt = f && f.total ? f.done / f.total : null;
     let before = 0;
     const items = [];
     const m = currentMethod();
@@ -382,7 +389,9 @@ export function createFlashPanel(root, options = {}) {
       else if (state.phase === "flashing" && w) {
         if (written >= end - 1e-9) { icon = "✓"; cls = "ok"; }
         else if (w.phase === "erase" ? i === 0 : written >= start - 1e-9) cls = "run";
-      } else if (state.phase === "failed" && w && at >= start && at < end) { icon = "✗"; cls = "bad"; }
+      } else if (failedAt !== null && (f.phase === "verify"
+        ? (failedAt > start + 1e-9 || i === 0) && failedAt <= end + 1e-9
+        : failedAt >= start - 1e-9 && (failedAt < end - 1e-9 || i === rows.length - 1))) { icon = "✗"; cls = "bad"; }
       items.push(`<li class="flash-write ${cls}"><span class="fw-icon" aria-hidden="true">${cls === "run" ? `<span class="spinner"></span>` : esc(icon)}</span>` +
         `<span class="fw-name">${esc(r.title)}</span><span class="fw-addr">${esc(hex8(r.address))} · ${esc(formatSize(r.size))}</span></li>`);
     });
@@ -624,6 +633,7 @@ export function createFlashPanel(root, options = {}) {
     state.error = null;
     state.written = null;
     state.flashed = null;
+    state.failed = null;
     result.hidden = true;
     confirmBox.hidden = true;
     renderMethods();
@@ -651,6 +661,8 @@ export function createFlashPanel(root, options = {}) {
     } catch (e) {
       state.phase = "failed";
       state.connection = null;
+      // Where it stopped, for the write list's cross; a cancel crosses nothing.
+      state.failed = isCancel(e) ? null : { firmware: fw, method, written: state.written };
       progressWrap.hidden = true;
       showFailure(e, method);
     } finally {
@@ -715,6 +727,7 @@ export function createFlashPanel(root, options = {}) {
       state.error = null;
       state.written = null;
       state.flashed = null;
+      state.failed = null;
     }
     if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
     renderAll();
