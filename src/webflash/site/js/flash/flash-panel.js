@@ -8,7 +8,7 @@
 // together, through pair.js, when Katapult is picked), or, for a [prebuilt]
 // board TOML, from the file opened beside it.
 // The methods come from the configuration (session.configText, the
-// configure code's full .config, else the TOML's defconfig) through
+// configure code's full .config, else the selected setup's defconfig) through
 // devices.js's inferMethods, narrowed by the TOML's [flash].methods; a file
 // with no configuration gets the methods its MCU or address allow.
 //
@@ -57,8 +57,9 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   // ── Sources ─────────────────────────────────────────────────────
   function configText() {
     if (typeof session.configText === "string" && session.configText.trim()) return session.configText;
+    // The setup Configure edits, as tomlFlash reads its methods; else the TOML's own.
     const t = session.toml || {};
-    const table = t.config || firstSetup(t);
+    const table = session.setup || t.config || firstSetup(t);
     return (table && typeof table.defconfig === "string") ? table.defconfig : "";
   }
 
