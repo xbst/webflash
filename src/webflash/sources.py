@@ -1028,8 +1028,10 @@ def age_out(state: dict, today: _dt.date, days: int, superseded_days: int,
             projects: list[str] | None = None) -> list[str]:
     """Drop refs the policy has not selected for more than ``days`` days, and
     superseded snapshots older than ``superseded_days``. ``projects`` limits
-    the refs aged to those projects (whose whole policy ran); superseded
-    snapshots age in every project. Returns what was dropped, for the log."""
+    the refs aged to those projects (whose whole policy ran): None ages every
+    project's refs, an empty list (a ``--ref`` run, which records only the
+    refs it rebuilt) ages none. Superseded snapshots age in every project.
+    Returns what was dropped, for the log."""
     dropped = []
     for name, project_state in state["projects"].items():
         if projects is None or name in projects:
@@ -1451,7 +1453,7 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
         if missing:
             raise ValueError(f"the policy selects no ref named {', '.join(missing)}")
     dropped = age_out(state, today, policy.age_days, policy.superseded_days,
-                      None if refs else names)
+                      [] if refs else names)
     for line in dropped:
         log(f"aged out: {line}")
     save_state(cache, state)
