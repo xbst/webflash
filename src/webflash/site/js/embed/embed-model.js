@@ -287,12 +287,24 @@ export function firmwareChoices(config) {
   return list;
 }
 
-/** The [[option]]s that apply to a setup ([[option]] setups; none listed: every setup). */
-export function optionsFor(config, setup) {
-  return config.options.filter((o) => !o.setups || (setup && o.setups.includes(setup.id)));
+const OFFSET_MEMBER = /^(STM32|RPXXXX|LPC)_FLASH_START_[0-9A-F]+$/;
+
+/** Whether an option is the firmware's bootloader offset (a *_FLASH_START_* choice). */
+export function isOffsetOption(option) {
+  const names = Array.isArray(option.values) && option.values.length ? option.values : [option.symbol];
+  return names.every((v) => OFFSET_MEMBER.test(v));
 }
 
-const OFFSET_MEMBER = /^(STM32|RPXXXX|LPC)_FLASH_START_[0-9A-F]+$/;
+/**
+ * The [[option]]s that apply to a setup ([[option]] setups; none listed:
+ * every setup). With picks None (Katapult alone), the firmware's bootloader
+ * offset does not: Katapult's Kconfig gives those symbols another meaning
+ * (its deployer's address), as engine/pair.py's deny list knows.
+ */
+export function optionsFor(config, setup, picks = null) {
+  return config.options.filter((o) => (!o.setups || (setup && o.setups.includes(setup.id))) &&
+    !(picks && picks.project === "none" && isOffsetOption(o)));
+}
 
 /**
  * Whether an option is Klipper's bootloader offset while Katapult is ticked
@@ -301,8 +313,7 @@ const OFFSET_MEMBER = /^(STM32|RPXXXX|LPC)_FLASH_START_[0-9A-F]+$/;
  */
 export function offsetLocked(option, picks) {
   if (!picks.katapult || picks.project === "none" || picks.project === "katapult") return false;
-  const names = Array.isArray(option.values) && option.values.length ? option.values : [option.symbol];
-  return names.every((v) => OFFSET_MEMBER.test(v));
+  return isOffsetOption(option);
 }
 
 /** Why the reader cannot pick a setup now, or "": one without Katapult while Katapult is ticked. */
@@ -384,14 +395,16 @@ export function cardTables(config, picks, { link = false, choices = null } = {})
   }
   if (link) {
     const mine = setups[at];
-    const own = optionsFor(config, config.setups[at]).filter((o) => !offsetLocked(o, picks));
+    const own = optionsFor(config, config.setups[at], picks).filter((o) => !offsetLocked(o, picks));
     if (choices && choices.size) mine.defconfig = applyChoices(mine.defconfig, own, choices);
     let order = [mine, ...setups.filter((s, i) => i !== at)];
     if (none) order = order.filter((s, i) => i === 0 || typeof config.setups.find((c) => c.id === s.id).katapult === "string");
     setups = order;
-    // [[option]] setups name only the setups kept; an option left with none goes.
+    // [[option]] setups name only the setups kept; an option left with none
+    // goes, and so does the firmware's offset for Katapult alone.
     const ids = new Set(setups.map((s) => s.id));
     options = options.flatMap((o) => {
+      if (none && isOffsetOption(o)) return [];
       if (!o.setups) return [o];
       const kept = o.setups.filter((id) => ids.has(id));
       return kept.length ? [{ ...o, setups: kept }] : [];

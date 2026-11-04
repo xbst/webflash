@@ -150,7 +150,7 @@ export class FirmwareFlow {
 
   /** The options the reader sets for the setup picked. */
   options() {
-    return optionsFor(this.config, this.setup);
+    return optionsFor(this.config, this.setup, this.picks);
   }
 
   /** The defconfig the options read from before the configuration loads: the session's for the setup. */
