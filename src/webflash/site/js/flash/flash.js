@@ -170,9 +170,10 @@ export async function flashImage(method, image, options = {}, callbacks = {}) {
     case "picoboot": {
       status("Writing over PICOBOOT");
       const r = await flashPicoboot(connection.device, image, { verify, reboot: leave }, { log, progress });
-      // The BOOTSEL device's serial is the flash's unique id, the same bytes Klipper's RP2040 port reports as its serial.
+      // The BOOTSEL ROM's serial is not the flash id Klipper reports (a KUSBA's
+      // ROM said E0C9125B0D9B, Klipper 50334D323834000F), so it stays out of the hint.
       return { method, verified: r.verified, deviceText: r.device, serial: r.serial, mcu: mcu || r.model, uuid: null,
-               hint: hintFor(options, { method, mcu: mcu || r.model, serial: r.serial }), info: r, restarted: leave };
+               hint: hintFor(options, { method, mcu: mcu || r.model, serial: null }), info: r, restarted: leave };
     }
     case "uf2": {
       status("Writing the .uf2 onto the drive");
