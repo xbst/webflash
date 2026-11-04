@@ -248,8 +248,9 @@ class Evaluator:
     ``VAR=value`` pairs of the make command line (``V``, ``OUT``, ...); ``env``
     is the process environment the recipes see (nothing is read from the real
     environment). ``transcript`` collects the lines GNU make would print to
-    stdout: every recipe line it echoes, plus the output of the commands it ran
-    while remaking makefiles.
+    stdout: every recipe line it echoes, the text of every ``$(info)``, and the
+    output of the commands it ran while remaking makefiles. ``log`` gets what
+    GNU make would print to stderr (``$(warning)``).
     """
 
     def __init__(self, tree: Path, shell: "Shell", *, command_line: Optional[dict[str, str]] = None,
@@ -803,9 +804,13 @@ class Evaluator:
             return output.replace("\r\n", "\n").rstrip("\n").replace("\n", " ")
         if name == "error":
             raise MakeError(f"{where}: *** {ex(raw[0])}.  Stop.")
-        if name in ("warning", "info"):
-            text = ex(raw[0])
-            self.log(f"{where}: {text}" if name == "warning" else text)
+        if name == "info":
+            # GNU make prints it on stdout, in order with the recipe lines.
+            self.transcript.append(ex(raw[0]))
+            return ""
+        if name == "warning":
+            # GNU make prints it on stderr.
+            self.log(f"{where}: {ex(raw[0])}")
             return ""
 
         args = [ex(a) for a in raw]

@@ -155,7 +155,11 @@ class Build:
         self._check_cancelled()
         for line in target.recipe:
             where = f"{line.file}:{line.lineno}"
+            mark = len(ev.transcript)
             text = ev.expand(line.text, auto, where).lstrip(" \t")
+            for info in ev.transcript[mark:]:
+                # What $(info) printed while the line was expanded.
+                self.log(info)
             silent = ignore = False
             while text and text[0] in "@-+":
                 if text[0] == "@":
