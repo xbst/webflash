@@ -13,7 +13,7 @@
 import { createFlashPanel, renderInline } from "./flash/flash-ui.js";
 import { capabilities, explainError } from "./flash/errors.js";
 import { extractKlipperDict, parseFirmware } from "./flash/firmware-file.js";
-import { behaviorOf, firmwareFromBuild, firmwareFromPrebuilt, framePermissions, platformFor } from "./embed-model.js";
+import { behaviorOf, firmwareFromBuild, firmwareFromPrebuilt, frameNotice, framePermissions, platformFor } from "./embed-model.js";
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -38,14 +38,9 @@ const relayout = () => dispatchEvent(new Event("webflash-relayout"));
 function platformNotices(perms, caps, { mocked }) {
   const out = [];
   const nav = typeof navigator !== "undefined" ? navigator : {};
-  const own = `<a href="${esc(location.href)}" target="_blank" rel="noopener">open this card in a tab of its own</a>`;
-  const blocked = [!perms.usb && nav.usb ? "USB" : "", !perms.serial && nav.serial ? "serial ports" : ""].filter(Boolean);
-  if (!mocked && blocked.length) {
-    out.push({
-      kind: "warn",
-      html: `<p>The page this card is embedded in does not let it use ${blocked.join(" or ")}, so it cannot flash from here. ` +
-        `Build and download the files, or ${own}. (The site can allow it with <code>allow="usb; serial"</code> on the embed.)</p>`,
-    });
+  const framed = mocked ? null : frameNotice(perms, nav, location.href);
+  if (framed) {
+    out.push({ kind: "warn", html: framed });
   } else if (!caps.usb && !caps.serial) {
     const which = caps.browser === "firefox" ? "Firefox" : caps.browser === "safari" ? "Safari" : "This browser";
     out.push({

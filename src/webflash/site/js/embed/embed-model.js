@@ -300,6 +300,35 @@ export function platformFor(nav, win, perms) {
   };
 }
 
+const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * The notice for what the embedding page does not let the card use (perms,
+ * framePermissions'), as HTML, or null when it withholds nothing this
+ * browser has. It names what is not offered here: with USB or serial ports
+ * still allowed, the methods on them still flash from the card. href is
+ * the card's own page, which a tab of its own can open.
+ */
+export function frameNotice(perms, nav, href) {
+  const usbBlocked = !perms.usb && Boolean(nav && nav.usb);
+  const serialBlocked = !perms.serial && Boolean(nav && nav.serial);
+  if (!usbBlocked && !serialBlocked) return null;
+  const own = `<a href="${escHtml(href)}" target="_blank" rel="noopener">open this card in a tab of its own</a>`;
+  const allow = `(The site can allow it with <code>allow="usb; serial"</code> on the embed.)`;
+  const usable = (perms.usb && nav.usb) || (perms.serial && nav.serial);
+  if (!usable) {
+    const blocked = [usbBlocked ? "USB" : "", serialBlocked ? "serial ports" : ""].filter(Boolean).join(" or ");
+    return `<p>The page this card is embedded in does not let it use ${blocked}, so it cannot flash from here. ` +
+      `Build and download the files, or ${own}. ${allow}</p>`;
+  }
+  if (serialBlocked) {
+    return `<p>The page this card is embedded in does not let it use serial ports, so Katapult over a USB or UART serial port is not offered here; ` +
+      `the USB methods (DFU, PICOBOOT, Katapult through a CAN adapter) still work. For a serial port, ${own}. ${allow}</p>`;
+  }
+  return `<p>The page this card is embedded in does not let it use USB, so DFU, PICOBOOT and CAN adapters are not offered here; ` +
+    `Katapult over a serial port still works. For the others, ${own}. ${allow}</p>`;
+}
+
 // ── The firmware the flash panel gets ────────────────────────────────
 
 function canBitrate(cfg) {
