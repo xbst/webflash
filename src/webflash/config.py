@@ -16,7 +16,7 @@ import math
 import re
 import sys
 from dataclasses import dataclass, field, fields
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -244,6 +244,29 @@ def _engine_url(value: str, where: str) -> str:
     return url if url.endswith("/") else url + "/"
 
 
+# A name the page loads as it is: a scheme of two letters or more (a Windows
+# drive such as C: has one letter) or a protocol-relative //host/... name.
+_ASSET_URL_RE = re.compile(r"^(?:[a-z][a-z0-9+.\-]+:|//)", re.IGNORECASE)
+
+
+def is_asset_url(name: str) -> bool:
+    """Whether an image or prebuilt file name is a URL rather than a file."""
+    return bool(_ASSET_URL_RE.match(name.replace("\\", "/")))
+
+
+def asset_parts(name: str) -> tuple[str, ...] | None:
+    """The parts of a file name relative to the board TOML, or None for an
+    absolute name, a drive, a '..' or no name at all: ``webflash -i`` reads
+    only files beside the TOML or below its folder, as the site's bridge
+    places them."""
+    rel = name.replace("\\", "/")
+    win = PureWindowsPath(rel)
+    parts = PurePosixPath(rel).parts
+    if PurePosixPath(rel).is_absolute() or win.drive or win.root or ".." in parts or not parts:
+        return None
+    return parts
+
+
 def _load_board_table(raw: dict, fname: str) -> Board:
     if "board" not in raw:
         raise ValueError(f"{fname}: missing required [board] table")
@@ -253,10 +276,14 @@ def _load_board_table(raw: dict, fname: str) -> Board:
     theme = _get_text(b, "theme", where, "default").strip()
     if not theme:
         _fail(where, "theme must not be empty (leave it out for the default theme)")
+    image = _get_text(b, "image", where).strip()
+    if image and not is_asset_url(image) and asset_parts(image) is None:
+        _fail(where, "image must be a URL or a path relative to this TOML, without '..' "
+                     f"(got {image!r})")
     return Board(
         title=_required_text(b, "title", where, " (the card's heading and the page title)"),
         description=_get_text(b, "description", where),
-        image=_get_text(b, "image", where).strip(),
+        image=image,
         theme=theme,
         theme_dir=_get_text(b, "theme_dir", where, "./themes"),
         engine_url=_engine_url(_get_text(b, "engine_url", where, DEFAULT_ENGINE_URL), where),
@@ -437,6 +464,10 @@ def _load_prebuilt(raw: dict, fname: str) -> Prebuilt:
     p = _table(raw["prebuilt"], where, "[prebuilt]")
     _check_keys(p, _PREBUILT_KEYS, where)
     file = _required_text(p, "file", where, " (the firmware file, relative to this TOML)").strip()
+    if is_asset_url(file):
+        _fail(where, f"file must be a path relative to this TOML, not a URL (got {file!r})")
+    if asset_parts(file) is None:
+        _fail(where, f"file must be a path relative to this TOML, without '..' (got {file!r})")
     suffix = PurePosixPath(file.replace("\\", "/")).suffix.lower()
     if suffix not in PREBUILT_SUFFIXES:
         _fail(where, f"file must be a .bin, .hex, .uf2 or .elf firmware file (got {file!r})")

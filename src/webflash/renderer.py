@@ -24,7 +24,9 @@ from .config import (
     BoardConfig,
     Theme,
     ThemeBehavior,
+    asset_parts,
     board_data,
+    is_asset_url,
     load_board,
     load_theme,
 )
@@ -478,8 +480,13 @@ _MEDIA_TYPES = {
 }
 
 
-def _is_url(name: str) -> bool:
-    return bool(_HTTP_RE.match(name)) or name.lower().startswith("data:")
+def _local_file(base: Path, name: str, key: str, where: str) -> Path:
+    """A file the TOML names, below its folder: -i never reads anything else."""
+    parts = asset_parts(name)
+    if parts is None:
+        raise ValueError(f"{where}: {key} must be a path relative to this TOML, without '..' "
+                         f"(got {name!r})")
+    return base.joinpath(*parts)
 
 
 def _data_url(path: Path, what: str, where: str) -> str:
@@ -499,12 +506,18 @@ def inline_assets(config: BoardConfig) -> tuple[dict[str, str], list[str]]:
     warnings: list[str] = []
     image = config.board.image
     if image:
-        if _is_url(image):
+        if is_asset_url(image):
             warnings.append(f"{fname}: [board]: image is a URL, so -i leaves it as it is")
         else:
-            assets["image"] = _data_url(base / image, "image file", f"{fname}: [board]")
+            assets["image"] = _data_url(_local_file(base, image, "image", f"{fname}: [board]"),
+                                        "image file", f"{fname}: [board]")
     if config.prebuilt is not None:
-        assets["prebuilt"] = _data_url(base / config.prebuilt.file, "firmware file", f"{fname}: [prebuilt]")
+        where = f"{fname}: [prebuilt]"
+        if is_asset_url(config.prebuilt.file):
+            raise ValueError(f"{where}: file must be a path relative to this TOML, not a URL "
+                             f"(got {config.prebuilt.file!r})")
+        assets["prebuilt"] = _data_url(_local_file(base, config.prebuilt.file, "file", where),
+                                       "firmware file", where)
     return assets, warnings
 
 
