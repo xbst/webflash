@@ -39,13 +39,23 @@ const restricts = (versions) => Boolean(versions) && versions !== "all";
 /**
  * findVersion among the versions offered: a pasted Mainsail/Fluidd version
  * never picks a ref the TOML's versions leave out, so a card restricted to
- * some versions builds only those.
+ * some versions builds only those. Anything but the commit itself waits for
+ * the older commits: {ref: null, pending: true, error} while they are not
+ * loaded (loading, or failed), since the closest kept commit may be among them.
  */
 export function matchVersion(index, project, text, { value = "latest", versions = "all" } = {}) {
-  if (!restricts(versions)) return findVersion(index, project, text);
-  const g = groupRefs(index, project);
-  const tags = new Set(g ? g.releases.map((r) => r.id) : []);
-  return findVersion(index, project, text, (ref) => offered(versions, tags, ref.id, value));
+  let found;
+  if (!restricts(versions)) found = findVersion(index, project, text);
+  else {
+    const g = groupRefs(index, project);
+    const tags = new Set(g ? g.releases.map((r) => r.id) : []);
+    found = findVersion(index, project, text, (ref) => offered(versions, tags, ref.id, value));
+  }
+  if (found && !found.exact && historyInfo(index, project) && !historyRefs(index, project)) {
+    return { ref: null, pending: true,
+      error: `${String(text).trim()} may be an older ${projectTitle(index, project)} commit; the list of older commits has not loaded yet.` };
+  }
+  return found;
 }
 
 /**
@@ -316,15 +326,27 @@ class VersionCombobox {
     this.query = this.input.value;
     this.open = true;
     this.active = -1;
-    const loading = this._history();
+    this._history();
     this.render();
     if (!pasted || !parseVersionString(this.query)) return;
     // A version pasted from Mainsail or Fluidd is picked at once: the commit
     // when it is kept, else the closest older kept one, with a note.
+    await this._pickTyped();
+  }
+
+  /**
+   * Pick what the typed version string names once the older commits are
+   * here; when they could not be loaded, the open list says why, with Try again.
+   */
+  async _pickTyped() {
+    const query = this.query;
+    const loading = this._history();
     if (loading) await loading;
-    const found = this._find(this.query);
+    if (this.query !== query) return;
+    const found = this._find(query);
     if (found && found.ref) this._pick(found.ref.id, found.note || "");
-    else if (found) { this._setNote(found.error, true); this.render(); }
+    else if (found && !found.pending) { this._setNote(found.error, true); this.render(); }
+    else this.render();
   }
 
   /** What a typed or pasted version string picks, among the versions offered. */
@@ -382,6 +404,7 @@ class VersionCombobox {
       const o = this.active >= 0 ? this.flat[this.active] : null;
       if (o) return this._pick(o.value, o.note || "");
       const found = this.query && this._find(this.query);
+      if (found && found.pending) { this._pickTyped(); return; }
       if (found && found.ref) return this._pick(found.ref.id, found.note || "");
       if (found) { this._setNote(found.error, true); this.render(); }
       return;
@@ -482,7 +505,8 @@ class VersionCombobox {
       else info(`Loading ${history.count} older commits…`);
     }
     if (data.more) info(`${data.more} more older commits: type to narrow the list.`);
-    if (data.match && !data.match.ref) info(data.match.error);
+    // A match waiting for the older commits: the row above says they load, or why they did not.
+    if (data.match && !data.match.ref && !data.match.pending) info(data.match.error);
     else if (!this.flat.length && !(showsOlder && !data.older)) info("No version matches.");
     this.list.replaceChildren(...nodes);
     if (this.active >= 0) input.setAttribute("aria-activedescendant", `${this.id}-o${this.active}`);
