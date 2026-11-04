@@ -510,14 +510,17 @@ def list_history(repo: Path, head: str, since: int) -> list[tuple[str, int]]:
 
 
 def select_history(project: ProjectPolicy, commits: list[tuple[str, int]], head: str,
-                   since: int) -> list[tuple[str, int]]:
+                   since: int, listed: set[str] | frozenset[str] = frozenset()
+                   ) -> list[tuple[str, int]]:
     """The history snapshots the policy keeps: the default branch's
     first-parent commits from the window (``commits`` as ``list_history``
     gives them, newest first), without the head, which the index lists as
-    the default branch, and at most ``history_max`` of them."""
+    the default branch, and without the commits of the other refs the index
+    lists (``listed``: a release tagged on the default branch is listed once,
+    as the tag), and at most ``history_max`` of them."""
     if not project.history_days:
         return []
-    kept = [(sha, ct) for sha, ct in commits if sha != head and ct >= since]
+    kept = [(sha, ct) for sha, ct in commits if sha != head and sha not in listed and ct >= since]
     return kept[:project.history_max] if project.history_max else kept
 
 
@@ -1306,10 +1309,14 @@ def make_histories(policy: Policy, cache: Path, state: dict,
         # which commit times within a day do not always follow.
         listed = project_state.get("history_list", {}).get("commits", [])
         place = {sha: i for i, (sha, _ct) in enumerate(listed)}
+        # A commit a ref of the index holds is listed there, once.
+        held = {ref["sha"] for ref in project_state["refs"].values()}
         order = lambda kv: (-(kv[1]["ct"] // 86400), place.get(kv[0], len(place)), -kv[1]["ct"], kv[0])
         entries = []
         blobs: dict[str, dict] = {}
         for sha, entry in sorted(history.items(), key=order):
+            if sha in held:
+                continue
             manifest = _read_json(snapshot_dir(cache, name, sha) / REF_FILE)
             if manifest is None:
                 warnings.append(f"{name} {sha[:12]}: the history snapshot is missing from the "
@@ -1540,7 +1547,9 @@ def validate_index(root: Path, *, hashes: bool = True) -> list[str]:
             referenced |= _check_ref(root, name, ref, f"{where}.refs[{i}]", ("branch", "tag"),
                                      seen_ids, problems)
         if "history" in project:
-            problems += _check_history(root, name, project["history"], seen_ids, hashed, hashes=hashes)
+            ref_shas = {r.get("sha") for r in refs if isinstance(r, dict)}
+            problems += _check_history(root, name, project["history"], seen_ids, hashed, hashes=hashes,
+                                       ref_shas=ref_shas)
         # Order: the default branch first, then tags newest first, then branches.
         if refs and isinstance(refs[0], dict):
             first = refs[0]
@@ -1632,11 +1641,12 @@ def _check_blobs(root: Path, referenced: set[str], blobs: dict, hashed: set[str]
 
 
 def _check_history(root: Path, name: str, entry: object, ref_ids: set[str], hashed: set[str], *,
-                   hashes: bool) -> list[str]:
+                   hashes: bool, ref_shas: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """Check a project's ``history`` entry in the index and the history file
     it names: the file's fields, each snapshot as an index ref of kind
-    "commit" whose id is its describe string and no current ref's id, newest
-    first, the count, and the file's bundles and their table."""
+    "commit" whose id is its describe string and neither a current ref's id
+    nor its commit, newest first, the count, and the file's bundles and
+    their table."""
     where = f"projects.{name}.history"
     if not isinstance(entry, dict):
         return [f"{where} is not an object"]
@@ -1673,6 +1683,8 @@ def _check_history(root: Path, name: str, entry: object, ref_ids: set[str], hash
                 problems.append(f"{rwhere}: id {ref.get('id')!r} is not its describe string")
             if ref.get("id") in ref_ids:
                 problems.append(f"{rwhere}: {ref.get('id')!r} is also a ref of the index")
+            elif ref.get("sha") in ref_shas:
+                problems.append(f"{rwhere}: {ref.get('id')!r} is the commit of a ref of the index")
     dates = [r.get("date") for r in refs if isinstance(r, dict) and isinstance(r.get("date"), str)]
     if dates != sorted(dates, reverse=True):
         problems.append(f"{fname}: the snapshots are not newest first")
@@ -1742,7 +1754,8 @@ def _check_folders(out: Path, cache: Path) -> None:
 
 def _build_history(policy: Policy, project: ProjectPolicy, head: str, cache: Path, repos: _Repos,
                    state: dict, today: _dt.date, *, gate: bool, matrix: Path, run: str | None, log,
-                   warnings: list[str]) -> list[tuple[int, dict]]:
+                   warnings: list[str], ref_shas: set[str] | frozenset[str] = frozenset()
+                   ) -> list[tuple[int, dict]]:
     """Snapshot a project's history: the first-parent commits of the default
     branch in its window. The commit list is kept in the state with the head
     it was listed from, so a run whose default branch has not moved needs no
@@ -1761,7 +1774,7 @@ def _build_history(policy: Policy, project: ProjectPolicy, head: str, cache: Pat
         commits = list_history(repos.get(project), head, since)
         project_state["history_list"] = {"head": head, "since": since,
                                          "commits": [[sha, ct] for sha, ct in commits]}
-    kept = select_history(project, commits, head, since)
+    kept = select_history(project, commits, head, since, ref_shas)
     window = _dt.datetime.fromtimestamp(since, _dt.timezone.utc).strftime("%Y-%m-%d")
     new = 0
     due: list[tuple[int, dict]] = []
@@ -1901,6 +1914,7 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
     matched_refs: set[str] = set()
     failed_now: list[str] = []
     heads: dict[str, str] = {}
+    listed: dict[str, set[str]] = {}
     for name in names:
         project = policy.projects[name]
         remote = list_refs(project)
@@ -1908,6 +1922,7 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
             refresh_describes(cache, project, state, remote, repos, log)
         selected = select_refs(project, remote, warnings)
         heads[name] = selected[0].sha
+        listed[name] = {r.sha for r in selected}
         if refs:
             matched_refs.update(r.name for r in selected if r.name in refs)
             selected = [r for r in selected if r.name in refs]
@@ -1938,7 +1953,8 @@ def build(policy: Policy, out: Path, cache: Path, *, projects: list[str] | None 
     due: list[tuple[int, dict]] = []
     for name in history_ran:
         due += _build_history(policy, policy.projects[name], heads[name], cache, repos, state, today,
-                              gate=gate, matrix=matrix, run=run, log=log, warnings=warnings)
+                              gate=gate, matrix=matrix, run=run, log=log, warnings=warnings,
+                              ref_shas=listed[name])
     failed_now += _gate_history(policy, due, cache, now, gate=gate, matrix=matrix, run=run,
                                 deadline=deadline, gate_minutes=gate_minutes, log=log)
     dropped = age_out(state, today, policy.age_days, policy.superseded_days,
