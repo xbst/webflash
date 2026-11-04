@@ -519,14 +519,16 @@ export class Configurator {
   // (and texts) up to date from the answer's pair block, and keep the link
   // and the notes in session.katapult. With sync (after a load: the slot
   // whose shared options win, "fw" for a version loaded, the loaded slot
-  // for a .config), they are copied into the other slot first. at is the
-  // setup the call was asked for. Runs inside the queue. Returns the pair
-  // block ({notes, offset, trees, copied?}), or null when nothing pairs.
+  // for a .config), they are copied into the other slot first; Katapult's
+  // win once for a firmware that starts from them (session.katapultLeads).
+  // at is the setup the call was asked for. Runs inside the queue. Returns
+  // the pair block ({notes, offset, trees, copied?}), or null when nothing
+  // pairs.
   async _afterPairing(slot, pair, { sync = false, at = null } = {}) {
     if (!this.paired) return null;
     let block = pair || null;
     if (sync) {
-      const synced = await runtime.pairSync({ source: sync });
+      const synced = await runtime.pairSync({ source: this.session.takeKatapultLead() ? "katapult" : sync });
       for (const s of ["fw", "katapult"]) await this._refresh(s, synced.trees[s], { plan: s !== slot, at });
       block = { notes: synced.notes, offset: synced.offset, trees: {}, copied: synced.copied || [] };
     } else if (block) {

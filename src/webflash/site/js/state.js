@@ -40,6 +40,15 @@ const UNDO_LIMIT = 100;
 // options shown (the clock, the USB ids, the CAN bus speed).
 export const STARTER_DEFCONFIG = "CONFIG_LOW_LEVEL_OPTIONS=y\nCONFIG_MACH_STM32=y\nCONFIG_MACH_STM32G0B1=y\n";
 
+// A firmware's starting defconfig beside a Katapult configured alone: its
+// chip (the MACH_ lines), with the low-level options shown. The pair sync
+// brings Katapult's other shared options once both load.
+function firmwareStart(katapultDefconfig) {
+  const chip = String(katapultDefconfig || "").split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^CONFIG_MACH_[A-Za-z0-9_]+=y$/.test(l));
+  return `${["CONFIG_LOW_LEVEL_OPTIONS=y", ...chip].join("\n")}\n`;
+}
+
 // The engine's side of Katapult beside the firmware (session.katapult), before
 // the engine has loaded it.
 function freshKatapultEngine() {
@@ -195,6 +204,9 @@ export class Session {
     this._setupIndex = 0;       // the setup Configure edits (setupIndex clamps it)
     // The firmware's tables while Katapult is picked alone (setProject).
     this._firmwareAside = null;
+    // The setups (ids) whose firmware starts from Katapult's shared options:
+    // the next pair sync copies Katapult's into the firmware (katapultLeads).
+    this._katapultLeads = new Set();
 
     this._listeners = new Map();
     this._undo = [];
@@ -329,7 +341,10 @@ export class Session {
   get canRedo() { return this._redo.length > 0; }
 
   _snapshot() {
-    return { tables: clone(this._t), tomlName: this.tomlName, files: this.files, setupId: this.setup ? this.setup.id : null };
+    return {
+      tables: clone(this._t), tomlName: this.tomlName, files: this.files, setupId: this.setup ? this.setup.id : null,
+      aside: clone(this._firmwareAside),
+    };
   }
 
   // Which setup Configure edits once the tables are replaced (undo, redo).
@@ -362,6 +377,8 @@ export class Session {
 
   /** Record the state before an undoable change (the configure code calls it before a Kconfig edit). */
   checkpoint() {
+    // A change made since: the firmware's own values win again.
+    this._katapultLeads.delete(this.setup ? this.setup.id : null);
     this._undo.push(this._snapshot());
     if (this._undo.length > UNDO_LIMIT) this._undo.shift();
     this._redo = [];
@@ -376,6 +393,8 @@ export class Session {
     this._t = snap.tables;
     this.tomlName = snap.tomlName;
     this.files = snap.files;
+    this._firmwareAside = snap.aside || null;
+    this._katapultLeads = new Set();
     this._setupIndex = this._setupIndexAfter(before, wasId, snap.setupId);
     for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
     if (this.setupIndex !== indexBefore) this._changed("setup", origin);
@@ -423,6 +442,7 @@ export class Session {
     this.builds = { fw: null, katapult: null };
     this._setupIndex = 0;
     this._firmwareAside = null;
+    this._katapultLeads = new Set();
     // An opened TOML's Katapult starts over in the engine.
     this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
@@ -484,12 +504,16 @@ export class Session {
    * its defconfig and [katapult]'s versions, as a card's None does; the
    * firmware's side is kept aside, so going back to a firmware brings back
    * its projects, versions and defconfigs, and the Katapult it had, as
-   * configured alone. Without a version, leaving Katapult alone keeps an
-   * alias, or the firmware's own ref back to that firmware, and takes
-   * "latest" for a ref of another project.
+   * configured alone. With nothing put aside (a TOML opened as Katapult
+   * alone, say), each setup's defconfig moves to its Katapult defconfig, and
+   * the firmware starts from Katapult's chip, taking Katapult's shared
+   * options at the next pair sync (katapultLeads). Without a version,
+   * leaving Katapult alone keeps an alias, or the firmware's own ref back to
+   * that firmware, and takes "latest" for a ref of another project.
    */
   setProject(project, { version = null, origin = "visual", undoable = true } = {}) {
     if (!PROJECTS.includes(project) || !this._t.firmware || project === this._t.firmware.project) return;
+    const leads = new Set(this._katapultLeads);
     if (undoable) this.checkpoint();
     const f = this._t.firmware;
     const k = this._t.katapult;
@@ -500,6 +524,8 @@ export class Session {
     // Back from Katapult alone to the firmware it was picked from.
     const back = !alone && f.project === "katapult" && Boolean(aside) &&
       aside.setups.length === setups.length && aside.setups.every((s, i) => s.id === setups[i].id);
+    // From Katapult alone with no firmware to go back to: Katapult stays, beside it.
+    const fresh = !alone && f.project === "katapult" && !back;
     const base = back ? aside.firmware : f;
     let projects = base.projects && base.projects.length ? [...base.projects] : [base.project];
     if (alone || projects.includes("katapult") || projects.length === 1) projects = [project];
@@ -517,7 +543,9 @@ export class Session {
       next.versions = [...next.versions, next.version];
     }
     this._t.firmware = next;
-    const katapultChanged = (alone && Boolean(k)) || (back && Boolean(aside.katapult));
+    const katapultChanged = (alone && Boolean(k)) || (back && Boolean(aside.katapult)) || fresh;
+    // Klipper to Kalico before the pair synced: the firmware still starts from Katapult's options.
+    this._katapultLeads = alone || back ? new Set() : leads;
     if (alone) {
       // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
       this._firmwareAside = { firmware: clone(f), katapult: k ? clone(k) : null, setups: clone(setups) };
@@ -540,6 +568,14 @@ export class Session {
         }
         this._t.katapult = table;
       }
+    } else if (fresh) {
+      this._t.setups = setups.map((s) => ({ ...s, defconfig: firmwareStart(s.defconfig), katapult: s.defconfig }));
+      const table = { version: f.version, versions: f.versions, default: true };
+      if (Array.isArray(table.versions) && !PINLESS.includes(table.version) && !table.versions.includes(table.version)) {
+        table.versions = [...table.versions, table.version];
+      }
+      this._t.katapult = table;
+      this._katapultLeads = new Set(setups.map((s) => s.id));
     }
     if (katapultChanged) this._katapultEngine = freshKatapultEngine();
     this._changed("project", origin);
@@ -547,6 +583,23 @@ export class Session {
     if (katapultChanged) this._changed("katapult", origin);
     if (next.version !== f.version) this._changed("version", origin);
     this._sync(origin);
+  }
+
+  /**
+   * Whether the configured setup's firmware starts from Katapult's shared
+   * options (setProject from Katapult alone with nothing put aside): the
+   * next pair sync copies Katapult's into the firmware, not the other way.
+   * Any undoable change to the setup ends it; takeKatapultLead ends it once
+   * that sync ran.
+   */
+  get katapultLeads() {
+    return Boolean(this.katapult) && this._katapultLeads.has(this.setup.id);
+  }
+
+  takeKatapultLead() {
+    const lead = this.katapultLeads;
+    if (this.setup) this._katapultLeads.delete(this.setup.id);
+    return lead;
   }
 
   // ── Katapult beside the firmware ─────────────────────────────────
