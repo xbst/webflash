@@ -783,8 +783,9 @@ export class FirmwareSection {
     build.timing = { engine, total, workers: this.builder.pool ? this.builder.pool.size : 0, summary: stats };
     this.build = build;
     this.progressEl.hidden = true;
-    this.setStatus("ok", `Built in ${seconds(engine)}`, `The build took ${seconds(engine)}; ${seconds(total)} with the downloads and starting the compiler.`);
-    this.appendLog(`Built ${build.version} in ${seconds(engine)}.`);
+    // The time the clock showed: the wait from the click, downloads included.
+    this.setStatus("ok", `Built in ${seconds(total)}`, `Compiling took ${seconds(engine)}; the rest was downloading and starting the compiler.`);
+    this.appendLog(`Built ${build.version} in ${seconds(total)} (compiling ${seconds(engine)}).`);
     if (!this.behavior.compact) renderMemory(this.memoryEl, build.memory);
     // The site's configure code reloads the defconfig into the engine after a
     // build (bridge.build pins the full .config); the session does it here too.

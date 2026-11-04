@@ -358,8 +358,10 @@ export class BuildPanel {
     this.last = { config: build.config, project: job.project, ref: job.ref.id };
     renderMemory(this.els.memory, build.memory);
     const engine = Number(result.duration) * 1000;
-    this.setStatus("ok", `Built in ${seconds(engine)}`, `The build took ${seconds(engine)}; ${seconds(total)} with the downloads and starting the compiler.`);
+    // The time the clock showed: the wait from the click, downloads included.
+    this.setStatus("ok", `Built in ${seconds(total)}`, `Compiling took ${seconds(engine)}; the rest was downloading and starting the compiler.`);
     build.timing = { engine, total, workers: this.builder.pool ? this.builder.pool.size : 0, summary: stats };
+    this.appendLog(`WebFlash: built ${build.version} in ${seconds(total)} (compiling ${seconds(engine)}).`);
     if (stats) {
       this.appendLog(`WebFlash: ${stats.jobs} tool runs on ${stats.workers.length} compiler worker${stats.workers.length === 1 ? "" : "s"}, ` +
         `up to ${stats.overlap} at once; ${stats.compiles.count} compiles, median ${duration(stats.compiles.median)}, ` +
@@ -367,8 +369,8 @@ export class BuildPanel {
         `${stats.links.length ? `; ${stats.links.map((l) => `link ${l.out} ${duration(l.ms)}`).join(", ")}` : ""}.`);
       this.appendLog(`WebFlash: ${stats.workers.map((w, i) => `worker ${i + 1}: ${w.jobs} runs, ${duration(w.busy)} busy` +
         `${w.peakMemory ? `, ${formatBytes(w.peakMemory)} peak memory` : ""}`).join("; ")}.`);
-      this.flushLog();
     }
+    this.flushLog();
     s.build = build;
     s._changed("build", "build");
     renderArtifacts(this.els.artifacts, build, { stale: false });
