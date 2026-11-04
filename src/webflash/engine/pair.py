@@ -31,7 +31,7 @@ DENY_SYMBOLS = ("LOW_LEVEL_OPTIONS", "INITIAL_PINS", "USB_DEVICE_ID", "FLASH_APP
 
 # The members of the firmware's "Bootloader offset" choices, which are
 # Katapult's "Build Katapult deployment application" choices by name.
-_OFFSET_MEMBER = re.compile(r"^(STM32|RPXXXX|LPC)_FLASH_START_([0-9A-F]+)$")
+_OFFSET_MEMBER = re.compile(r"^(STM32|RPXXXX|RP2040|LPC)_FLASH_START_([0-9A-F]+)$")
 
 TITLES = {"klipper": "Klipper", "kalico": "Kalico", "katapult": "Katapult"}
 
@@ -79,6 +79,27 @@ def _fallback(member: str) -> Optional[str]:
     return alias if alias != member else None
 
 
+def _canon(name: str) -> str:
+    """A symbol's name as the current trees spell it. Klipper v0.12.0 and
+    older, and Katapult before its RP2350 support, call the RP2040 layout
+    ``MACH_RP2040`` and ``RP2040_*``; since then it is ``MACH_RPXXXX`` and
+    ``RPXXXX_*``, with ``MACH_RP2040`` the processor model under it. The
+    trees are matched through this spelling, so either pairs with either."""
+    if name == "MACH_RP2040":
+        return "MACH_RPXXXX"
+    return "RPXXXX_" + name[len("RP2040_"):] if name.startswith("RP2040_") else name
+
+
+def _same(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether two choice members stand for each other: the same name in
+    either spelling, or one the other falls back to (see _fallback)."""
+    if a is None or b is None:
+        return a is b
+    ca, cb = _canon(a), _canon(b)
+    fa, fb = _fallback(a), _fallback(b)
+    return ca == cb or (fa is not None and _canon(fa) == cb) or (fb is not None and _canon(fb) == ca)
+
+
 def _is_offset_choice(choice) -> bool:
     return bool(choice.syms) and all(_OFFSET_MEMBER.match(sym.name) for sym in choice.syms)
 
@@ -94,10 +115,11 @@ def shared_options(fw: Session, katapult: Session) -> list[Shared]:
         return order.get(id(node), len(order)) if node is not None else len(order)
 
     k_syms = katapult.kconf.syms
+    k_canon = {_canon(sym.name): sym for sym in katapult.kconf.unique_defined_syms if sym.choice is None}
     for sym in fw.kconf.unique_defined_syms:
         if sym.choice is not None or sym.name in DENY_SYMBOLS or not _prompted(sym):
             continue
-        other = k_syms.get(sym.name)
+        other = k_syms.get(sym.name) or k_canon.get(_canon(sym.name))
         if other is None or not other.nodes or other.choice is not None or not _prompted(other):
             continue
         if lib_f.TYPE_TO_STR[sym.orig_type] != lib_k.TYPE_TO_STR[other.orig_type]:
@@ -108,16 +130,16 @@ def shared_options(fw: Session, katapult: Session) -> list[Shared]:
     for choice in fw.kconf.unique_choices:
         if not _prompted(choice) or _is_offset_choice(choice):
             continue
-        names = {s.name for s in choice.syms}
+        names = {_canon(s.name) for s in choice.syms}
         best, common = None, set()
         for other in k_choices:
-            both = names & {s.name for s in other.syms}
+            both = names & {_canon(s.name) for s in other.syms}
             if len(both) > len(common):
                 best, common = other, both
         if best is None:
             continue
         prompt = _prompt_node(choice).prompt[0]
-        members = tuple(s.name for s in choice.syms if s.name in common)
+        members = tuple(s.name for s in choice.syms if _canon(s.name) in common)
         out.append((position(choice), Shared("choice", prompt, choice, best, members)))
     out.sort(key=lambda pair: pair[0])
     return [entry for _, entry in out]
@@ -208,19 +230,23 @@ class Pair:
         session = self.session(slot)
         lib = session.kconfiglib
         choice = entry.item(slot)
-        names = {s.name for s in choice.syms}
+        # The tree's own name for a member, in either spelling.
+        names = {s.name: s.name for s in choice.syms}
+        names.update({_canon(s.name): s.name for s in choice.syms if _canon(s.name) not in names})
 
         def take(name: str) -> bool:
             if choice.selection is None or choice.selection.name != name:
                 session.assign(name, "y")
             return not _active(choice, lib) or (choice.selection is not None and choice.selection.name == name)
 
-        if member in names and take(member):
+        own = names.get(member) or names.get(_canon(member))
+        if own is not None and take(own):
             return None
         alias = _fallback(member)
-        if alias in names and take(alias):
+        alias = (names.get(alias) or names.get(_canon(alias))) if alias else None
+        if alias is not None and take(alias):
             return None
-        if member not in names:
+        if own is None:
             return f"{self.title(slot)} has no {self._member_prompt(source, member)}."
         return f"{self.title(slot)} does not offer {self._member_prompt(source, member)} for this chip."
 
@@ -279,11 +305,10 @@ class Pair:
                     continue
                 if e.kind == "choice":
                     want = src.selection.name
-                    have = dst.selection.name
-                    if have == want or _fallback(want) == have or _fallback(have) == want:
+                    if _same(dst.selection.name, want):
                         continue
                     note = self._select(target, e, want, source)
-                    if dst.selection is not None and dst.selection.name == want:
+                    if dst.selection is not None and _same(dst.selection.name, want):
                         changed = True
                 else:
                     want = src.str_value
