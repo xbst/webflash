@@ -108,6 +108,7 @@ export class OptionsPanel {
     this.editSetup = actions.editSetup || this.loadSetup;
     this._adding = new Set();   // methods whose instructions box was opened but is still empty
     this._methodTargetId = null; // whose methods the Flashing fold edits: null [flash], else a setup's id
+    this._methodTargetWas = new Set(); // the ids that setup had before a retitle changed it
     this._configs = new Map();  // a setup's full .config, by project and defconfig, once it was configured
     this._picks = new Map();    // a "Starts with" host → what a pick there does
     this.pickers = new Map();   // a "Starts with" host → its version picker
@@ -275,7 +276,7 @@ export class OptionsPanel {
 
     e.methodTarget.addEventListener("change", () => {
       const setup = s.tables().setups[Number(e.methodTarget.value)];
-      this._methodTargetId = setup ? setup.id : null;
+      this._pickTarget(setup ? setup.id : null);
       this.render();
     });
     e.flashFold.addEventListener("change", (ev) => {
@@ -337,7 +338,7 @@ export class OptionsPanel {
     s.on("change", ({ what }) => {
       if (what === "config") this._rememberConfig();
       if (what === "open") {
-        this._methodTargetId = null;   // another TOML's setups
+        this._pickTarget(null);   // another TOML's setups
         this._note();
       }
       if (what === "tree" || what === "ref") this._renderTree();
@@ -408,7 +409,7 @@ export class OptionsPanel {
           return;
         }
         const title = setupTitle(tables.setups[i], i);
-        if (tables.setups[i].id === this._methodTargetId) this._methodTargetId = null;
+        if (i === this._methodTarget) this._pickTarget(null);
         const { reload } = s.setSetups(out, { selected: out.selected });
         this._note(`Removed “${title}”` + (out.dropped.length
           ? ` and ${out.dropped.length === 1 ? "its reader option" : `${out.dropped.length} reader options`}.` : "."));
@@ -425,10 +426,19 @@ export class OptionsPanel {
   }
 
   // Add ("Setup 1") and a retitle may change a setup's id in place: the
-  // Flashing fold's For follows its setup.
+  // Flashing fold's For follows its setup, also when an undo or a redo
+  // brings back an id it had.
   _keepTarget(out) {
     const i = this._methodTarget;
-    if (i >= 0 && out.setups && out.setups[i]) this._methodTargetId = out.setups[i].id;
+    if (i < 0 || !out.setups || !out.setups[i] || out.setups[i].id === this._methodTargetId) return;
+    this._methodTargetWas.add(this._methodTargetId);
+    this._methodTargetWas.add(this.session.tables().setups[i].id);
+    this._methodTargetId = out.setups[i].id;
+  }
+
+  _pickTarget(id) {
+    this._methodTargetId = id;
+    this._methodTargetWas = new Set();
   }
 
   _note(text = "", warn = false) {
@@ -568,7 +578,9 @@ export class OptionsPanel {
   // bring it back).
   get _methodTarget() {
     if (this._methodTargetId === null || !this.session.firmware) return -1;
-    return this.session.tables().setups.findIndex((st) => st.id === this._methodTargetId);
+    const setups = this.session.tables().setups;
+    const i = setups.findIndex((st) => st.id === this._methodTargetId);
+    return i >= 0 ? i : setups.findIndex((st) => this._methodTargetWas.has(st.id));
   }
 
   // The methods the Flashing fold edits: [flash] methods, or a setup's own.
@@ -613,7 +625,7 @@ export class OptionsPanel {
     // A lone setup's own methods override [flash] methods: For stays until
     // "As for every setup" clears them.
     const pick = setups.length > 1 || setups.some((st) => st.methods);
-    if (!pick) this._methodTargetId = null;
+    if (!pick) this._pickTarget(null);
     e.methodTargetRow.hidden = !pick;
     fill(e.methodTarget, `<option value="-1">Every setup</option>` +
       setups.map((st, i) => `<option value="${i}">${esc(setupTitle(st, i))}</option>`).join(""));
