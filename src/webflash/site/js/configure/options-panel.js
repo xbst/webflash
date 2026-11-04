@@ -11,7 +11,7 @@
 import { METHODS, PROJECTS, PROJECT_TITLES } from "../state.js";
 import { esc } from "../dialogs.js";
 import { inferMethods } from "../flash/devices.js";
-import { KconfigTree } from "./kconfig-tree.js";
+import { KconfigTree, checkNumber } from "./kconfig-tree.js";
 import { versionOptions } from "./version-picker.js";
 import { groupRefs } from "./sources.js";
 
@@ -497,7 +497,35 @@ export class OptionsPanel {
     list.querySelectorAll(".opt-value-row").forEach((row, i) => {
       field(row.querySelector('[data-f="value"]'), values[i]);
       field(row.querySelector('[data-f="value-label"]'), opt.labels[values[i]] || "");
+      this._markValue(row, this._checkValue(node, row.querySelector('[data-f="value"]').value.trim()).error);
     });
+  }
+
+  // A value of an int or hex symbol, normalized, or the error the Configure
+  // tab would show for it; other symbols take any text.
+  _checkValue(node, raw) {
+    if (!raw || (node.type !== "int" && node.type !== "hex")) return { value: raw };
+    return checkNumber(node, raw);
+  }
+
+  _markValue(row, error) {
+    const input = row.querySelector('[data-f="value"]');
+    input.setAttribute("aria-invalid", String(Boolean(error)));
+    input.title = error || "";
+    input.style.borderColor = error ? "var(--danger)" : "";
+    let note = row.nextElementSibling;
+    if (note && !note.classList.contains("opt-value-error")) note = null;
+    if (error) {
+      if (!note) {
+        note = document.createElement("p");
+        note.className = "kc-error-text opt-value-error";
+        note.setAttribute("role", "alert");
+        row.parentNode.insertBefore(note, row.nextElementSibling);
+      }
+      note.textContent = error;
+    } else if (note) {
+      note.remove();
+    }
   }
 
   _editorChange(slot, ev) {
@@ -530,7 +558,18 @@ export class OptionsPanel {
       const values = [];
       const labels = {};
       for (const row of rows) {
-        const v = row.querySelector('[data-f="value"]').value.trim();
+        const input = row.querySelector('[data-f="value"]');
+        const raw = input.value.trim();
+        const checked = this._checkValue(node, raw);
+        this._markValue(row, checked.error);
+        let v = checked.value;
+        if (checked.error) {
+          // A value the symbol refuses is never offered: the row keeps what it
+          // held before, and a new row adds nothing.
+          v = row.dataset.i === undefined ? "" : (opt.values || [])[Number(row.dataset.i)] || "";
+        } else if (input === t && v !== raw) {
+          input.value = v;
+        }
         if (!v || values.includes(v)) continue;
         values.push(v);
         const l = row.querySelector('[data-f="value-label"]').value.trim();
