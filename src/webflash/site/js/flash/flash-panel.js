@@ -52,14 +52,21 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   function configText() {
     if (typeof session.configText === "string" && session.configText.trim()) return session.configText;
     const t = session.toml || {};
-    return (t.config && typeof t.config.defconfig === "string") ? t.config.defconfig : "";
+    const table = t.config || firstSetup(t);
+    return (table && typeof table.defconfig === "string") ? table.defconfig : "";
+  }
+
+  // The first [[setup]], the one the site configures, or null.
+  function firstSetup(t) {
+    return Array.isArray(t.setup) && t.setup[0] && typeof t.setup[0] === "object" ? t.setup[0] : null;
   }
 
   function tomlFlash() {
     const t = session.toml || {};
     const flash = t.flash && typeof t.flash === "object" ? t.flash : {};
+    const setup = firstSetup(t) || {};
     return {
-      methods: Array.isArray(flash.methods) ? flash.methods : null,
+      methods: Array.isArray(setup.methods) ? setup.methods : Array.isArray(flash.methods) ? flash.methods : null,
       instructions: flash.instructions && typeof flash.instructions === "object" ? flash.instructions : null,
     };
   }

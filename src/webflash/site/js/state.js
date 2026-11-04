@@ -1,7 +1,9 @@
 // The session: what the site is configuring, building and flashing.
 //
 // It holds the board TOML's tables in the shape webflash's board_data returns
-// ([board], [firmware], [config] defconfig, [[option]], [flash], [prebuilt]):
+// ([board], [firmware], [katapult], setups (from [config] or [[setup]]) with
+// setups_form, [[option]], [flash], [prebuilt]); the site configures the
+// first setup:
 // they are what Save TOML writes, and the TOML text is derived from them
 // (tomlText, the same text as bridge.save_toml for the same tables). Opening a
 // TOML replaces them; the Configure, Embed options and toolbar controls
@@ -18,7 +20,7 @@
 // TOML's name and files); a "restore" event tells the configure code to load
 // the restored defconfig into the engine.
 
-import { parseToml, writeBoardToml, DEFAULT_ENGINE_URL } from "./toml-io.js";
+import { parseToml, writeBoardToml, CONFIG_SETUP_ID, DEFAULT_ENGINE_URL } from "./toml-io.js";
 
 export const PROJECTS = ["klipper", "kalico", "katapult"];
 export const PROJECT_TITLES = { klipper: "Klipper", kalico: "Kalico", katapult: "Katapult" };
@@ -40,7 +42,9 @@ export function defaultTables() {
       theme_dir: "./themes", engine_url: DEFAULT_ENGINE_URL,
     },
     firmware: { project: "klipper", projects: ["klipper"], version: "latest", versions: "all" },
-    config: { defconfig: STARTER_DEFCONFIG },
+    katapult: null,
+    setups: [newSetup({ defconfig: STARTER_DEFCONFIG })],
+    setups_form: "config",
     options: [],
     flash: { methods: null, instructions: {} },
     prebuilt: null,
@@ -49,7 +53,23 @@ export function defaultTables() {
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
-/** The tables of a board TOML as board_data gives them, every key present. */
+/** One setup as board_data gives it ({id, title, description, defconfig, katapult, methods}). */
+export function newSetup(s = {}) {
+  return {
+    id: s.id || CONFIG_SETUP_ID,
+    title: s.title || "",
+    description: s.description || "",
+    defconfig: s.defconfig || "",
+    katapult: typeof s.katapult === "string" ? s.katapult : null,
+    methods: Array.isArray(s.methods) ? [...s.methods] : null,
+  };
+}
+
+/**
+ * The tables of a board TOML as board_data gives them, every key present. A
+ * [config] table given as config: {defconfig, katapult} (the shape before
+ * setups) is read as the one setup.
+ */
 export function normalizeTables(t) {
   const d = defaultTables();
   const board = { ...d.board, ...(t.board || {}) };
@@ -59,16 +79,29 @@ export function normalizeTables(t) {
     version: t.firmware.version || "latest",
     versions: t.firmware.versions === undefined ? "all" : clone(t.firmware.versions),
   } : null;
+  const katapult = firmware && t.katapult ? {
+    version: t.katapult.version || "latest",
+    versions: t.katapult.versions === undefined ? "all" : clone(t.katapult.versions),
+    default: t.katapult.default !== false,
+  } : null;
+  let setups = [];
+  if (firmware) {
+    if (Array.isArray(t.setups) && t.setups.length) setups = t.setups.map(newSetup);
+    else setups = [newSetup(t.config || {})];
+  }
   return {
     board,
     firmware,
-    config: firmware ? { defconfig: (t.config && t.config.defconfig) || "" } : null,
+    katapult,
+    setups,
+    setups_form: firmware ? (t.setups_form === "setup" ? "setup" : "config") : null,
     options: firmware ? (t.options || []).map((o) => ({
       symbol: o.symbol,
       label: o.label || "",
       values: o.values === undefined || o.values === null ? null : o.values.map(String),
       labels: { ...(o.labels || {}) },
       help: o.help || "",
+      setups: Array.isArray(o.setups) ? [...o.setups] : null,
     })) : [],
     flash: {
       methods: t.flash && Array.isArray(t.flash.methods) ? [...t.flash.methods] : null,
@@ -179,7 +212,7 @@ export class Session {
   get prebuilt() { return this._t.prebuilt; }
   get project() { return this._t.firmware ? this._t.firmware.project : null; }
   get version() { return this._t.firmware ? this._t.firmware.version : null; }
-  get defconfigText() { return this._t.config ? this._t.config.defconfig : ""; }
+  get defconfigText() { return this._t.setups.length ? this._t.setups[0].defconfig : ""; }
   get theme() { return this._t.board.theme || "default"; }
   get exposed() { return this._t.options.map((o) => o.symbol); }
 
@@ -333,6 +366,11 @@ export class Session {
     const next = { ...f, project, projects };
     if (version) next.version = version;
     this._t.firmware = next;
+    // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
+    if (project === "katapult" && this._t.katapult) {
+      this._t.katapult = null;
+      this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+    }
     this._changed("project", origin);
     this._changed("firmware", origin);
     if (version && version !== f.version) this._changed("version", origin);
@@ -369,15 +407,15 @@ export class Session {
 
   /**
    * The configuration the engine reports after a change: the full .config
-   * and the defconfig, which becomes [config] defconfig. The undo point was
-   * taken before the change (checkpoint).
+   * and the defconfig, which becomes the first setup's defconfig. The undo
+   * point was taken before the change (checkpoint).
    */
   setConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
-    const changed = configText !== this.configText ||
-      (this._t.config && defconfigText !== this._t.config.defconfig);
+    const setup = this._t.setups[0];
+    const changed = configText !== this.configText || (setup && defconfigText !== setup.defconfig);
     if (!changed) return;
     this.configText = configText;
-    if (this._t.config) this._t.config = { defconfig: defconfigText };
+    if (setup) this._t.setups[0] = { ...setup, defconfig: defconfigText };
     this._changed("config", origin);
     this._sync(origin);
   }

@@ -74,7 +74,8 @@ function refText(ref) {
 /** The board TOML's tables (board_data's shape) from the page's configuration. */
 function tablesOf(config) {
   return {
-    board: config.board, firmware: config.firmware, config: config.config,
+    board: config.board, firmware: config.firmware, katapult: config.katapult,
+    setups: config.setups, setups_form: config.setups_form,
     options: config.options, flash: config.flash, prebuilt: null,
   };
 }
@@ -165,7 +166,7 @@ export class FirmwareSection {
     // Before the configuration loads, the defconfig names the architecture
     // when it sets one; afterwards the resolved .config always does.
     const config = this.loaded ? s.configText
-      : applyChoices((this.config.config || {}).defconfig || "", this.config.options, this.pending);
+      : applyChoices(this.config.setups[0].defconfig, this.config.options, this.pending);
     const unsupported = unsupportedReason(config || "");
     if (unsupported) return unsupported;
     const p = s.plan;
@@ -315,7 +316,7 @@ export class FirmwareSection {
     const live = this.loaded && s.tree;
     const rows = [...this.optionsEl.children];
     options.forEach((option, i) => {
-      let model = live ? liveOption(option, s.tree) : optionModel(option, this.config.config.defconfig);
+      let model = live ? liveOption(option, s.tree) : optionModel(option, this.config.setups[0].defconfig);
       if (!live && this.pending.has(option.symbol)) model = { ...model, current: this.pending.get(option.symbol), known: true };
       let row = rows[i];
       if (!row) {
@@ -435,7 +436,7 @@ export class FirmwareSection {
 
   renderLink() {
     const s = this.session;
-    const defconfig = this.loaded ? s.defconfigText : applyChoices(this.config.config.defconfig, this.config.options, this.pending);
+    const defconfig = this.loaded ? s.defconfigText : applyChoices(this.config.setups[0].defconfig, this.config.options, this.pending);
     const text = linkToml(this.config, { changed: this.changed, project: s.project, version: s.version, defconfig });
     this.onLink(openInSiteUrl(this.config.board.engine_url || this.env.engine, text));
   }
@@ -507,7 +508,7 @@ export class FirmwareSection {
   async setOption(option, value) {
     this.optionErrors.delete(option.symbol);
     if (!this.loaded) {
-      const model = optionModel(option, this.config.config.defconfig);
+      const model = optionModel(option, this.config.setups[0].defconfig);
       if (value === "" || (model.known && isCurrent(model, value))) this.pending.delete(option.symbol);
       else this.pending.set(option.symbol, value);
       this.renderOptions();

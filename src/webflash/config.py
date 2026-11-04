@@ -36,17 +36,23 @@ VERSION_SETS = ("all", "releases")
 PREBUILT_SUFFIXES = (".bin", ".hex", ".uf2", ".elf")
 DEFAULT_ENGINE_URL = "https://webflash.isiks.tech/engine/v1/"
 
-_TOP_TABLES = ("board", "firmware", "config", "option", "flash", "prebuilt")
-_TOP_WRITTEN = "[board], [firmware], [config], [[option]], [flash], [prebuilt]"
+_TOP_TABLES = ("board", "firmware", "katapult", "config", "setup", "option", "flash", "prebuilt")
+_TOP_WRITTEN = "[board], [firmware], [katapult], [config], [[setup]], [[option]], [flash], [prebuilt]"
 _BOARD_KEYS = ("title", "description", "image", "theme", "theme_dir", "engine_url")
 _FIRMWARE_KEYS = ("project", "projects", "version", "versions")
-_CONFIG_KEYS = ("defconfig",)
-_OPTION_KEYS = ("symbol", "label", "values", "labels", "help")
+_KATAPULT_KEYS = ("version", "versions", "default")
+_CONFIG_KEYS = ("defconfig", "katapult")
+_SETUP_KEYS = ("id", "title", "description", "defconfig", "katapult", "methods")
+_OPTION_KEYS = ("symbol", "label", "values", "labels", "help", "setups")
 _FLASH_KEYS = ("methods", "instructions")
 _PREBUILT_KEYS = ("file", "address", "mcu")
 
+# The setup a [config] table is: board_data's setups for both shapes.
+CONFIG_SETUP_ID = "default"
+
 # A Kconfig symbol, as [[option]] names it: without the CONFIG_ prefix.
 _SYMBOL_RE = re.compile(r"[A-Za-z0-9_]+")
+_SETUP_ID_RE = re.compile(r"[a-z0-9-]+")
 _URL_RE = re.compile(r"https?://[^\s/?#]+(/[^\s?#]*)?", re.IGNORECASE)
 
 
@@ -70,6 +76,28 @@ class Firmware:
 
 
 @dataclass
+class Katapult:
+    """[katapult]: the Katapult bootloader, offered beside the firmware."""
+    version: str = "latest"
+    versions: str | list[str] = "all"
+    default: bool = True                 # ticked when the card opens
+
+
+@dataclass
+class Setup:
+    """One way to configure the board: a [[setup]] table, or the [config] table
+    (id "default", no title)."""
+    id: str = CONFIG_SETUP_ID
+    title: str = ""
+    description: str = ""
+    defconfig: str = ""
+    # Katapult's defconfig; None: the setup cannot flash Katapult.
+    katapult: str | None = None
+    # None: [flash] methods.
+    methods: list[str] | None = None
+
+
+@dataclass
 class Option:
     """One setting the reader may change; everything else stays as the defconfig says."""
     symbol: str
@@ -79,6 +107,8 @@ class Option:
     values: list[str] | None = None
     labels: dict[str, str] = field(default_factory=dict)
     help: str = ""
+    # The ids of the setups it applies to; None: all of them.
+    setups: list[str] | None = None
 
 
 @dataclass
@@ -97,10 +127,15 @@ class Prebuilt:
 
 @dataclass
 class BoardConfig:
-    """A loaded board TOML: [firmware] and [config], or [prebuilt]."""
+    """A loaded board TOML: [firmware] with [config] or [[setup]] (and
+    optionally [katapult]), or [prebuilt]."""
     board: Board
     firmware: Firmware | None = None
-    defconfig: str = ""
+    katapult: Katapult | None = None
+    setups: list[Setup] = field(default_factory=list)
+    # How the setups were written: "config" (one [config] table) or "setup"
+    # ([[setup]] tables); None for [prebuilt]. The writers keep it.
+    setups_form: str | None = None
     options: list[Option] = field(default_factory=list)
     flash: Flash = field(default_factory=Flash)
     prebuilt: Prebuilt | None = None
@@ -111,6 +146,11 @@ class BoardConfig:
     # The TOML text as read, LF newlines and no BOM: what the page's
     # "#toml=" link carries, so the site opens the same configuration.
     text: str = ""
+
+    @property
+    def defconfig(self) -> str:
+        """The first setup's defconfig: what the card starts with."""
+        return self.setups[0].defconfig if self.setups else ""
 
 
 def _fail(where: str, message: str):
@@ -330,11 +370,17 @@ def _load_firmware(raw: dict, fname: str) -> Firmware:
             _fail(where, "projects cannot mix katapult with klipper or kalico: the bootloader's "
                          "configuration is not the firmware's")
 
-    version = _get_text(f, "version", where, "latest").strip()
+    version, versions = _load_versions(f, where)
+    return Firmware(project=project, projects=projects, version=version, versions=versions)
+
+
+def _load_versions(table: dict, where: str) -> tuple[str, str | list[str]]:
+    """``version`` and ``versions``, as [firmware] and [katapult] write them."""
+    version = _get_text(table, "version", where, "latest").strip()
     if not version:
         _fail(where, "version must not be empty (\"latest\", \"release\" or a ref id like \"v0.13.0\")")
 
-    versions = f.get("versions", "all")
+    versions = table.get("versions", "all")
     if isinstance(versions, str):
         if versions not in VERSION_SETS:
             _fail(where, f"versions must be \"all\", \"releases\" or a list of ref ids (got {versions!r})")
@@ -351,21 +397,78 @@ def _load_firmware(raw: dict, fname: str) -> Firmware:
         versions = refs
     else:
         _fail(where, f"versions must be \"all\", \"releases\" or a nonempty list of ref ids (got {versions!r})")
-    return Firmware(project=project, projects=projects, version=version, versions=versions)
+    return version, versions
 
 
-def _load_config(raw: dict, fname: str) -> str:
+def _load_katapult(raw: dict, fname: str, firmware: Firmware) -> Katapult:
+    where = f"{fname}: [katapult]"
+    k = _table(raw["katapult"], where, "[katapult]")
+    _check_keys(k, _KATAPULT_KEYS, where)
+    if firmware.project == "katapult":
+        _fail(where, "offers Katapult beside a firmware, so [firmware] project must be klipper or "
+                     "kalico; to build Katapult alone, leave [katapult] out")
+    version, versions = _load_versions(k, where)
+    default = k.get("default", True)
+    if not isinstance(default, bool):
+        _fail(where, f"default must be true or false (got {default!r})")
+    return Katapult(version=version, versions=versions, default=default)
+
+
+def _defconfig(table: dict, key: str, where: str) -> str:
+    text = _text(table[key], where, key)
+    try:
+        parse_defconfig(text)
+    except ValueError as e:
+        _fail(where, f"{key} {e}")
+    return text
+
+
+def _setup_katapult(table: dict, where: str, katapult: Katapult | None) -> str | None:
+    if "katapult" not in table:
+        return None
+    if katapult is None:
+        _fail(where, "katapult is Katapult's defconfig, which needs a [katapult] table "
+                     "(the Katapult version to build beside the firmware)")
+    return _defconfig(table, "katapult", where)
+
+
+def _load_config(raw: dict, fname: str, katapult: Katapult | None) -> Setup:
     where = f"{fname}: [config]"
     c = _table(raw["config"], where, "[config]")
     _check_keys(c, _CONFIG_KEYS, where)
     if "defconfig" not in c:
         _fail(where, "missing required key 'defconfig' (the text make savedefconfig writes)")
-    text = _text(c["defconfig"], where, "defconfig")
-    try:
-        parse_defconfig(text)
-    except ValueError as e:
-        _fail(where, f"defconfig {e}")
-    return text
+    return Setup(defconfig=_defconfig(c, "defconfig", where),
+                 katapult=_setup_katapult(c, where, katapult))
+
+
+def _load_setups(raw: dict, fname: str, katapult: Katapult | None) -> list[Setup]:
+    setups: list[Setup] = []
+    for i, t in enumerate(_tables(raw["setup"], f"{fname}: [[setup]]", "setup"), 1):
+        where = f"{fname}: [[setup]] #{i}"
+        _check_keys(t, _SETUP_KEYS, where)
+        if "id" not in t:
+            _fail(where, "missing required key 'id' (a short name like \"can\", which "
+                         "[[option]] setups refers to)")
+        sid = t["id"]
+        if not isinstance(sid, str) or not _SETUP_ID_RE.fullmatch(sid):
+            _fail(where, f"id must be lowercase letters, digits and '-' like \"can-katapult\" (got {sid!r})")
+        if any(s.id == sid for s in setups):
+            _fail(where, f"id '{sid}' is already a setup")
+        where = f"{fname}: [[setup]] #{i} ({sid})"
+        if "defconfig" not in t:
+            _fail(where, "missing required key 'defconfig' (the text make savedefconfig writes)")
+        setups.append(Setup(
+            id=sid,
+            title=_required_text(t, "title", where, " (what the reader picks the setup by)"),
+            description=_get_text(t, "description", where),
+            defconfig=_defconfig(t, "defconfig", where),
+            katapult=_setup_katapult(t, where, katapult),
+            methods=_methods(t, where) if "methods" in t else None,
+        ))
+    if not setups:
+        _fail(f"{fname}: [[setup]]", "write at least one [[setup]] table")
+    return setups
 
 
 def _option_value(item: object, where: str) -> str:
@@ -374,7 +477,24 @@ def _option_value(item: object, where: str) -> str:
     return item if isinstance(item, str) else str(item)
 
 
-def _load_options(raw: dict, fname: str, warnings: list[str]) -> list[Option]:
+def _option_setups(t: dict, where: str, setups: list[Setup]) -> list[str] | None:
+    if "setups" not in t:
+        return None
+    value = t["setups"]
+    if not isinstance(value, list) or not value:
+        _fail(where, f"setups must be a nonempty list of [[setup]] ids like [\"can\"] (got {value!r})")
+    ids = [s.id for s in setups]
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or item not in ids:
+            _fail(where, f"setups: {item!r} is not the id of a setup (valid: {', '.join(ids)})")
+        if item in names:
+            _fail(where, f"setups lists '{item}' twice")
+        names.append(item)
+    return names
+
+
+def _load_options(raw: dict, fname: str, warnings: list[str], setups: list[Setup]) -> list[Option]:
     if "option" not in raw:
         return []
     options: list[Option] = []
@@ -424,6 +544,7 @@ def _load_options(raw: dict, fname: str, warnings: list[str]) -> list[Option]:
             values=values,
             labels=labels,
             help=_get_text(t, "help", where),
+            setups=_option_setups(t, where, setups),
         ))
     return options
 
@@ -434,25 +555,28 @@ def _method(value: object, where: str, key: str) -> str:
     return value
 
 
-def _load_flash(raw: dict, fname: str, warnings: list[str]) -> Flash:
+def _methods(table: dict, where: str) -> list[str]:
+    """A ``methods`` list, as [flash] and [[setup]] write it."""
+    value = table["methods"]
+    if not isinstance(value, list) or not value:
+        _fail(where, f"methods must be a nonempty list like [\"katapult\", \"dfu\", \"download\"] "
+                     f"(got {value!r})")
+    methods: list[str] = []
+    for item in value:
+        name = _method(item, where, "methods")
+        if name in methods:
+            _fail(where, f"methods lists '{name}' twice")
+        methods.append(name)
+    return methods
+
+
+def _load_flash(raw: dict, fname: str, warnings: list[str], setups: list[Setup] = ()) -> Flash:
     if "flash" not in raw:
         return Flash()
     where = f"{fname}: [flash]"
     fl = _table(raw["flash"], where, "[flash]")
     _check_keys(fl, _FLASH_KEYS, where)
-
-    methods: list[str] | None = None
-    if "methods" in fl:
-        value = fl["methods"]
-        if not isinstance(value, list) or not value:
-            _fail(where, f"methods must be a nonempty list like [\"katapult\", \"dfu\", \"download\"] "
-                         f"(got {value!r})")
-        methods = []
-        for item in value:
-            name = _method(item, where, "methods")
-            if name in methods:
-                _fail(where, f"methods lists '{name}' twice")
-            methods.append(name)
+    methods = _methods(fl, where) if "methods" in fl else None
 
     instructions: dict[str, str] = {}
     if "instructions" in fl:
@@ -460,10 +584,15 @@ def _load_flash(raw: dict, fname: str, warnings: list[str]) -> Flash:
         table = _table(fl["instructions"], iwhere, "[flash.instructions]")
         for key, value in table.items():
             instructions[_method(key, iwhere, "key")] = _text(value, iwhere, key)
-        if methods is not None:
+        # The methods each setup offers: its own, else [flash]'s; None is
+        # inferred at run time, which may offer any.
+        offered = [s.methods if s.methods is not None else methods for s in setups] or [methods]
+        if None not in offered:
+            where_offered = "[flash] methods" if all(s.methods is None for s in setups) else \
+                "the methods of [flash] or any [[setup]]"
             for key in instructions:
-                if key not in methods:
-                    warnings.append(f"{iwhere}: '{key}' is not one of [flash] methods, so its "
+                if not any(key in m for m in offered):
+                    warnings.append(f"{iwhere}: '{key}' is not one of {where_offered}, so its "
                                     "instructions are never shown")
     return Flash(methods=methods, instructions=instructions)
 
@@ -531,7 +660,8 @@ def load_board(path: Path) -> BoardConfig:
     warnings: list[str] = []
     board = _load_board_table(raw, fname)
     if "prebuilt" in raw:
-        for key, written in (("firmware", "[firmware]"), ("config", "[config]")):
+        for key, written in (("firmware", "[firmware]"), ("katapult", "[katapult]"),
+                             ("config", "[config]"), ("setup", "[[setup]]")):
             if key in raw:
                 raise ValueError(f"{fname}: {written} cannot be used with [prebuilt]: a board TOML "
                                  "builds from source ([firmware] and [config]) or flashes a file "
@@ -548,19 +678,35 @@ def load_board(path: Path) -> BoardConfig:
             text=text,
         )
 
-    if "firmware" not in raw and "config" not in raw:
-        raise ValueError(f"{fname}: a board TOML needs [firmware] and [config] (to build from "
-                         "source) or [prebuilt] (to flash a file)")
+    if "firmware" not in raw and "config" not in raw and "setup" not in raw:
+        raise ValueError(f"{fname}: a board TOML needs [firmware] and [config] (or [[setup]] "
+                         "tables) to build from source, or [prebuilt] to flash a file")
     if "firmware" not in raw:
         raise ValueError(f"{fname}: missing required [firmware] table (the project to build)")
-    if "config" not in raw:
-        raise ValueError(f"{fname}: missing required [config] table (the defconfig to build)")
+    if "config" in raw and "setup" in raw:
+        raise ValueError(f"{fname}: [config] and [[setup]] cannot be used together: write one "
+                         "[config] table, or a [[setup]] table for each way to set up the board")
+    if "config" not in raw and "setup" not in raw:
+        raise ValueError(f"{fname}: missing required [config] table, or [[setup]] tables "
+                         "(the defconfig to build)")
+    firmware = _load_firmware(raw, fname)
+    katapult = _load_katapult(raw, fname, firmware) if "katapult" in raw else None
+    if "config" in raw:
+        setups, form = [_load_config(raw, fname, katapult)], "config"
+    else:
+        setups, form = _load_setups(raw, fname, katapult), "setup"
+    if katapult is not None and all(s.katapult is None for s in setups):
+        where = "[config]" if form == "config" else "at least one [[setup]]"
+        raise ValueError(f"{fname}: [katapult]: no setup can build it: give {where} a katapult "
+                         "key, Katapult's defconfig")
     return BoardConfig(
         board=board,
-        firmware=_load_firmware(raw, fname),
-        defconfig=_load_config(raw, fname),
-        options=_load_options(raw, fname, warnings),
-        flash=_load_flash(raw, fname, warnings),
+        firmware=firmware,
+        katapult=katapult,
+        setups=setups,
+        setups_form=form,
+        options=_load_options(raw, fname, warnings, setups),
+        flash=_load_flash(raw, fname, warnings, setups),
         warnings=warnings,
         path=path,
         text=text,
@@ -569,7 +715,13 @@ def load_board(path: Path) -> BoardConfig:
 
 def board_data(config: BoardConfig) -> dict:
     """The board TOML's tables, normalized, with every default applied: what the
-    generated page's config JSON carries and what the site's Open reads."""
+    generated page's config JSON carries and what the site's Open reads.
+
+    A [config] table and [[setup]] tables both come out as ``setups``, a list
+    of ``{id, title, description, defconfig, katapult, methods}`` ([config] is
+    one setup with id "default" and no title), with ``setups_form`` saying
+    which the TOML wrote ("config" or "setup"; None for [prebuilt]), so the
+    writers write it back the same way."""
     b = config.board
     data: dict = {
         "board": {
@@ -581,13 +733,23 @@ def board_data(config: BoardConfig) -> dict:
             "engine_url": b.engine_url,
         },
         "firmware": None,
-        "config": None,
+        "katapult": None,
+        "setups": [{
+            "id": s.id,
+            "title": s.title,
+            "description": s.description,
+            "defconfig": s.defconfig,
+            "katapult": s.katapult,
+            "methods": list(s.methods) if s.methods is not None else None,
+        } for s in config.setups],
+        "setups_form": config.setups_form,
         "options": [{
             "symbol": o.symbol,
             "label": o.label,
             "values": list(o.values) if o.values is not None else None,
             "labels": dict(o.labels),
             "help": o.help,
+            "setups": list(o.setups) if o.setups is not None else None,
         } for o in config.options],
         "flash": {
             "methods": list(config.flash.methods) if config.flash.methods is not None else None,
@@ -603,7 +765,13 @@ def board_data(config: BoardConfig) -> dict:
             "version": f.version,
             "versions": f.versions if isinstance(f.versions, str) else list(f.versions),
         }
-        data["config"] = {"defconfig": config.defconfig}
+    if config.katapult is not None:
+        k = config.katapult
+        data["katapult"] = {
+            "version": k.version,
+            "versions": k.versions if isinstance(k.versions, str) else list(k.versions),
+            "default": k.default,
+        }
     if config.prebuilt is not None:
         p = config.prebuilt
         data["prebuilt"] = {"file": p.file, "address": p.address, "mcu": p.mcu}
@@ -700,12 +868,44 @@ def _label_order(labels: dict, values: list | None) -> dict:
     return {k: labels[k] for k in keys}
 
 
+def _toml_versions(table: dict) -> list[str]:
+    """``versions`` of [firmware] or [katapult], when not "all"."""
+    versions = table.get("versions", "all")
+    if isinstance(versions, list):
+        return [f"versions = {_toml_array(versions)}"]
+    if versions and versions != "all":
+        return [f"versions = {_toml_string(versions)}"]
+    return []
+
+
+def _toml_defconfig(text: str | None) -> str:
+    """A defconfig, multi-line and ending with a newline, or "" when empty."""
+    text = text or ""
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return _toml_multiline(text) if text else _toml_string("")
+
+
+def _as_config_table(form: str | None, setups: list) -> bool:
+    """Whether the setups are written as one [config] table: the TOML wrote
+    them so (or the tables say nothing) and the one setup holds nothing that
+    only [[setup]] can hold."""
+    if form not in (None, "config") or len(setups) > 1:
+        return False
+    s = setups[0] if setups else {}
+    return ((s.get("id") or CONFIG_SETUP_ID) == CONFIG_SETUP_ID and not s.get("title")
+            and not s.get("description") and s.get("methods") is None)
+
+
 def dump_board(data: dict) -> str:
     """A board TOML from its tables, in the shape :func:`board_data` returns
     (the site's session has the same shape): the tables in the order of the
     board TOML reference, every key that holds its default left out except
-    ``[firmware] version``, which a reader of the file should see. The site's
-    ``toml-io.js`` writes the same text for the same tables."""
+    ``[firmware] version`` and ``[katapult] version``, which a reader of the
+    file should see. ``setups`` is written as one [config] table when
+    ``setups_form`` says "config" (and the setup fits one), else as [[setup]]
+    tables. The site's ``toml-io.js`` writes the same text for the same
+    tables."""
     lines: list[str] = []
     b = data.get("board") or {}
     lines += ["[board]", f"title = {_toml_string(b.get('title') or '')}"]
@@ -723,16 +923,32 @@ def dump_board(data: dict) -> str:
         if list(projects) != [project]:
             lines.append(f"projects = {_toml_array(projects)}")
         lines.append(f"version = {_toml_string(firmware.get('version') or 'latest')}")
-        versions = firmware.get("versions", "all")
-        if isinstance(versions, list):
-            lines.append(f"versions = {_toml_array(versions)}")
-        elif versions and versions != "all":
-            lines.append(f"versions = {_toml_string(versions)}")
+        lines += _toml_versions(firmware)
 
-        text = (data.get("config") or {}).get("defconfig") or ""
-        if text and not text.endswith("\n"):
-            text += "\n"
-        lines += ["", "[config]", f"defconfig = {_toml_multiline(text) if text else _toml_string('')}"]
+        katapult = data.get("katapult")
+        if katapult:
+            lines += ["", "[katapult]", f"version = {_toml_string(katapult.get('version') or 'latest')}"]
+            lines += _toml_versions(katapult)
+            if katapult.get("default") is False:
+                lines.append("default = false")
+
+        setups = data.get("setups") or []
+        as_config = _as_config_table(data.get("setups_form"), setups)
+        if as_config:
+            setup = setups[0] if setups else {}
+            lines += ["", "[config]", f"defconfig = {_toml_defconfig(setup.get('defconfig'))}"]
+            if setup.get("katapult") is not None:
+                lines.append(f"katapult = {_toml_defconfig(setup['katapult'])}")
+        for setup in [] if as_config else setups:
+            lines += ["", "[[setup]]", f"id = {_toml_string(setup.get('id') or '')}",
+                      f"title = {_toml_text(setup.get('title') or '')}"]
+            if setup.get("description"):
+                lines.append(f"description = {_toml_text(setup['description'])}")
+            lines.append(f"defconfig = {_toml_defconfig(setup.get('defconfig'))}")
+            if setup.get("katapult") is not None:
+                lines.append(f"katapult = {_toml_defconfig(setup['katapult'])}")
+            if setup.get("methods") is not None:
+                lines.append(f"methods = {_toml_array(setup['methods'])}")
 
         for option in data.get("options") or []:
             lines += ["", "[[option]]", f"symbol = {_toml_string(option.get('symbol') or '')}"]
@@ -745,6 +961,8 @@ def dump_board(data: dict) -> str:
                 lines.append(f"labels = {_toml_inline_table(labels)}")
             if option.get("help"):
                 lines.append(f"help = {_toml_text(option['help'])}")
+            if option.get("setups") is not None:
+                lines.append(f"setups = {_toml_array(option['setups'])}")
 
     flash = data.get("flash") or {}
     methods = flash.get("methods")

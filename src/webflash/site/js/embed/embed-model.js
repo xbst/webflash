@@ -44,6 +44,17 @@ export function readConfig(text) {
   }
   const firmware = isObject(data.firmware) ? data.firmware : null;
   const flash = isObject(data.flash) ? data.flash : {};
+  const katapult = firmware && isObject(data.katapult) ? data.katapult : null;
+  const str = (v) => (typeof v === "string" ? v : "");
+  const setups = firmware && Array.isArray(data.setups) ? data.setups.filter(isObject).map((s, i) => ({
+    id: typeof s.id === "string" && s.id ? s.id : (i ? `setup-${i + 1}` : "default"),
+    title: str(s.title),
+    description: str(s.description),
+    defconfig: str(s.defconfig),
+    katapult: typeof s.katapult === "string" ? s.katapult : null,
+    methods: Array.isArray(s.methods) ? s.methods : null,
+  })) : [];
+  if (firmware && !setups.length) return { error: "This page's configuration has no setup to build." };
   const config = {
     schema: SCHEMA,
     board: { description: "", image: "", theme: "default", theme_dir: "./themes", engine_url: "", ...data.board },
@@ -53,13 +64,20 @@ export function readConfig(text) {
       version: firmware.version || "latest",
       versions: firmware.versions === undefined ? "all" : firmware.versions,
     } : null,
-    config: firmware ? { defconfig: (isObject(data.config) && typeof data.config.defconfig === "string") ? data.config.defconfig : "" } : null,
+    katapult: katapult ? {
+      version: katapult.version || "latest",
+      versions: katapult.versions === undefined ? "all" : katapult.versions,
+      default: katapult.default !== false,
+    } : null,
+    setups,
+    setups_form: firmware ? (data.setups_form === "setup" ? "setup" : "config") : null,
     options: firmware && Array.isArray(data.options) ? data.options.filter((o) => isObject(o) && typeof o.symbol === "string").map((o) => ({
       symbol: o.symbol,
       label: o.label || "",
       values: Array.isArray(o.values) ? o.values.map(String) : null,
       labels: isObject(o.labels) ? { ...o.labels } : {},
       help: o.help || "",
+      setups: Array.isArray(o.setups) ? o.setups.map(String) : null,
     })) : [],
     flash: {
       methods: Array.isArray(flash.methods) ? flash.methods : null,
@@ -253,10 +271,14 @@ export function applyChoices(defconfig, options, choices) {
  */
 export function linkToml(config, { changed = false, project = null, version = null, defconfig = null } = {}) {
   if (!config.firmware || (!changed && config.toml)) return config.toml;
+  // The card configures the first setup.
+  const [first, ...rest] = config.setups;
   return writeBoardToml({
     board: config.board,
     firmware: { ...config.firmware, project: project || config.firmware.project, version: version || config.firmware.version },
-    config: { defconfig: defconfig === null ? config.config.defconfig : defconfig },
+    katapult: config.katapult,
+    setups: [{ ...first, defconfig: defconfig === null ? first.defconfig : defconfig }, ...rest],
+    setups_form: config.setups_form,
     options: config.options,
     flash: config.flash,
     prebuilt: null,
@@ -384,7 +406,10 @@ export function firmwareFromBuild(build, config) {
   else if (uf2Name) image = parseFirmware(uf2Name, outputs.get(uf2Name), { source: "build" });
   else if (hexName) image = parseFirmware(hexName, outputs.get(hexName), { source: "build" });
   if (!image) return null;
-  const { methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), config.flash.methods);
+  // The first setup's methods, which the card builds, else [flash]'s.
+  const setup = (config.setups || [])[0];
+  const tomlMethods = setup && setup.methods ? setup.methods : config.flash.methods;
+  const { methods, warnings } = applyTomlMethods(inferMethods(cfg, { project }), tomlMethods);
   const artifacts = names.filter((n) => /\.(bin|uf2|elf|hex|dict)$/i.test(n) || n === ".config" || n === "defconfig")
     .map((n) => ({ name: n, bytes: outputs.get(n) }));
   return {

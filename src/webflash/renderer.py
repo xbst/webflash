@@ -385,7 +385,10 @@ def _render_fallback(config: BoardConfig, inline: dict[str, str]) -> str:
     else:
         site = site_url(b.engine_url)
         host = urllib.parse.urlsplit(site).netloc
-        lines.append(f'<p class="wf-notice">{_NOTICE_SENTENCE} Download the firmware from '
+        # The link opens the first setup; a titled one is named.
+        first = config.setups[0].title if config.setups else ""
+        setup = f" ({esc(first)})" if first else ""
+        lines.append(f'<p class="wf-notice">{_NOTICE_SENTENCE} Download the firmware{setup} from '
                      f'<a href="{esc(open_in_site_url(config))}" target="_blank" rel="noopener">'
                      f'{esc(host)}</a>.</p>')
     lines.append("</div>")
@@ -435,7 +438,8 @@ _HTML_TEMPLATE = """\
 
 def page_config(config: BoardConfig, inline: dict[str, str] | None = None) -> dict:
     """What the page's ``#webflash-config`` holds (schema 1): the board TOML's
-    tables (``board_data``), ``schema``, ``toml`` (the TOML text, which "Open
+    tables (``board_data``: ``katapult``, ``setups`` and ``setups_form`` for
+    both a [config] and a [[setup]] TOML), ``schema``, ``toml`` (the TOML text, which "Open
     in WebFlash" carries to the site), and with ``-i`` on a ``[prebuilt]``
     board ``inline: {"prebuilt": <data URL>}``. An inlined image is only in
     the fallback's ``<img>``, which the runtime keeps: a photo would otherwise
