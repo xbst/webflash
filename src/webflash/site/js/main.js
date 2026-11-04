@@ -11,17 +11,17 @@
 // worker. The top bar holds the status chip, Open TOML, Upload firmware and
 // About.
 
-import { Session, PROJECTS, PROJECT_TITLES, fetchBoardToml } from "./state.js";
+import { Session, PROJECTS, fetchBoardToml } from "./state.js";
 import * as runtime from "./runtime.js";
 import { tomlFromHash, parseToml, openInSiteUrl } from "./toml-io.js";
-import { openGenerate, openAbout, renderAbout, showError, openModal, esc, siteEngineUrl } from "./dialogs.js";
+import { openGenerate, openAbout, renderAbout, showError, siteEngineUrl } from "./dialogs.js";
 import { mountFlashPanel } from "./flash/flash-panel.js";
 import { explainError } from "./flash/errors.js";
 import { Configurator } from "./configure/configurator.js";
-import { KconfigTree } from "./configure/kconfig-tree.js";
+import { ConfigurePage } from "./configure/configure-page.js";
 import { ConfigTab, copyText } from "./configure/config-tab.js";
 import { OptionsPanel } from "./configure/options-panel.js";
-import { blobUrl, formatBytes, headSize, isChecked, projectTitle, uncheckedText } from "./configure/sources.js";
+import { blobUrl, formatBytes } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
 import { BuildPanel, planErrorLine } from "./build/build-panel.js";
 import { buildMatches } from "./build/artifacts.js";
@@ -34,6 +34,7 @@ const configurator = new Configurator(session);
 let buildPanel = null;
 let wizard = null;
 let firmwarePage = null;
+let configurePage = null;
 let flashApi = null;
 
 const $ = (id) => document.getElementById(id);
@@ -176,246 +177,39 @@ function setupTomlView() {
 // ── Configure ────────────────────────────────────────────────────────
 
 function setupConfigure() {
-  const tree = new KconfigTree($("kconfig-tree"), {
-    mode: "configure",
-    onSet: (name, value) => configurator.set(name, value),
-    isExposed: (node) => {
-      if (node.kind === "choice") return (node.members || []).some((m) => session.exposed.includes(m.name));
-      return session.exposed.includes(node.name);
-    },
-  });
-  const search = $("kconfig-search");
-  const count = $("kconfig-count");
-  const runSearch = () => {
-    const { matches, hidden } = tree.setFilter(search.value);
-    count.textContent = search.value.trim()
-      ? `${matches} match${matches === 1 ? "" : "es"}${hidden ? `, ${hidden} hidden` : ""}` : "";
-  };
-  search.addEventListener("input", runSearch);
-  search.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && search.value) {
-      search.value = "";
-      runSearch();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      tree.focus();
-    }
-  });
-  $("kconfig-reset").addEventListener("click", () => {
-    configurator.apply("", { title: "Every option is back to its default" }).catch((e) => showError("Could not reset", e.message));
-  });
-  $("kconfig-load").addEventListener("click", openLoadConfig);
-  $("kconfig-undo").addEventListener("click", () => session.undo());
-  $("kconfig-redo").addEventListener("click", () => session.redo());
-
-  const renderTree = () => {
-    const has = Boolean(session.tree && session.ref);
-    tree.setTree(has ? session.tree : null, has ? `${session.project}/${session.ref.sha}` : "", session.project || "");
-    if (search.value) runSearch();
-  };
-  const renderUndo = () => {
-    const locked = Boolean(session.locked);
-    $("kconfig-undo").disabled = locked || !session.canUndo;
-    $("kconfig-redo").disabled = locked || !session.canRedo;
-  };
-  const renderState = () => {
-    const ready = configurator.ready;
-    const locked = Boolean(session.locked);
-    search.disabled = !ready;
-    $("kconfig-reset").disabled = !ready || locked;
-    $("kconfig-load").disabled = !ready || locked;
-    tree.setLocked(session.locked);
-    renderUndo();
-    renderStatus();
-    renderStart();
-    renderConfigureStep();
-  };
-  session.on("change", ({ what }) => {
-    if (what === "tree" || what === "ref") renderTree();
-    if (what === "options") tree.render();
-    if (["sources", "lock", "ref", "index", "project", "version", "firmware", "open", "prebuilt"].includes(what)) renderState();
-    else renderUndo();
-  });
-  configurator.onNotice(renderNotice);
-  renderState();
-  return tree;
-}
-
-// The step's title, its footer hint and whether Next (Build) can go on.
-function renderConfigureStep() {
-  if (!wizard) return;
-  const title = PROJECT_TITLES[session.project] || (session.project ? projectTitle(session.index, session.project) : "");
-  $("configure-title").textContent = title ? `Set up ${title}` : "Configure";
-  wizard.setHint("configure", session.firmware ? `Next builds ${title} here, in your browser.` : "");
-  const st = session.sources.state;
-  wizard.setNext("configure", {
-    enabled: Boolean(session.firmware) && (st === "loading" || st === "ready"),
-    reason: st === "error" ? "The configuration did not load." : "Load the configuration first.",
+  configurePage = new ConfigurePage(session, configurator, wizard, {
+    title: $("configure-title"), lead: $("configure-lead"), search: $("kconfig-search"), count: $("kconfig-count"),
+    undo: $("kconfig-undo"), redo: $("kconfig-redo"), load: $("kconfig-load"), reset: $("kconfig-reset"),
+    status: $("kconfig-status"), notice: $("kconfig-notice"), start: $("kconfig-start"), tree: $("kconfig-tree"),
+    setupRow: $("kconfig-setup-row"), setup: $("kconfig-setup"),
+  }, {
+    start: (reason) => startConfigure(reason),
+    compiler: () => (buildPanel ? buildPanel.compilerToFetch() : Promise.resolve(null)),
+    prefetch: () => { if (buildPanel) buildPanel.prefetch(); },
+    showError,
   });
 }
 
-// The line above the tree: what is loaded, and whether its snapshot passed the check.
-function renderStatus() {
-  const el = $("kconfig-status");
-  const st = session.sources;
-  const ref = session.ref;
-  if (!ref || st.state !== "ready" || !session.firmware) {
-    el.hidden = true;
-    return;
-  }
-  el.hidden = false;
-  const title = projectTitle(session.index, session.project);
-  el.innerHTML = `<span class="kc-status-ref">${esc(title)} <strong>${esc(ref.id)}</strong></span>` +
-    `<span class="kc-status-detail">${esc(ref.describe || "")}${ref.date ? ` · ${esc(ref.date)}` : ""}</span>` +
-    (isChecked(ref) ? "" : `<span class="ref-badge" title="This snapshot ${esc(uncheckedText(ref))}. It may still build.">unchecked</span>`) +
-    (session.locked ? `<span class="kc-locked">${esc(session.locked)}</span>` : "");
-}
-
-function renderNotice(notice) {
-  const el = $("kconfig-notice");
-  el.hidden = !notice;
-  if (!notice) return;
-  el.className = `kc-notice ${notice.kind || "info"}`;
-  el.innerHTML = `<div class="kc-notice-head"><strong>${esc(notice.title)}</strong>` +
-    `<button type="button" class="mini" id="kconfig-notice-close" aria-label="Dismiss">Dismiss</button></div>` +
-    notice.lines.map((l) => `<p>${esc(l)}</p>`).join("");
-  $("kconfig-notice-close").addEventListener("click", () => configurator.dismissNotice());
-}
-
-// Above the tree until it loads: the progress, a failure with Try again, or,
-// reached without page 1's Next, what loading downloads and its button.
-async function renderStart() {
-  const el = $("kconfig-start");
-  const st = session.sources;
-  if (!session.firmware) {
-    el.hidden = false;
-    el.innerHTML = `<p>This board TOML flashes its own file: there is nothing to configure.</p>`;
-    return;
-  }
-  if (st.state === "ready") {
-    el.hidden = true;
-    return;
-  }
-  el.hidden = false;
-  const index = session.index;
-  const title = projectTitle(index, session.project);
-  if (st.state === "loading") {
-    const pct = st.total ? Math.min(100, Math.round((100 * (st.done || 0)) / st.total)) : null;
-    const what = st.phase === "extract" ? "Unpacking the sources…" : st.phase === "kconfig" ? "Reading the Kconfig files…"
-      : !runtime.isReady() ? (pct === 100 ? "Starting Python…" : "Starting Python and downloading the sources…")
-      : `Downloading the sources${pct !== null ? ` (${pct}%)` : ""}…`;
-    el.innerHTML = `<p class="kc-loading"><span class="spinner" aria-hidden="true"></span>${esc(st.detail)}: ${esc(what)}</p>` +
-      (st.total ? `<progress max="${st.total}" value="${st.done || 0}"></progress>` : "");
-    return;
-  }
-  if (st.state === "error") {
-    el.innerHTML = `<p class="kc-error-text">${esc(st.detail)}</p>` +
-      `<button class="primary" id="kconfig-retry">Try again</button>`;
-    $("kconfig-retry").addEventListener("click", () => startConfigure("start"));
-    return;
-  }
-  if (!index) {
-    el.innerHTML = `<p>Loading the list of versions…</p>`;
-    return;
-  }
-  const { ref, error, note } = configurator.resolve();
-  if (!ref) {
-    el.innerHTML = `<p class="kc-error-text">${esc(error)}</p>`;
-    return;
-  }
-  const mine = (el.dataset.ref = `${session.project}/${ref.id}`);
-  let size = configurator.coreSize(ref);
-  const url = blobUrl(ref.core);
-  const cached = await isCached(url);
-  if (size === null) size = await headSize(url);
-  // The compiler, when this browser does not have it: it can download while
-  // the user configures, so the first build does not wait for it.
-  const compiler = buildPanel ? await buildPanel.compilerToFetch() : null;
-  if (el.dataset.ref !== mine || session.sources.state !== "idle") return;
-  const downloads = [];
-  if (!runtime.isReady()) downloads.push("Python (about 7 MB, once)");
-  downloads.push(`the sources (${size ? formatBytes(size) : "size unknown"}${cached ? ", in this browser already" : ""})`);
-  el.innerHTML =
-    `<h3>${esc(title)} ${esc(ref.id)}</h3>` +
-    (note ? `<p class="kc-warn-text">${esc(note)}</p>` : "") +
-    `<p>Loading it downloads ${downloads.map(esc).join(" and ")}.</p>` +
-    (compiler ? `<p><label class="check kc-start-compiler"><input type="checkbox" id="kconfig-start-compiler" checked> ` +
-      `Download the compiler while I configure (${esc(formatBytes(compiler.size))})</label></p>` : "") +
-    `<button class="primary" id="kconfig-start-btn">Load the configuration</button>`;
-  $("kconfig-start-btn").addEventListener("click", async () => {
-    const box = $("kconfig-start-compiler");
-    const compilerToo = Boolean(box && box.checked);
-    const ok = await startConfigure("start");
-    if (ok && compilerToo && buildPanel) buildPanel.prefetch();
-  });
-}
-
-// Whether the TOML is as it was last saved or opened, so a load that only
-// normalizes the defconfig does not count as an unsaved change.
+// Load what page 1 picked: the firmware, then Katapult beside it (whose
+// shared options then follow the firmware's). Whether the TOML is as it was
+// last saved or opened, so a load that only normalizes the defconfigs does
+// not count as an unsaved change.
 async function startConfigure(reason) {
   const clean = !hasUnsavedChanges();
-  const ok = await configurator.load({ reason });
+  let ok = await configurator.load({ reason });
+  if (ok && session.katapult && !configurator.slots.katapult) ok = await configurator.loadKatapult({ reason });
   if (ok && clean && (reason === "start" || reason === "open")) markSaved(session.tomlText);
   return ok;
 }
 
+// Katapult ticked, or its version changed, once configuring has started: load it beside the firmware.
+function loadKatapult(reason = "start") {
+  if (!configureStarted() || !session.katapult) return Promise.resolve(false);
+  return configurator.load({ reason, slot: "katapult" });
+}
+
 function configureStarted() {
   return session.sources.state !== "idle" || Boolean(configurator.loaded);
-}
-
-function checkConfigText(text) {
-  const bad = [];
-  String(text).split(/\r?\n/).forEach((raw, i) => {
-    const line = raw.trim();
-    if (!line || /^#\s*CONFIG_[A-Za-z0-9_]+ is not set$/.test(line) || (line.startsWith("#"))) return;
-    if (!/^CONFIG_[A-Za-z0-9_]+=.*$/.test(line)) bad.push(`line ${i + 1}: ${line.slice(0, 60)}`);
-  });
-  return bad;
-}
-
-function openLoadConfig() {
-  const { body, close } = openModal("Load a .config", { wide: false });
-  const ref = session.ref;
-  body.innerHTML =
-    `<p>Paste a <code>.config</code> or a defconfig, or open the file. ` +
-    `It replaces the configuration of ${esc(projectTitle(session.index, session.project))} ${esc(ref ? ref.id : "")}; ` +
-    `what it leaves out takes its default.</p>` +
-    `<textarea id="load-config-text" class="code load-config" spellcheck="false" rows="12" ` +
-    `placeholder="CONFIG_MACH_STM32=y&#10;CONFIG_MACH_STM32G0B1=y" aria-label="The .config to load"></textarea>` +
-    `<p class="kc-error-text" id="load-config-error" hidden></p>` +
-    `<div class="modal-actions"><label class="file-btn">Open a file…<input type="file" id="load-config-file"></label>` +
-    `<span class="gen-spacer"></span><button id="load-config-cancel">Cancel</button>` +
-    `<button class="primary" id="load-config-apply">Apply</button></div>`;
-  const textarea = body.querySelector("#load-config-text");
-  const error = body.querySelector("#load-config-error");
-  textarea.focus();
-  body.querySelector("#load-config-file").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (file) textarea.value = await file.text();
-    e.target.value = "";
-  });
-  body.querySelector("#load-config-cancel").addEventListener("click", close);
-  const apply = body.querySelector("#load-config-apply");
-  apply.addEventListener("click", async () => {
-    const text = textarea.value;
-    const bad = checkConfigText(text);
-    if (bad.length) {
-      error.hidden = false;
-      error.textContent = `These are not .config lines (CONFIG_NAME=value, or # CONFIG_NAME is not set):\n${bad.slice(0, 5).join("\n")}`;
-      return;
-    }
-    apply.disabled = true;
-    apply.textContent = "Applying…";
-    try {
-      await configurator.apply(text, { title: "Loaded the .config" });
-      close();
-    } catch (e) {
-      error.hidden = false;
-      error.textContent = e.message;
-      apply.disabled = false;
-      apply.textContent = "Apply";
-    }
-  });
 }
 
 // What the next build downloads beyond the sources, and what of it the
@@ -533,11 +327,12 @@ function setupThemes() {
 
 // Page 1's switch, its version selects and Embed options' "Version the card
 // starts with" all edit [firmware]: a change loads the new version once
-// configuring has started.
-function switchProject(project) {
+// configuring has started. version: the one to switch to (Katapult alone
+// takes page 1's Katapult version); by default the latest/release alias stays.
+function switchProject(project, version = null) {
   // An exact ref belongs to one project; the aliases work for any.
-  const version = ["latest", "release"].includes(session.version) ? session.version : "latest";
-  session.setProject(project, { version });
+  const v = version || (["latest", "release"].includes(session.version) ? session.version : "latest");
+  session.setProject(project, { version: v });
   if (configureStarted()) configurator.load({ reason: "switch" });
 }
 
@@ -579,10 +374,11 @@ function setupFirmwarePage() {
     fwButtons: [...document.querySelectorAll("[data-fw]")],
     fwVersion: $("version-select"), fwBadge: $("version-badge"), fwVersionRow: $("fw-version-row"),
     katapult: $("katapult-check"), katVersion: $("katapult-version"), katBadge: $("katapult-badge"),
-    katVersionRow: $("katapult-version-row"), soon: $("katapult-soon"), prebuilt: $("fw-prebuilt"),
+    katVersionRow: $("katapult-version-row"), prebuilt: $("fw-prebuilt"),
   }, {
     switchProject,
     switchVersion,
+    loadKatapult,
     start: () => startConfigure("start"),
     sourcesStarted: () => ["loading", "ready"].includes(session.sources.state),
     compiler: () => (buildPanel ? buildPanel.compilerToFetch() : Promise.resolve(null)),
@@ -868,7 +664,7 @@ async function init() {
   setupThemes();
   new ConfigTab({
     textarea: $("config-text"), minimal: $("config-minimal"), copy: $("config-copy"),
-    download: $("config-download"), note: $("config-note"),
+    download: $("config-download"), note: $("config-note"), project: $("config-project"),
   }, session);
   renderPlanNote = setupPlan();
   buildPanel = new BuildPanel(session, configurator, {
@@ -883,7 +679,7 @@ async function init() {
   setupFileIO();
   setupUpload();
   setupKeys();
-  renderConfigureStep();
+  configurePage.renderHead();
   markSaved(session.tomlText);
   const mock = new URLSearchParams(location.search).get("mock");
   mountFlashPanel(session, $("flash-card"), { showError })

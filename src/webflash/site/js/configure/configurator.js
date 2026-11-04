@@ -123,6 +123,22 @@ export function withLowLevel(text) {
   return parseConfigLines(t).has("LOW_LEVEL_OPTIONS") ? t : `CONFIG_LOW_LEVEL_OPTIONS=y\n${t}`;
 }
 
+const NOTICE_RANK = { info: 0, warn: 1, error: 2 };
+
+/**
+ * One notice from the two slots' own: either alone as it is, or both under
+ * one title that names both projects ("Carried the configuration over to
+ * Kalico v0.12.0 and Katapult v0.0.1"), each line led by its project.
+ */
+export function mergeNotices(a, b) {
+  if (!a || !b) return a || b || null;
+  const kind = NOTICE_RANK[b.kind] > NOTICE_RANK[a.kind] ? b.kind : a.kind;
+  const title = a.title === b.title ? a.title
+    : a.verb && a.verb === b.verb ? `${a.verb} ${a.label} and ${b.label}` : `${a.title}. ${b.title}`;
+  const lead = (n) => (n.project ? `${n.project}: ` : "");
+  return { kind, title, lines: [...a.lines.map((l) => lead(a) + l), ...b.lines.map((l) => lead(b) + l)] };
+}
+
 function remembered(key) {
   try { return localStorage.getItem(key); } catch (e) { return null; }
 }
@@ -141,7 +157,8 @@ export class Configurator {
     this._indexPromise = null;
     // {project, ref, version} in the engine now, by slot (null: nothing loaded).
     this.slots = { fw: null, katapult: null };
-    this.notice = null;         // what the last load or switch could not carry over
+    this.notice = null;         // what the last load or switch could not carry over (both slots')
+    this._notices = { fw: null, katapult: null };
     this._noticeListeners = [];
     session.on("restore", () => this.reapply());
     session.on("change", ({ what }) => {
@@ -212,6 +229,7 @@ export class Configurator {
     s.setConfig({ configText: "", defconfigText: "" });
     s.setSources("idle");
     if (s.katapult) s.setKatapultState({ ref: null, tree: null, plan: null, configText: "", sources: { state: "idle" }, link: null, notes: [] }, "engine");
+    this._notices.katapult = null;
     this._setNotice(null);
   }
 
@@ -226,6 +244,7 @@ export class Configurator {
     this._planCounts[slot]++;
     const had = this.slots.katapult;
     this.slots.katapult = null;
+    if (this._notices.katapult) this._setNotice(null, slot);
     if (!had) return Promise.resolve(false);
     return this._enqueue(async () => {
       await runtime.dropSlot(slot);
@@ -237,14 +256,17 @@ export class Configurator {
     this._noticeListeners.push(cb);
   }
 
-  _setNotice(notice) {
-    this.notice = notice;
+  // Each slot reports on its own loads; the notice shown is both, merged.
+  _setNotice(notice, slot = "fw") {
+    this._notices[slot] = notice;
+    this.notice = mergeNotices(this._notices.fw, this._notices.katapult);
     for (const cb of this._noticeListeners) {
-      try { cb(notice); } catch (e) { console.error(e); }
+      try { cb(this.notice); } catch (e) { console.error(e); }
     }
   }
 
   dismissNotice() {
+    this._notices.katapult = null;
     this._setNotice(null);
   }
 
@@ -354,7 +376,7 @@ export class Configurator {
         const { ref, error, note } = resolveVersion(index, project, version);
         if (!ref) {
           view.setSources("error", error);
-          this._setNotice({ kind: "error", title: "This version is not available", lines: [error] });
+          this._setNotice({ kind: "error", title: `This ${view.title(index)} version is not available`, lines: [error] }, slot);
           return false;
         }
         const label = `${projectTitle(index, project)} ${ref.id}`;
@@ -374,7 +396,7 @@ export class Configurator {
           if (attempt === 0 && /\(HTTP 404\)/.test(e.message) && generation === this._generations[slot]) continue;
           if (generation === this._generations[slot]) {
             view.setSources("error", e.message, { ref });
-            this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] });
+            this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] }, slot);
           }
           return false;
         }
@@ -408,14 +430,15 @@ export class Configurator {
       view.setConfig({ configText, defconfigText });
       view.setSources("ready", label, { ref, size: out.size, cached: out.cached });
       remember(AUTO_KEY, "1");
-      const pairNotes = await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
-      this._report(slot, reason, { result, carry, configText, previous, ref, note, pairNotes });
+      // What the other tree refused shows under the shared options (session.katapult.notes).
+      await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
+      this._report(slot, reason, { result, carry, configText, previous, ref, note });
       this.schedulePlan(0, slot);
       return true;
     } catch (e) {
       if (generation === this._generations[slot]) {
         view.setSources("error", e.message, { ref });
-        this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] });
+        this._setNotice({ kind: "error", title: `Could not load ${label}`, lines: [e.message] }, slot);
       }
       return false;
     }
@@ -443,7 +466,7 @@ export class Configurator {
     return block.notes || [];
   }
 
-  _report(slot, reason, { result, carry, configText, previous, ref, note, pairNotes = [] }) {
+  _report(slot, reason, { result, carry, configText, previous, ref, note }) {
     const s = this.session;
     const view = this._view(slot);
     const missing = result.missing || [];
@@ -455,28 +478,30 @@ export class Configurator {
       lines.push(`Not in this version, so dropped: ${missing.map(([n, v]) => describeAssignment(n, v)).join(", ")}.`);
     }
     if (lost.length) {
-      lines.push("Not applied (their dependencies are off here, or the value is not allowed): " +
-        lost.map((l) => `${describeAssignment(l.name, l.wanted)}, now ${l.got === "n" ? "off" : l.got === "y" ? "on" : l.got}`)
-          .join("; ") + ".");
+      lines.push("Not applied here: " +
+        lost.map((l) => `${describeAssignment(l.name, l.wanted)} (now ${l.got === "n" ? "off" : l.got === "y" ? "on" : l.got})`)
+          .join(", ") + ".");
     }
     for (const w of warnings) lines.push(w);
-    for (const n of pairNotes) lines.push(n);
     const exposedGone = reason === "open" && slot === "fw" ? this._unknownOptions() : [];
     if (exposedGone.length) {
-      lines.push(`The board TOML exposes options this version does not have: ${exposedGone.join(", ")}.`);
+      lines.push(`Embed options this version lacks: ${exposedGone.join(", ")}.`);
     }
     // A load with nothing to report still clears an earlier load's notice
     // (an undo back across a switch reloads with reason "restore").
     if (!lines.length) {
-      this._setNotice(null);
+      this._setNotice(null, slot);
       return;
     }
     const from = previous ? `${projectTitle(s.index, previous.project)} ${previous.ref.id}` : "";
     const to = `${view.title(s.index, view.project)} ${ref.id}`;
-    const title = reason === "switch" && from
-      ? `Carried the configuration from ${from} to ${to}`
-      : reason === "open" ? `Opened the board TOML with ${to}` : `Loaded ${to}`;
-    this._setNotice({ kind: missing.length || lost.length || exposedGone.length ? "warn" : "info", title, lines });
+    const switched = reason === "switch" && from;
+    const verb = switched ? "Carried the configuration over to" : reason === "open" ? "Opened the board TOML with" : "Loaded";
+    this._setNotice({
+      kind: missing.length || lost.length || exposedGone.length ? "warn" : "info",
+      title: switched ? `Carried the configuration from ${from} to ${to}` : `${verb} ${to}`,
+      lines, verb, label: to, project: view.title(s.index, view.project),
+    }, slot);
   }
 
   // Exposed options whose symbol the loaded tree does not have.
@@ -537,17 +562,18 @@ export class Configurator {
 
   /**
    * Load a .config or defconfig text into a slot's current version (Load
-   * .config; "" is Reset to defaults), reporting symbols it names that this
-   * version does not have.
+   * .config, Reset), reporting symbols it names that this version does not
+   * have. checkpoint false: the caller took the undo point (a Reset of both
+   * slots is one undo step).
    */
-  apply(text, { title = "Loaded the configuration", slot = "fw" } = {}) {
+  apply(text, { title = "Loaded the configuration", slot = "fw", checkpoint = true } = {}) {
     const s = this.session;
     return this._enqueue(async () => {
       if (!this.readySlot(slot) || s.locked) throw new Error(s.locked || "The configuration has not loaded yet.");
-      s.checkpoint();
+      if (checkpoint) s.checkpoint();
       const loaded = await runtime.kconfigLoad(text, { slot });
       await this._refresh(slot, loaded && loaded.tree ? loaded.tree : null);
-      const pairNotes = await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
+      await this._afterPairing(slot, loaded && loaded.pair, { sync: true });
       const view = this._view(slot);
       const result = loadReport(loaded, text, view.tree);
       const missing = result.missing;
@@ -557,8 +583,7 @@ export class Configurator {
           `${missing.map(([n, v]) => describeAssignment(n, v)).join(", ")}.`);
       }
       for (const w of result.warnings) lines.push(w);
-      for (const n of pairNotes) lines.push(n);
-      this._setNotice(lines.length ? { kind: "warn", title, lines } : null);
+      this._setNotice(lines.length ? { kind: "warn", title, lines, project: view.title(s.index, view.project) } : null, slot);
       return result;
     });
   }
@@ -572,7 +597,12 @@ export class Configurator {
     let kat;
     if (!k.on) kat = this.slots.katapult ? this.dropKatapult() : Promise.resolve(false);
     else kat = this._reapplySlot("katapult");
-    return Promise.all([fw, kat]).then(([a]) => a);
+    // Both restored: pair them again, which changes nothing in a restored
+    // pair but brings back the notes of what Katapult refuses.
+    return Promise.all([fw, kat]).then(async ([a]) => {
+      if (this.paired) await this._enqueue(() => this._afterPairing("fw", null, { sync: true }));
+      return a;
+    });
   }
 
   _reapplySlot(slot) {

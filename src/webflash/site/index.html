@@ -91,7 +91,6 @@
               <select id="katapult-version" disabled></select>
               <span class="ref-badge" id="katapult-badge" hidden>unchecked</span>
             </div>
-            <p class="fw-soon" id="katapult-soon" hidden></p>
           </div>
           <div class="alts">
             <button type="button" class="link" id="fw-open-toml">Open a board TOML</button>
@@ -112,14 +111,18 @@
       <section class="wiz-step" data-step="configure" aria-labelledby="configure-title" hidden>
         <div class="wiz-body" id="configure-panel">
           <h2 class="page" id="configure-title" tabindex="-1" data-wiz-title>Set up Klipper</h2>
-          <p class="lead">Match your board.</p>
+          <p class="lead" id="configure-lead">Match your board.</p>
+          <div class="kc-setup" id="kconfig-setup-row" hidden>
+            <label for="kconfig-setup">Setup</label>
+            <select id="kconfig-setup"></select>
+          </div>
           <div class="cfg-bar">
             <input type="search" id="kconfig-search" placeholder="Search options (/)" aria-label="Search the options" disabled>
             <span class="kc-count" id="kconfig-count"></span>
             <button type="button" class="mini" id="kconfig-undo" disabled title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
             <button type="button" class="mini" id="kconfig-redo" disabled title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
             <button type="button" class="mini" id="kconfig-load" disabled title="Paste or open a .config or defconfig">Load .config</button>
-            <button type="button" class="mini" id="kconfig-reset" disabled title="Every option back to its default (Ctrl+Z undoes it)">Reset</button>
+            <button type="button" class="mini" id="kconfig-reset" disabled title="Every option back to its default, keeping the chip and the low-level options (Ctrl+Z undoes it)">Reset</button>
           </div>
           <div class="kc-status" id="kconfig-status" hidden></div>
           <div class="kc-notice" id="kconfig-notice" role="status" hidden></div>
@@ -199,6 +202,7 @@
 
           <div id="config-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-config" hidden>
             <div class="cfg-bar">
+              <select id="config-project" aria-label="Which project's configuration" hidden></select>
               <label class="check" title="Only what differs from the defaults, as [config] holds it"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
               <span class="bar-note" id="config-note"></span>
               <span class="bar-spacer"></span>

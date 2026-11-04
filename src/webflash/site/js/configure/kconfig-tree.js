@@ -5,20 +5,52 @@
 //
 // It shows what menuconfig.py shows: only nodes the engine marks visible
 // (the prompt's condition, a menu's `visible if`, an invisible symbol with
-// shown children). Menus are collapsible sections (remembered for the browser
-// session), `menuconfig` symbols bools that expand, choices a select (a radio
-// group for two or three members), bools checkboxes, int and hex inputs
-// checked against the active range, strings text inputs, comments headings.
-// Symbols that depend on the one above them (an implicit menu) sit indented
-// under it. A node's help is behind its ? button, its dependency in the
-// prompt's tooltip. Search filters by prompt, name and help, opening the
+// shown children). Menus are collapsible sections, folded until the user
+// opens one (an explicit open or close is remembered per project in
+// localStorage), `menuconfig` symbols bools that expand, choices a select (a
+// radio group for two or three members), bools checkboxes, int and hex
+// inputs checked against the active range, strings text inputs, comments
+// headings. Symbols that depend on the one above them (an implicit menu) sit
+// indented under it. A node's help is behind its ? button, its dependency in
+// the prompt's tooltip. Search filters by prompt, name and help, opening the
 // menus that hold matches and listing the matches that are hidden now.
+//
+// A paired tree (bridge.pair_tree: a firmware and Katapult beside it) has
+// three group nodes at its root (kind "menu" with a group id): they show as
+// headed sections that never fold. A choice the engine marks locked (Klipper's
+// bootloader offset, which follows Katapult's) shows its value as text, and
+// notes (setNotes) show under the node they concern.
 //
 // mode "expose" (the Embed options tab) shows the same tree with a "the
 // reader can change this" box on every symbol and choice, values read-only,
 // and a slot under each exposed one for its [[option]] editor.
 
 const STORE = "webflash.kconfig";
+
+/** The localStorage key of a project's remembered folds. */
+export function foldStoreKey(project) {
+  return `${STORE}.folds.${project || "any"}`;
+}
+
+/**
+ * Whether a menu or menuconfig symbol shows folded: an explicit choice the
+ * user made (folds: key -> "open" | "closed") wins; otherwise a menu starts
+ * folded and anything else open. A group of a paired tree never folds.
+ */
+export function isFolded(node, folds) {
+  if (node.group) return false;
+  const key = node.kind === "menu" ? `menu:${node.prompt}` : `sym:${node.name}`;
+  const choice = folds ? folds[key] : undefined;
+  if (choice === "open") return false;
+  if (choice === "closed") return true;
+  return node.kind === "menu";
+}
+
+/** Which slot of a paired engine a node id belongs to ("fw:n4", "katapult:n2"), else null. */
+export function slotOfId(id) {
+  const m = /^(fw|katapult):/.exec(String(id || ""));
+  return m ? m[1] : null;
+}
 
 function text(el, value) {
   const v = value == null ? "" : String(value);
@@ -159,11 +191,12 @@ function matchesText(node, q) {
 export class KconfigTree {
   /**
    * container: an empty element the tree fills. Options: mode ("configure"
-   * or "expose"), onSet(name, value) -> Promise (configure mode), and for
-   * the expose mode isExposed(node) -> bool, onExpose(node, on) and
-   * renderEditor(node, slot) (called on every update of an exposed node,
-   * so it must keep focus itself). isExposed also marks exposed options in
-   * configure mode.
+   * or "expose"), onSet(name, value, node) -> Promise (configure mode; node
+   * is the tree node whose control changed, whose id names its slot in a
+   * paired tree), and for the expose mode isExposed(node) -> bool,
+   * onExpose(node, on) and renderEditor(node, slot) (called on every update
+   * of an exposed node, so it must keep focus itself). isExposed also marks
+   * exposed options in configure mode.
    */
   constructor(container, { mode = "configure", onSet = null, isExposed = null, onExpose = null,
     renderEditor = null, idPrefix = "kc" } = {}) {
@@ -176,11 +209,14 @@ export class KconfigTree {
     this.prefix = idPrefix;
     this.tree = null;
     this.key = null;            // which engine session the tree belongs to
+    // The project of the tree's nodes: one name, or {fw, katapult} by slot
+    // for a paired tree (folds are remembered per project).
     this.project = "";
     this.recs = new Map();      // node id -> {el, shape, ...}
     this.byEl = new WeakMap();  // a node's element -> its record
     this.helpOpen = new Set();
-    this.collapsed = new Set();
+    this.folds = new Map();     // project -> {fold key: "open" | "closed"}, the user's own choices
+    this.notes = new Map();     // node id -> [{text, kind}] shown under it
     this.query = "";
     this.keep = null;           // node ids shown by the search, null when not searching
     this.matchCount = 0;
@@ -206,21 +242,34 @@ export class KconfigTree {
   /**
    * Show a tree. key names the engine session it comes from (project and
    * sha): a tree of another session is rendered afresh, one of the same
-   * session is patched by id.
+   * session is patched by id. project is the tree's project, or {fw,
+   * katapult} for a paired tree.
    */
   setTree(tree, key = "", project = "") {
     if (key !== this.key) {
       this.recs.clear();
       this.helpOpen.clear();
       this.errors.clear();
+      this.notes.clear();
       this.list.replaceChildren();
       this.key = key;
-      if (project !== this.project) {
-        this.project = project;
-        this._loadCollapsed();
-      }
     }
+    this.project = project;
     this.tree = tree;
+    this.render();
+  }
+
+  /**
+   * Notes shown under nodes: a Map (or object) of node id -> text or
+   * [text], or [{text, kind}] (kind "warn" or "error"); replaces the notes
+   * shown before.
+   */
+  setNotes(notes) {
+    this.notes = new Map();
+    for (const [id, v] of notes instanceof Map ? notes : Object.entries(notes || {})) {
+      const list = (Array.isArray(v) ? v : [v]).map((n) => (typeof n === "string" ? { text: n, kind: "warn" } : n));
+      if (list.length) this.notes.set(id, list);
+    }
     this.render();
   }
 
@@ -278,7 +327,7 @@ export class KconfigTree {
       const node = nodes[id];
       if (!node) return false;
       const member = parent && parent.kind === "choice" && isMember(parent, node);
-      const self = id !== this.tree.root && !member && matchesText(node, q);
+      const self = id !== this.tree.root && !member && !node.group && matchesText(node, q);
       const whole = forced || (self && node.kind === "menu");
       let any = false;
       for (const c of node.children || []) if (visit(c, whole, node)) any = true;
@@ -335,20 +384,26 @@ export class KconfigTree {
 
   // ── Collapsing ─────────────────────────────────────────────────────
 
-  _storeKey() {
-    return `${STORE}.collapsed.${this.project || "any"}`;
+  // The project a node belongs to: the tree's, or in a paired tree the one
+  // of the slot its id names.
+  _projectOf(node) {
+    const p = this.project;
+    if (p && typeof p === "object") return p[slotOfId(node.id) || "fw"] || "";
+    return p || "";
   }
 
-  _loadCollapsed() {
-    this.collapsed = new Set();
-    try {
-      const raw = sessionStorage.getItem(this._storeKey());
-      if (raw) for (const k of JSON.parse(raw)) this.collapsed.add(String(k));
-    } catch (e) { /* storage blocked or damaged: everything open */ }
-  }
-
-  _saveCollapsed() {
-    try { sessionStorage.setItem(this._storeKey(), JSON.stringify([...this.collapsed])); } catch (e) { /* blocked */ }
+  // A project's remembered folds, read once.
+  _foldsOf(project) {
+    if (!this.folds.has(project)) {
+      let folds = {};
+      try {
+        const raw = localStorage.getItem(foldStoreKey(project));
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) folds = parsed;
+      } catch (e) { /* storage blocked or damaged: the defaults */ }
+      this.folds.set(project, folds);
+    }
+    return this.folds.get(project);
   }
 
   // A menu is remembered by its prompt (and a menuconfig symbol by its name),
@@ -358,13 +413,25 @@ export class KconfigTree {
   }
 
   _isCollapsed(node) {
-    return !this.keep && this.collapsed.has(this._collapseKey(node));
+    return !this.keep && isFolded(node, this._foldsOf(this._projectOf(node)));
+  }
+
+  // The user opened or closed a menu: remember it for the project.
+  _setFolded(node, folded) {
+    if (node.group) return;
+    const project = this._projectOf(node);
+    const folds = this._foldsOf(project);
+    folds[this._collapseKey(node)] = folded ? "closed" : "open";
+    try { localStorage.setItem(foldStoreKey(project), JSON.stringify(folds)); } catch (e) { /* blocked */ }
+    this.render();
   }
 
   // ── Rendering ────────────────────────────────────────────────────
 
   _shape(node) {
+    if (node.kind === "menu" && node.group) return "group";
     if (this.mode === "expose" && (node.kind === "choice" || node.kind === "symbol")) return `expose:${node.kind}`;
+    if (node.kind === "choice" && node.locked) return "choice:locked";
     if (node.kind === "choice") {
       const n = (node.members || []).filter((m) => m.visible).length;
       return `choice:${n <= 3 ? "radio" : "select"}`;
@@ -431,6 +498,19 @@ export class KconfigTree {
   _create(node, shape) {
     const id = `${this.prefix}-${node.id}`;
     const rec = { id: node.id, shape, kind: node.kind, name: node.name, el: null, nav: null };
+    if (shape === "group") {
+      // A paired tree's group: a heading (the project's name as a tag) and
+      // its options, always shown.
+      const el = this._el("section", `kc-node kc-group kc-group-${node.group}`, { "aria-labelledby": `${id}-t` });
+      const head = this._el("div", "kc-group-head", { id: `${id}-t`, role: "heading", "aria-level": "3" });
+      const notes = this._el("div", "kc-notes");
+      notes.hidden = true;
+      const children = this._el("div", "kc-children", { role: "group" });
+      el.append(head, notes, children);
+      Object.assign(rec, { el, head, notes, children });
+      this.byEl.set(el, rec);
+      return rec;
+    }
     if (node.kind === "menu") {
       const el = this._el("section", "kc-node kc-menu");
       const head = this._el("button", "kc-menu-head", { type: "button", "aria-controls": `${id}-c`, "data-act": "toggle" });
@@ -477,6 +557,12 @@ export class KconfigTree {
       const state = this._el("span", "kc-state");
       row.append(expose, prompt, state, nameEl, helpBtn);
       Object.assign(rec, { expose, prompt, state, nav: expose });
+    } else if (shape === "choice:locked") {
+      // Set by the other project of a pair: the value as text.
+      const prompt = this._el("span", "kc-prompt");
+      const lock = this._el("span", "kc-lock");
+      row.append(prompt, lock, nameEl, helpBtn);
+      Object.assign(rec, { prompt, lock });
     } else if (node.kind === "choice" && shape === "choice:radio") {
       const prompt = this._el("span", "kc-prompt", { id: `${id}-p` });
       const options = this._el("div", "kc-radio-list", { role: "radiogroup", "aria-labelledby": `${id}-p` });
@@ -515,12 +601,14 @@ export class KconfigTree {
       row.append(prompt, value, nameEl, helpBtn);
       Object.assign(rec, { prompt, value });
     }
-    el.append(error, help);
+    const notes = this._el("div", "kc-notes");
+    notes.hidden = true;
+    el.append(error, notes, help);
     const editor = this._el("div", "kc-editor");
     editor.hidden = true;
     const children = this._el("div", "kc-children");
     el.append(editor, children);
-    Object.assign(rec, { row, help, helpBtn, nameEl, badge, error, editor, children });
+    Object.assign(rec, { row, help, helpBtn, nameEl, badge, error, notes, editor, children });
     if (!rec.nav) rec.nav = rec.expose || helpBtn;
     this.byEl.set(el, rec);
     return rec;
@@ -531,6 +619,12 @@ export class KconfigTree {
     rec.el.hidden = !this._shows(node);
     rec.name = node.name;
     rec.el.dataset.name = node.name || "";
+    if (rec.shape === "group") {
+      this._updateGroupHead(rec, node);
+      this._updateNotes(rec, node);
+      this._renderList(rec.children, this._childIds(node, nodes), nodes);
+      return;
+    }
     if (node.kind === "menu") {
       const collapsed = this._isCollapsed(node);
       rec.head.setAttribute("aria-expanded", String(!collapsed));
@@ -573,8 +667,10 @@ export class KconfigTree {
     const err = this.errors.get(node.id);
     rec.error.hidden = !err;
     text(rec.error, err || "");
+    this._updateNotes(rec, node);
 
     if (rec.state) text(rec.state, this._stateText(node));
+    else if (rec.lock) this._updateLock(rec, node);
     else if (node.kind === "choice") this._updateChoice(rec, node, disabled);
     else if (rec.control) this._updateValue(rec, node, disabled);
     else if (rec.value) text(rec.value, node.value);
@@ -598,6 +694,44 @@ export class KconfigTree {
       rec.children.hidden = collapsed;
     }
     this._renderList(rec.children, childIds, nodes);
+  }
+
+  // A group's heading: "Board · used by both", or the project's name as a
+  // tag before " only".
+  _updateGroupHead(rec, node) {
+    const title = node.prompt || "";
+    if (rec.head.dataset.title === title) return;
+    rec.head.dataset.title = title;
+    const m = node.group !== "shared" ? /^(.*) only$/.exec(title) : null;
+    if (!m) {
+      rec.head.textContent = title;
+      return;
+    }
+    const tag = this._el("span", `kc-tag kc-tag-${node.group}`);
+    tag.textContent = m[1];
+    rec.head.replaceChildren(tag, " only");
+  }
+
+  _updateNotes(rec, node) {
+    const notes = this.notes.get(node.id) || [];
+    rec.notes.hidden = !notes.length;
+    const key = notes.map((n) => `${n.kind}\u0001${n.text}`).join("\u0002");
+    if (rec.notes.dataset.key === key) return;
+    rec.notes.dataset.key = key;
+    rec.notes.replaceChildren(...notes.map((n) => {
+      const p = this._el("p", `kc-note kc-note-${n.kind || "warn"}`);
+      if (n.kind === "error") p.setAttribute("role", "alert");
+      p.textContent = n.text;
+      return p;
+    }));
+  }
+
+  // A locked choice: its value and who sets it ("8KiB bootloader · set by Katapult").
+  _updateLock(rec, node) {
+    const m = (node.members || []).find((x) => x.name === node.value);
+    const by = node.locked === "katapult" ? "Katapult" : String(node.locked);
+    text(rec.lock, `${m ? m.prompt : "(none)"} · set by ${by}`);
+    rec.lock.title = `${by} sets this. Change it there.`;
   }
 
   // A value as the expose mode shows it.
@@ -693,7 +827,7 @@ export class KconfigTree {
     this.errors.delete(rec.id);
     rec.el.setAttribute("aria-busy", "true");
     try {
-      await this.onSet(name, value);
+      await this.onSet(name, value, this._node(rec));
     } catch (e) {
       this.errors.set(rec.id, e && e.message ? e.message : String(e));
     } finally {
@@ -739,11 +873,7 @@ export class KconfigTree {
     const node = this._node(rec);
     if (!node) return;
     if (btn.dataset.act === "toggle") {
-      const key = this._collapseKey(node);
-      if (this.collapsed.has(key)) this.collapsed.delete(key);
-      else this.collapsed.add(key);
-      this._saveCollapsed();
-      this.render();
+      this._setFolded(node, !this._isCollapsed(node));
     } else if (btn.dataset.act === "help") {
       if (this.helpOpen.has(node.id)) this.helpOpen.delete(node.id);
       else this.helpOpen.add(node.id);
@@ -791,14 +921,10 @@ export class KconfigTree {
       const rec = this._recOf(t);
       const node = this._node(rec);
       if (!node) return;
-      const key = this._collapseKey(node);
       const collapse = e.key === "ArrowLeft";
-      if (collapse === this.collapsed.has(key)) return;
+      if (collapse === this._isCollapsed(node)) return;
       e.preventDefault();
-      if (collapse) this.collapsed.add(key);
-      else this.collapsed.delete(key);
-      this._saveCollapsed();
-      this.render();
+      this._setFolded(node, collapse);
     }
   }
 

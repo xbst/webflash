@@ -2,8 +2,8 @@
 //
 // It holds the board TOML's tables in the shape webflash's board_data returns
 // ([board], [firmware], [katapult], setups (from [config] or [[setup]]) with
-// setups_form, [[option]], [flash], [prebuilt]); the site configures the
-// first setup:
+// setups_form, [[option]], [flash], [prebuilt]); the site configures one
+// setup at a time (setupIndex, the Setup select; the first by default):
 // they are what Save TOML writes, and the TOML text is derived from them
 // (tomlText, the same text as bridge.save_toml for the same tables). Opening a
 // TOML replaces them; the Configure, Embed options and toolbar controls
@@ -16,7 +16,8 @@
 // Every change is announced as a "change" event whose detail names what
 // changed ({what, origin}); what is one of board, firmware, project,
 // version, config, options, flash, prebuilt, toml, files, index, ref, tree,
-// plan, sources, lock, undo, open, katapult (Katapult ticked, unticked or its
+// plan, sources, lock, undo, open, setup (another setup picked), katapult
+// (Katapult ticked, unticked or its
 // version changed) and katapult-<part> (its engine side: ref, tree, config,
 // plan, sources, link). Undo and redo cover the tables (and the TOML's name
 // and files), Katapult's version and defconfig among them; a "restore" event
@@ -188,6 +189,7 @@ export class Session {
     this.build = null;          // the last build (build/artifacts.js's buildRecord), until a TOML is opened
     // The engine's side of Katapult beside the firmware (see the katapult getter).
     this._katapultEngine = freshKatapultEngine();
+    this._setupIndex = 0;       // the setup Configure edits (setupIndex clamps it)
 
     this._listeners = new Map();
     this._undo = [];
@@ -228,7 +230,15 @@ export class Session {
   get prebuilt() { return this._t.prebuilt; }
   get project() { return this._t.firmware ? this._t.firmware.project : null; }
   get version() { return this._t.firmware ? this._t.firmware.version : null; }
-  get defconfigText() { return this._t.setups.length ? this._t.setups[0].defconfig : ""; }
+  get defconfigText() { return this.setup ? this.setup.defconfig : ""; }
+
+  /** Which setup Configure edits (the Setup select): an index into the tables' setups. */
+  get setupIndex() {
+    return Math.max(0, Math.min(this._setupIndex, this._t.setups.length - 1));
+  }
+
+  /** The setup Configure edits, or null ([prebuilt]). */
+  get setup() { return this._t.setups[this.setupIndex] || null; }
 
   /**
    * Katapult configured beside the firmware, or null when not picked: {on,
@@ -236,16 +246,35 @@ export class Session {
    * notes}, the configure session's side of the engine's "katapult" slot.
    * on, version and defconfigText are the tables' ([katapult] version and
    * the configured setup's katapult defconfig), so undo and Save TOML cover
-   * them; the rest is the engine's. Null while the project is Katapult itself.
+   * them; the rest is the engine's. Null while the project is Katapult
+   * itself, and for a setup without a Katapult defconfig.
    */
   get katapult() {
     if (!this._t.katapult || !this._t.firmware || this._t.firmware.project === "katapult") return null;
-    const setup = this._t.setups[0];
+    const setup = this.setup;
+    if (!setup || typeof setup.katapult !== "string") return null;
     return {
       on: true, version: this._t.katapult.version,
-      defconfigText: setup && setup.katapult ? setup.katapult : "",
+      defconfigText: setup.katapult,
       ...this._katapultEngine,
     };
+  }
+
+  /**
+   * Edit another setup (the Setup select): its defconfigs become the
+   * session's, and Katapult follows whether it has one. Not undoable (it
+   * changes what is shown, not the tables). Announced as a "setup" change,
+   * and "katapult" when Katapult comes or goes with it; the configure code
+   * then loads the setup into the engine.
+   */
+  setSetupIndex(i) {
+    const next = Math.max(0, Math.min(Number(i) || 0, this._t.setups.length - 1));
+    if (next === this.setupIndex) return;
+    const before = this.katapult;
+    this._setupIndex = next;
+    if (!this.katapult) this._katapultEngine = freshKatapultEngine();
+    this._changed("setup", "visual");
+    if (Boolean(before) !== Boolean(this.katapult)) this._changed("katapult", "visual");
   }
 
   get theme() { return this._t.board.theme || "default"; }
@@ -353,6 +382,7 @@ export class Session {
     const katapultBefore = this.katapult;
     this._t = normalizeTables(tables);
     this.build = null;
+    this._setupIndex = 0;
     // An opened TOML's Katapult starts over in the engine.
     this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
@@ -440,25 +470,31 @@ export class Session {
    * Tick or untick Katapult beside the firmware, or change its version: {on,
    * version} (one undo step). Ticking it adds [katapult] (version "latest"
    * unless named) and an empty Katapult defconfig to the configured setup
-   * (the configure code loads it with the firmware's chip); unticking drops
-   * [katapult] and every setup's Katapult defconfig (the loader refuses one
-   * without the other). Refused while the project is Katapult itself.
-   * Announced as a "katapult" change.
+   * (the configure code loads it with the firmware's chip); unticking takes
+   * the configured setup's Katapult defconfig away, and [katapult] with it
+   * once no setup has one (the loader refuses one without the other).
+   * Refused while the project is Katapult itself. Announced as a "katapult"
+   * change.
    */
   setKatapult({ on, version } = {}, { origin = "visual", undoable = true } = {}) {
     if (!this._t.firmware || this.project === "katapult") return;
     const k = this._t.katapult;
-    const turnOn = on === undefined ? Boolean(k) : Boolean(on);
+    const at = this.setupIndex;
+    const mine = Boolean(this.katapult);
+    const turnOn = on === undefined ? mine : Boolean(on);
     if (!turnOn) {
-      if (!k) return;
+      if (!mine) return;
       if (undoable) this.checkpoint();
-      this._t.katapult = null;
-      this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
+      const setups = this._t.setups.map((s, i) => (i === at ? { ...s, katapult: null } : s));
+      const others = setups.some((s) => typeof s.katapult === "string");
+      this._t.setups = others ? setups : setups.map((s) => ({ ...s, katapult: null }));
+      if (!others) this._t.katapult = null;
       this._katapultEngine = freshKatapultEngine();
-    } else if (!k) {
+    } else if (!mine) {
       if (undoable) this.checkpoint();
-      this._t.katapult = { version: version || "latest", versions: "all", default: true };
-      this._t.setups = this._t.setups.map((s, i) => (i === 0 && s.katapult === null ? { ...s, katapult: "" } : s));
+      this._t.katapult = k ? { ...k } : { version: version || "latest", versions: "all", default: true };
+      if (k && version && version !== k.version) this._t.katapult.version = version;
+      this._t.setups = this._t.setups.map((s, i) => (i === at && s.katapult === null ? { ...s, katapult: "" } : s));
       this._katapultEngine = freshKatapultEngine();
     } else {
       if (!version || version === k.version) return;
@@ -496,8 +532,9 @@ export class Session {
     const k = this.katapult;
     if (!k || (k.configText === configText && k.defconfigText === defconfigText)) return;
     this._katapultEngine = { ...this._katapultEngine, configText };
-    const setup = this._t.setups[0];
-    if (setup) this._t.setups[0] = { ...setup, katapult: defconfigText };
+    const at = this.setupIndex;
+    const setup = this._t.setups[at];
+    if (setup) this._t.setups[at] = { ...setup, katapult: defconfigText };
     this._changed("katapult-config", origin);
     this._sync(origin);
   }
@@ -532,15 +569,16 @@ export class Session {
 
   /**
    * The configuration the engine reports after a change: the full .config
-   * and the defconfig, which becomes the first setup's defconfig. The undo
-   * point was taken before the change (checkpoint).
+   * and the defconfig, which becomes the configured setup's defconfig. The
+   * undo point was taken before the change (checkpoint).
    */
   setConfig({ configText, defconfigText }, { origin = "engine" } = {}) {
-    const setup = this._t.setups[0];
+    const at = this.setupIndex;
+    const setup = this._t.setups[at];
     const changed = configText !== this.configText || (setup && defconfigText !== setup.defconfig);
     if (!changed) return;
     this.configText = configText;
-    if (setup) this._t.setups[0] = { ...setup, defconfig: defconfigText };
+    if (setup) this._t.setups[at] = { ...setup, defconfig: defconfigText };
     this._changed("config", origin);
     this._sync(origin);
   }

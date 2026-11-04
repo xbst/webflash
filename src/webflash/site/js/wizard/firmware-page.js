@@ -1,13 +1,14 @@
 // Page 1 of the wizard, Firmware: what to flash and which versions.
 //
 // The firmware switch (Klipper, Kalico, None) and the Katapult checkbox are
-// the session's [firmware] project: Klipper or Kalico, or Katapult when it is
-// picked alone. Katapult beside a firmware waits for the engine's second slot
-// (chunk U01): until then the checkbox shows "Coming soon" there and Next
-// sets up the firmware alone, the Katapult version kept on this page only.
+// the session's [firmware] project (Klipper or Kalico, or Katapult when it is
+// picked alone) and its [katapult] table: Katapult beside a firmware is
+// session.katapult, configured in the engine's second slot. Ticking it once
+// configuring has started loads it at once (its shared options follow the
+// firmware's); unticking it lets the slot go.
 //
 // Next is the consent the site asks for before downloading: it starts Python
-// and the sources of the picked project (configurator.load) and the compiler
+// and the sources of the picked projects (configurator.load) and the compiler
 // (in the background), then moves on to Configure. The footer's hint names
 // what that downloads and its size, from the sources index and the compiler's
 // manifest, or says everything is in this browser already.
@@ -96,10 +97,11 @@ export class FirmwarePage {
   /**
    * els: {fwButtons (the switch's buttons, data-fw), fwVersion, fwBadge,
    * fwVersionRow, katapult (the checkbox), katVersion, katBadge,
-   * katVersionRow, soon, prebuilt, hint}. actions: {switchProject(project),
-   * switchVersion(version), start() (load the configuration), consent()
-   * (the compiler and the build's downloads), compiler() (resolves to {size}
-   * or null), sourcesStarted()}.
+   * katVersionRow, prebuilt, hint}. actions: {switchProject(project,
+   * version?), switchVersion(version), loadKatapult(reason) (load
+   * session.katapult once configuring has started), start() (load the
+   * configuration), consent() (the compiler and the build's downloads),
+   * compiler() (resolves to {size} or null), sourcesStarted()}.
    */
   constructor(session, configurator, wizard, els, actions) {
     this.session = session;
@@ -109,21 +111,20 @@ export class FirmwarePage {
     this.actions = actions;
     this.indexError = "";
     this.katapult = false;
+    // Katapult's version while it is not in the tables (unticked, or picked alone).
     this.katapultVersion = "latest";
     this.fw = picksFor(session.project, false).fw;
     this._hintCount = 0;
+    this.sync();
 
     for (const b of els.fwButtons) b.addEventListener("click", () => this.pickFirmware(b.dataset.fw));
     els.katapult.addEventListener("change", () => this.pickKatapult(els.katapult.checked));
     els.fwVersion.addEventListener("change", () => { if (els.fwVersion.value) actions.switchVersion(els.fwVersion.value); });
-    els.katVersion.addEventListener("change", () => {
-      if (!els.katVersion.value) return;
-      if (this.session.project === "katapult") actions.switchVersion(els.katVersion.value);
-      else this.katapultVersion = els.katVersion.value;
-    });
+    els.katVersion.addEventListener("change", () => this.pickKatapultVersion(els.katVersion.value));
     session.on("change", ({ what }) => {
-      if (["project", "open", "undo"].includes(what)) this.sync();
-      if (["index", "project", "version", "firmware", "ref", "open", "lock", "prebuilt", "sources", "undo"].includes(what)) this.render();
+      if (["project", "open", "undo", "katapult", "setup"].includes(what)) this.sync();
+      if (["index", "project", "version", "firmware", "ref", "open", "lock", "prebuilt", "sources", "undo",
+        "katapult", "katapult-sources", "setup"].includes(what)) this.render();
     });
     wizard.onNext("firmware", () => this.next());
     wizard.onEnter("firmware", () => this.render());
@@ -136,9 +137,15 @@ export class FirmwarePage {
     this.render();
   }
 
-  // The page follows a project set elsewhere (an opened TOML, ?project=, undo).
+  // The page follows the session (an opened TOML, ?project=, undo, the Setup
+  // select): None with nothing ticked is the page's own until a pick.
   sync() {
-    const picks = picksFor(this.session.project, this.katapult);
+    const s = this.session;
+    if (this.fw === "none" && !this.katapult && s.project !== "katapult") return;
+    const k = s.katapult;
+    if (k) this.katapultVersion = k.version;
+    else if (s.project === "katapult" && s.version) this.katapultVersion = s.version;
+    const picks = picksFor(s.project, Boolean(k));
     this.fw = picks.fw;
     this.katapult = picks.katapult;
   }
@@ -153,17 +160,53 @@ export class FirmwarePage {
   }
 
   pickFirmware(fw) {
+    const s = this.session;
+    const katapult = this.katapult;
     this.fw = fw;
     const project = this.project;
-    if (project && project !== this.session.project) this.actions.switchProject(project);
+    if (project && project !== s.project) {
+      this.actions.switchProject(project, project === "katapult" ? this.katapultVersion : null);
+    }
+    // From Katapult alone to a firmware: Katapult stays ticked, beside it
+    // (the switch made the page follow the session, which had none).
+    this.katapult = katapult;
+    if (fw !== "none" && katapult && !s.katapult) this._tickKatapult(true);
     this.render();
   }
 
   pickKatapult(on) {
+    const s = this.session;
     this.katapult = on;
-    const project = this.project;
-    if (project && project !== this.session.project) this.actions.switchProject(project);
+    if (this.fw !== "none") {
+      this._tickKatapult(on);
+    } else if (on && s.project !== "katapult") {
+      this.actions.switchProject("katapult", this.katapultVersion);
+    }
     this.render();
+  }
+
+  // Katapult beside the firmware on or off: [katapult] in the tables, and
+  // its slot in the engine once configuring has started.
+  _tickKatapult(on) {
+    const s = this.session;
+    if (on) {
+      s.setKatapult({ on: true, version: this.katapultVersion });
+      this.actions.loadKatapult("start");
+    } else {
+      if (s.katapult) this.katapultVersion = s.katapult.version;
+      s.setKatapult({ on: false });
+    }
+  }
+
+  pickKatapultVersion(version) {
+    const s = this.session;
+    if (!version) return;
+    this.katapultVersion = version;
+    if (s.project === "katapult") this.actions.switchVersion(version);
+    else if (s.katapult && s.katapult.version !== version) {
+      s.setKatapult({ version });
+      this.actions.loadKatapult("switch");
+    }
   }
 
   render() {
@@ -183,8 +226,6 @@ export class FirmwarePage {
     e.katVersionRow.hidden = prebuilt || !this.katapult;
     e.fwVersionRow.closest(".fw").classList.toggle("off", prebuilt || this.fw === "none");
     e.katVersionRow.closest(".fw").classList.toggle("off", prebuilt || !this.katapult);
-    e.soon.hidden = prebuilt || !(this.katapult && this.fw !== "none");
-    if (e.soon && !e.soon.hidden) e.soon.textContent = `Coming soon. For now, Next sets up ${projectTitle(s.index, this.fw)} alone.`;
     e.prebuilt.hidden = !prebuilt;
     if (prebuilt) {
       const file = s.toml && s.toml.prebuilt && s.toml.prebuilt.file;
@@ -196,9 +237,9 @@ export class FirmwarePage {
       renderVersionSelect(e.fwVersion, e.fwBadge, { index, error: this.indexError, project: s.project, version: s.version, busy });
     }
     if (!prebuilt && this.katapult) {
-      const alone = s.project === "katapult";
+      const version = s.project === "katapult" ? s.version : s.katapult ? s.katapult.version : this.katapultVersion;
       renderVersionSelect(e.katVersion, e.katBadge, {
-        index, error: this.indexError, project: "katapult", version: alone ? s.version : this.katapultVersion, busy,
+        index, error: this.indexError, project: "katapult", version, busy,
       });
     }
 
@@ -218,13 +259,23 @@ export class FirmwarePage {
     if (!s.index) return set(this.indexError ? `The list of versions did not load: ${this.indexError}` : "Loading the list of versions…");
     const items = [];
     if (!runtime.isReady() && !this.configurator.autoStart) items.push({ what: "Python", size: PYTHON_SIZE, cached: false });
-    const { ref } = resolveVersion(s.index, s.project, s.version);
-    if (ref) {
-      const on = s.sources.ref || s.ref;
-      const loaded = Boolean(on) && on.id === ref.id && ["loading", "ready"].includes(s.sources.state);
-      const url = blobUrl(ref.core);
-      const cached = loaded || await isCached(url);
-      items.push({ what: "the sources", size: this.configurator.coreSize(ref), cached });
+    // The sources of each picked project, as one item.
+    const parts = [[s.project, s.version, s.sources]];
+    const k = s.katapult;
+    if (k) parts.push(["katapult", k.version, k.sources]);
+    const sources = [];
+    for (const [project, version, st] of parts) {
+      const { ref } = resolveVersion(s.index, project, version);
+      if (!ref) continue;
+      const on = st.ref;
+      const loaded = Boolean(on) && on.id === ref.id && ["loading", "ready"].includes(st.state);
+      const cached = loaded || await isCached(blobUrl(ref.core));
+      sources.push({ size: this.configurator.coreSize(ref), cached });
+    }
+    if (sources.length) {
+      const todo = sources.filter((x) => !x.cached);
+      const size = todo.some((x) => !Number.isFinite(x.size)) ? null : todo.reduce((n, x) => n + x.size, 0);
+      items.push({ what: "the sources", size: todo.length ? size : 0, cached: !todo.length });
     }
     let compiler = null;
     try { compiler = await this.actions.compiler(); } catch (e) { compiler = null; }
@@ -238,6 +289,7 @@ export class FirmwarePage {
     if (!s.firmware) return "flash";
     if (!this.picked) return false;
     if (!this.actions.sourcesStarted()) this.actions.start();
+    else if (s.katapult && !this.configurator.slots.katapult && s.katapult.sources.state === "idle") this.actions.loadKatapult("start");
     this.actions.consent();
     return "configure";
   }
