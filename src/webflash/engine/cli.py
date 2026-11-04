@@ -378,6 +378,9 @@ def print_memory(memory: Optional[dict]) -> None:
         # A region the image fills further than the linker counts (code
         # loaded from flash and run from RAM) says so.
         note = f", the image; the linker counts {use['linker']:,}" if "linker" in use else ""
+        # A Katapult build's flash row is its space below the application.
+        if "region_size" in use:
+            note += f", the space below the application address; the region is {use['region_size']:,}"
         print(f"  {region:>6}: {use['used']:>9,} of {use['size']:>9,} bytes ({pct:.1f}%{note})")
 
 

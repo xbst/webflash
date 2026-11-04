@@ -259,6 +259,26 @@ class Build:
                          f"counts only the sections that run from {name})")
         self.memory = memory
 
+    def _katapult_space(self, project: str, values: dict[str, str]) -> None:
+        """Measures a Katapult build's flash row against Katapult's own space,
+        the flash below the application address (``CONFIG_LAUNCH_APP_ADDRESS``
+        minus ``CONFIG_FLASH_START``, 8 KiB for ``STM32_APP_START_2000``):
+        its linker script's region is the whole flash, and only
+        ``buildbinary.py`` enforces the real limit. The row keeps the region's
+        length as ``region_size``."""
+        if project != "katapult" or not self.memory:
+            return
+        try:
+            start = int(values.get("FLASH_START") or "", 16)
+            launch = int(values.get("LAUNCH_APP_ADDRESS") or "", 16)
+        except ValueError:
+            return
+        name = next((n for n in self.memory if n.lower() in ("rom", "flash")), None)
+        if name is None or launch <= start:
+            return
+        use = self.memory[name]
+        self.memory[name] = {**use, "size": launch - start, "region_size": use["size"]}
+
     # ── Running ───────────────────────────────────────────────────────
 
     async def run_async(self) -> BuildResult:
@@ -285,6 +305,7 @@ class Build:
             raise BuildError(str(e)) from None
         outputs = self._collect(ev)
         self._correct_memory()
+        self._katapult_space(session.project, session.values())
         outputs[".config"] = config.encode("utf-8")
         outputs.setdefault("defconfig", defconfig.encode("utf-8"))
         duration = time.perf_counter() - started

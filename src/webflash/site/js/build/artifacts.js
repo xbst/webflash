@@ -106,13 +106,16 @@ export function renderMemory(table, memory) {
     return;
   }
   regions.sort(([a], [b]) => (REGION_NAMES[a] ? 0 : 1) - (REGION_NAMES[b] ? 0 : 1));
-  table.innerHTML = `<caption>Memory</caption>` + regions.map(([region, { used, size }]) => {
+  table.innerHTML = `<caption>Memory</caption>` + regions.map(([region, { used, size, region_size: regionSize }]) => {
     const pct = size > 0 ? Math.min(100, (100 * used) / size) : 0;
     const name = REGION_NAMES[region.toLowerCase()] || region;
     // Klipper's linker scripts put the stack at the end of RAM, so the
     // linker counts RAM up to its end: full is normal there, not a warning.
     const ram = name === "RAM";
+    // A Katapult build's flash row is its own space (the engine's
+    // _katapult_space), not the linker script's region, the whole flash.
     const title = ram ? "RAM as the linker counts it: up to the end of the stack, which the firmware places at the end of RAM"
+      : regionSize ? "Katapult's own space: the flash below the application address, where the firmware starts"
       : `the linker script's ${region} region`;
     return `<tr><th scope="row" title="${esc(title)}">${esc(name)}</th>` +
       `<td class="mem-bar"><span class="mem-fill${ram ? " ram" : pct >= 90 ? " full" : ""}" style="width:${pct.toFixed(1)}%"></span></td>` +
