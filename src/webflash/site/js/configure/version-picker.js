@@ -37,6 +37,21 @@ function offered(versions, tags, value, current) {
 const restricts = (versions) => Boolean(versions) && versions !== "all";
 
 /**
+ * Whether the versions offered can hold an older commit (only then is the
+ * history file worth its download): every version, a list naming one, or
+ * the value held being one.
+ */
+export function mayOfferOlder(index, project, versions, value) {
+  if (!restricts(versions)) return true;
+  const older = (v) => {
+    const r = resolveVersion(index, project, v);
+    return Boolean(r.pending || (r.ref && r.ref.kind === "commit"));
+  };
+  if (value && value !== "latest" && value !== "release" && older(value)) return true;
+  return Array.isArray(versions) && versions.some((v) => v !== "latest" && v !== "release" && older(v));
+}
+
+/**
  * findVersion among the versions offered: a pasted Mainsail/Fluidd version
  * never picks a ref the TOML's versions leave out, so a card restricted to
  * some versions builds only those. Anything but the commit itself waits for
@@ -51,7 +66,8 @@ export function matchVersion(index, project, text, { value = "latest", versions 
     const tags = new Set(g ? g.releases.map((r) => r.id) : []);
     found = findVersion(index, project, text, (ref) => offered(versions, tags, ref.id, value));
   }
-  if (found && !found.exact && historyInfo(index, project) && !historyRefs(index, project)) {
+  if (found && !found.exact && historyInfo(index, project) && !historyRefs(index, project) &&
+      mayOfferOlder(index, project, versions, value)) {
     return { ref: null, pending: true,
       error: `${String(text).trim()} may be an older ${projectTitle(index, project)} commit; the list of older commits has not loaded yet.` };
   }
@@ -294,6 +310,7 @@ class VersionCombobox {
     // index) is left to settle alone: this one is the one waited for.
     if (this.loading && this.loadingFor.index === index && this.loadingFor.project === project) return this.loading;
     if (!index || !historyInfo(index, project) || historyRefs(index, project)) return null;
+    if (!mayOfferOlder(index, project, this.opts.versions, this.opts.value)) return null;
     this.loadError = "";
     this.loadingFor = { index, project };
     const p = loadHistory(index, project, this.opts.base || sourcesBase())
@@ -507,7 +524,7 @@ class VersionCombobox {
       nodes.push(row);
     };
     const history = historyInfo(index, project);
-    const showsOlder = history && (versions === "all" || !versions || Array.isArray(versions));
+    const showsOlder = history && mayOfferOlder(index, project, versions, value);
     if (showsOlder && !data.older) {
       if (this.loadError) info(this.loadError, true);
       else {
