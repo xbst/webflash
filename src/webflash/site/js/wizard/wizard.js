@@ -7,9 +7,10 @@
 // back, the ones after as plain text (a step marked free, Embed, is a link
 // from anywhere), and skipped steps (Configure and Build for a [prebuilt]
 // board) left out. Moving to a step pushes a history entry
-// whose state names it ({webflashStep, webflashN}) without changing the URL,
-// so the browser's Back and Forward move between steps and #toml= and
-// ?config= keep working.
+// whose state names it ({webflashStep, webflashN, webflashLoad}) without
+// changing the URL, so the browser's Back and Forward move between steps and
+// #toml= and ?config= keep working. An entry an earlier load of the page
+// pushed (before a reload) shows nothing of its own.
 //
 // A step's content is mounted by whoever owns it (main.js today; the
 // Configure list, the build and flash content and the setups editor later):
@@ -46,6 +47,8 @@ export class Wizard {
     this.current = this.steps[0].id;
     this.n = 0;                   // this entry's place in the session history
     this.trail = [this.current];  // the step of each of our history entries, by place
+    // This load of the page: the entries an earlier load pushed name another.
+    this.load = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
 
     for (const step of this.steps) {
       const section = this.section(step.id);
@@ -57,7 +60,7 @@ export class Wizard {
     if (this.history && "scrollRestoration" in this.history && scroll) this.history.scrollRestoration = "manual";
     if (this.history && this.history.replaceState) {
       const state = this.history.state && typeof this.history.state === "object" ? this.history.state : {};
-      this.history.replaceState({ ...state, webflashStep: this.current, webflashN: 0 }, "");
+      this.history.replaceState(this._stamp(state, this.current, 0), "");
     }
     if (this.win && this.win.addEventListener) this.win.addEventListener("popstate", (e) => this._popped(e.state));
     this._show(this.current, null);
@@ -149,10 +152,15 @@ export class Wizard {
       this.trail.length = this.n;
       this.trail.push(id);
       const state = this.history.state && typeof this.history.state === "object" ? this.history.state : {};
-      this.history.pushState({ ...state, webflashStep: id, webflashN: this.n }, "");
+      this.history.pushState(this._stamp(state, id, this.n), "");
     }
     this._show(id, from);
     return true;
+  }
+
+  // A history entry's state, naming its step, its place and this load.
+  _stamp(state, step, n) {
+    return { ...(state && typeof state === "object" ? state : {}), webflashStep: step, webflashN: n, webflashLoad: this.load };
   }
 
   /** The footer's Next: the step's onNext, then the next step. */
@@ -193,7 +201,14 @@ export class Wizard {
       this.n += 1;
       this.trail.length = this.n;
       this.trail.push(this.current);
-      this.history.replaceState({ ...(state && typeof state === "object" ? state : {}), webflashStep: this.current, webflashN: this.n }, "");
+      this.history.replaceState(this._stamp(state, this.current, this.n), "");
+      return;
+    }
+    // An entry an earlier load of the page pushed (Back past a reload): its
+    // step is not this load's to show, so it becomes an entry of the step
+    // shown, in this one's place.
+    if (state.webflashLoad !== this.load) {
+      if (this.history && this.history.replaceState) this.history.replaceState(this._stamp(state, this.current, this.n), "");
       return;
     }
     const n = Number.isInteger(state.webflashN) ? state.webflashN : 0;
