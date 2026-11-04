@@ -649,11 +649,14 @@ def _toml_inline_table(table: dict) -> str:
 
 def _label_order(labels: dict, values: list | None) -> dict:
     """An option's labels in the order the writers use: the order of values,
-    then any other keys sorted. Not the TOML's own order, which JavaScript
-    cannot keep (an object lists integer-like keys such as "500000" first,
-    in numeric order), so that toml-io.js writes the same text."""
+    then any other keys sorted by UTF-16 code unit, as JavaScript sorts
+    strings (a key above U+FFFF sorts before U+E000 to U+FFFF). Not the TOML's
+    own order, which JavaScript cannot keep (an object lists integer-like keys
+    such as "500000" first, in numeric order), so that toml-io.js writes the
+    same text."""
     keys = [k for k in (values or []) if k in labels]
-    keys += sorted(k for k in labels if k not in keys)
+    keys += sorted((k for k in labels if k not in keys),
+                   key=lambda k: k.encode("utf-16-be", "surrogatepass"))
     return {k: labels[k] for k in keys}
 
 
