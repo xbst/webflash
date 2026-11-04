@@ -315,19 +315,29 @@ export function createFlashPanel(root, options = {}) {
   }
 
   // ── Flows ───────────────────────────────────────────────────────
-  async function dropConnection() {
+  // Forget state.connection and close its device: probeConnection opened and
+  // claimed it, and a device left open blocks other tabs and programs until
+  // the page closes. A running flash closes its own device when it ends, so
+  // its device is only forgotten here, never closed under the protocol.
+  async function closeConnection() {
     const c = state.connection;
     state.connection = null;
-    if (c && c.kind === "usb") { try { await c.device.close(); } catch (e) { /* fine */ } }
-    if (c && c.kind === "serial") { try { await c.device.close(); } catch (e) { /* fine */ } }
+    if (!c || state.phase === "flashing") return;
+    if (c.kind === "usb" || c.kind === "serial") { try { await c.device.close(); } catch (e) { /* fine */ } }
+  }
+
+  async function dropConnection() {
+    await closeConnection();
     state.phase = "ready";
     renderAll();
   }
 
   async function connectAndConfirm(serialScope = "katapult") {
     result.hidden = true;
+    await closeConnection();
     state.phase = "connecting";
     renderStep();
+    renderConfirm();
     let connection;
     try {
       connection = await connectDevice(state.method, { nav: opts.nav || undefined, win: opts.win || undefined, serialScope });
@@ -341,6 +351,7 @@ export function createFlashPanel(root, options = {}) {
   }
 
   async function adoptConnection(connection) {
+    if (state.connection && state.connection !== connection) await closeConnection();
     state.connection = connection;
     log(`Connected: ${connection.describe()}`);
     if (connection.kind === "usb" || connection.kind === "filesystem") {
@@ -370,8 +381,10 @@ export function createFlashPanel(root, options = {}) {
 
   async function enterFromKlipper() {
     result.hidden = true;
+    await closeConnection();
     state.phase = "connecting";
     renderStep();
+    renderConfirm();
     const method = state.method;
     let outcome;
     try {
@@ -522,7 +535,7 @@ export function createFlashPanel(root, options = {}) {
     /** A firmware to flash: {image, methods: [{id, reason}], warnings, instructions, mcu, project, family, artifacts, source, version, label, uuid, baud, bitrate, onClear}. */
     setFirmware(firmware) {
       state.firmware = firmware || null;
-      state.connection = null;
+      closeConnection();
       state.phase = firmware ? "ready" : "idle";
       result.hidden = true;
       if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
