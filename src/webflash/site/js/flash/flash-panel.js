@@ -20,6 +20,15 @@ import { explainError, FlashError } from "./errors.js";
 import { buildMatches } from "../build/artifacts.js";
 
 /**
+ * A message about a file with the file's name in front, unless it already
+ * starts with it: firmware-file.js's parsers and the text-file refusal name
+ * the file themselves ("klipper.txt: line 2 has a bad checksum.").
+ */
+function aboutFile(name, message) {
+  return !name || message.startsWith(`${name}:`) || message.startsWith(`${name} `) ? message : `${name}: ${message}`;
+}
+
+/**
  * Mount the panel into root (the #flash-card element) for a Session. The
  * toolbar's Upload firmware button (uploadButton) is taken over. Returns
  * the panel API plus refresh().
@@ -109,7 +118,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     try {
       image = parseFirmware(pre.file, bytes, { address: typeof pre.address === "number" ? pre.address : null, source: "upload" });
     } catch (e) {
-      panel.log(`${pre.file}: ${e.message}`);
+      panel.log(aboutFile(pre.file, e.message));
       return null;
     }
     const { methods, warnings } = methodsForPrebuilt({ mcu: pre.mcu || null, image, tomlMethods: tomlFlash().methods });
@@ -235,9 +244,9 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     try {
       await useUploadedFile(file.name, new Uint8Array(await file.arrayBuffer()));
     } catch (e) {
-      const ex = explainError(e, {});
-      if (showError) showError("The file could not be used", `${file.name}: ${ex.message}`);
-      else panel.log(`${file.name}: ${ex.message}`);
+      const message = aboutFile(file.name, explainError(e, {}).message);
+      if (showError) showError("The file could not be used", message);
+      else panel.log(message);
     }
   });
 
