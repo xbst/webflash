@@ -116,12 +116,23 @@ export function familyForChip(chip) {
 }
 
 /**
- * The bytes to write: a UF2 upload as it was, anything else encoded for
- * the family (the image's own, else the drive's chip).
+ * Whether uf2Bytes encodes a UF2 upload again rather than writing it as it
+ * was: an RP2350 image whose blocks carry Klipper's RP2040 stamp, which the
+ * RP2350's ROM would not take from its drive.
+ */
+export function needsReencode(image, { family = null } = {}) {
+  if (image.format !== "uf2" || !image.raw) return false;
+  return !!image.stampedFamily && (family || image.family) !== image.stampedFamily;
+}
+
+/**
+ * The bytes to write: a UF2 upload as it was (unless needsReencode),
+ * anything else encoded for the family (the image's own, else the drive's
+ * chip).
  */
 export function uf2Bytes(image, { family = null, chip = null } = {}) {
   if (isForeignFamily(image.family)) failForeign(image.family);
-  if (image.format === "uf2" && image.raw) return image.raw;
+  if (image.format === "uf2" && image.raw && !needsReencode(image, { family })) return image.raw;
   const fam = family || image.family || (chip ? familyForChip(chip) : null);
   if (!fam || !(fam in UF2_FAMILIES)) {
     fail("wrong-family", "The chip family is unknown, so the .uf2 cannot be built: pick the BOOTSEL drive (its name says which chip) or build for the board.");
@@ -191,6 +202,9 @@ export async function flashUf2(handle, image, { family = null, fileName = null }
   const info = await checkBootselDrive(handle, { family: family || image.family });
   if (log) log(`BOOTSEL drive: ${info.model || info.boardId} (${info.bootloader || "UF2 bootloader"})`);
   const bytes = uf2Bytes(image, { family, chip: info.chip });
+  if (log && needsReencode(image, { family })) {
+    log(`The file's blocks carry the ${image.stampedFamily.toUpperCase()} family id, as Klipper's elf2uf2 writes them for every RP2 chip; writing them with the ${(family || image.family).toUpperCase()} family the drive's ROM takes`);
+  }
   const name = fileName || (image.name ? image.name.replace(/\.(bin|elf|hex|uf2)$/i, "") + ".uf2" : "firmware.uf2");
   const result = await writeUf2ToDrive(handle, bytes, { name, log, progress });
   return { info, bytes: bytes.length, written: result.written, disappeared: result.disappeared, fileName: name, chip: info.chip };

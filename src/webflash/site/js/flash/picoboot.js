@@ -258,7 +258,10 @@ export async function flashPicoboot(usb, image, { verify = true, reboot = true }
   }
   const chip = chipOfFamily(image.family);
   if (chip && chip !== dev.model) {
-    fail("wrong-family", `This firmware is a ${image.family.toUpperCase()} image, but the connected chip is an ${dev.model.toUpperCase()}.`);
+    // fromUf2 takes the chip from an RP2040-family file's image definition,
+    // since Klipper stamps the RP2040 family on its RP2350 files too.
+    const why = image.stampedFamily ? ` (its image definition says so, although its blocks carry the ${image.stampedFamily.toUpperCase()} family id)` : "";
+    fail("wrong-family", `This firmware is a ${image.family.toUpperCase()} image${why}, but the connected chip is an ${dev.model.toUpperCase()}.`);
   }
   const end = FLASH_END[dev.model];
   for (const seg of image.segments) {

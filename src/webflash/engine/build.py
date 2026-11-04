@@ -25,7 +25,7 @@ from .kconfig import Session
 from .make import Evaluator, MakeError, Target, run_sync
 from .pyrun import PyRunner
 from .shell import Shell, ShellError
-from .uf2 import elf2uf2
+from .uf2 import elf2uf2, family_for_config
 
 ProgressFn = Callable[[str, str], None]
 
@@ -262,8 +262,11 @@ class Build:
         session, config, defconfig = self._configure()
         self._prepare_tree()
         runner = PyRunner(self.version, self.toolchain.tool_version)
-        shell = Shell(self.tree, toolchain=self.toolchain, driver=self.driver, python=runner, uf2=elf2uf2,
-                      log=self.log)
+        # Klipper's elf2uf2 writes the RP2040 family for every RP2 chip; an
+        # RP2350 build gets the RP2350's, which its boot ROM takes from the drive.
+        family_id = family_for_config(config)
+        shell = Shell(self.tree, toolchain=self.toolchain, driver=self.driver, python=runner,
+                      uf2=lambda elf, out: elf2uf2(elf, out, family_id), log=self.log)
         ev = Evaluator(self.tree, shell, command_line={}, env=self._make_env(), log=self.log)
         try:
             self.progress("plan", "")

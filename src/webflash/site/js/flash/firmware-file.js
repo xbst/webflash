@@ -72,6 +72,64 @@ export function familyLabel(family) {
   return FAMILY_NAMES[family] || family || "";
 }
 
+// Picobin block markers and items (pico-sdk boot/picobin.h). The RP2350
+// boot ROM looks for a block in the first 4 KiB of an image; Klipper's and
+// Katapult's RP2350 linker scripts put an IMAGE_DEF there, the RP2040's
+// have none.
+const PICOBIN_BLOCK_MARKER_START = 0xffffded3;
+const PICOBIN_BLOCK_MARKER_END = 0xab123579;
+const PICOBIN_ITEM_IMAGE_TYPE = 0x42;
+const PICOBIN_ITEM_LAST = 0xff;
+const PICOBIN_SEARCH = 4096;
+
+/**
+ * The RP2350 family an image's picobin block says it is for: null when the
+ * first 4 KiB of the image hold no block (an RP2040 image) or the block's
+ * IMAGE_TYPE names the RP2040, else "rp2350-arm-s", "rp2350-arm-ns" or
+ * "rp2350-riscv" from the IMAGE_TYPE's CPU and security bits.
+ */
+export function rp2350FamilyOfImage(image) {
+  if (!image || image.isEmpty) return null;
+  const start = image.start;
+  const window = new Uint8Array(PICOBIN_SEARCH);
+  for (const seg of image.segments) {
+    if (seg.address >= start + PICOBIN_SEARCH) break;
+    window.set(seg.data.subarray(0, Math.min(seg.data.length, start + PICOBIN_SEARCH - seg.address)), seg.address - start);
+  }
+  const view = new DataView(window.buffer);
+  const word = (off) => (off + 4 <= window.length ? view.getUint32(off, true) : null);
+  // Halfword steps: the linker scripts place the block right after the
+  // boot code without aligning it, and clang's Thumb code can end on a
+  // halfword.
+  for (let at = 0; at + 4 <= window.length; at += 2) {
+    if (word(at) !== PICOBIN_BLOCK_MARKER_START) continue;
+    let p = at + 4;
+    let flags = null;
+    let valid = false;
+    for (;;) {
+      const item = word(p);
+      if (item === null) break;
+      const type = item & 0xff;
+      const size = type & 0x80 ? (item >>> 8) & 0xffff : (item >>> 8) & 0xff;
+      if (type === PICOBIN_ITEM_LAST) {
+        // The last item gives the other items' size in words; a link word
+        // and the end marker follow.
+        valid = size === (p - at - 4) / 4 && word(p + 8) === PICOBIN_BLOCK_MARKER_END;
+        break;
+      }
+      if (!size) break;
+      if (type === PICOBIN_ITEM_IMAGE_TYPE && flags === null) flags = item >>> 16;
+      p += size * 4;
+    }
+    if (!valid) continue;
+    if (flags === null) return "rp2350-arm-s";
+    if (((flags >>> 12) & 0x7) === 0) return null;          // EXE_CHIP: RP2040
+    if (((flags >>> 8) & 0x7) === 1) return "rp2350-riscv"; // EXE_CPU: RISC-V
+    return ((flags >>> 4) & 0x3) === 1 ? "rp2350-arm-ns" : "rp2350-arm-s";
+  }
+  return null;
+}
+
 export class FirmwareImage {
   /**
    * @param {{segments: {address: number, data: Uint8Array}[], family?: string|null, families?: string[],
@@ -228,6 +286,11 @@ export function fromHex(textOrBytes, { source = "upload", name = "", family = nu
  * UF2: 512-byte blocks, both magic words checked, blocks flagged "not main
  * flash" skipped, the family taken from the first block that carries one.
  * blockNo and numBlocks are checked for consistency.
+ *
+ * Klipper's elf2uf2 stamps the RP2040 family on the blocks of every RP2
+ * build, so an RP2040-family image whose picobin block names the RP2350
+ * gets that RP2350 family as its family, and stampedFamily keeps what the
+ * blocks say: the UF2 drive path then encodes it again for the RP2350's ROM.
  */
 export function fromUf2(bytes, { source = "upload", name = "" } = {}) {
   const data = asBytes(bytes);
@@ -270,6 +333,13 @@ export function fromUf2(bytes, { source = "upload", name = "" } = {}) {
   const family = families.length ? families[0] : null;
   const image = new FirmwareImage({ segments, source, name, format: "uf2", family, families });
   image.raw = data.slice();     // written as it was to a BOOTSEL drive
+  if (family === "rp2040") {
+    const rp2350 = rp2350FamilyOfImage(image);
+    if (rp2350) {
+      image.family = rp2350;
+      image.stampedFamily = family;
+    }
+  }
   return image;
 }
 
@@ -398,7 +468,9 @@ export function describe(image) {
     name: image.name,
     source: image.source,
     family: image.family,
-    familyLabel: familyLabel(image.family),
+    familyLabel: image.stampedFamily
+      ? `${familyLabel(image.family)}, from its image definition (the blocks say ${familyLabel(image.stampedFamily)}, as Klipper's elf2uf2 writes them)`
+      : familyLabel(image.family),
     families: image.families,
     start: image.start,
     end: image.end,

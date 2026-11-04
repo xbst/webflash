@@ -74,6 +74,11 @@ jobs:
               --json ~/parity/$t.json --out ~/parity/out
           done
 
+      # The port with the C++ tool's family (the RP2040's, for every RP2 chip)
+      # must match it byte for byte. The engine's own .uf2 beside each ELF
+      # differs on purpose for an RP2350 build, in the family field of each
+      # block alone (the RP2350's ROM takes only its own families from its
+      # drive), so it is compared with that field set from its .config.
       - name: The Python elf2uf2 against the C++ tool, and inspect
         run: |
           set -e
@@ -82,14 +87,25 @@ jobs:
           for elf in $elfs; do
             ~/elf2uf2 "$elf" /tmp/reference.uf2
             python - "$elf" <<'EOF'
+          import struct
           import sys
           from pathlib import Path
-          from webflash.engine.uf2 import elf_to_uf2
+          from webflash.engine.uf2 import elf_to_uf2, family_for_config
           elf = Path(sys.argv[1])
           mine = elf_to_uf2(elf.read_bytes())
           theirs = Path("/tmp/reference.uf2").read_bytes()
-          print(f"{elf}: {len(mine)} bytes, {'identical' if mine == theirs else 'DIFFERENT'} to the C++ tool")
-          sys.exit(0 if mine == theirs else 1)
+          ok = mine == theirs
+          print(f"{elf}: {len(mine)} bytes, {'identical' if ok else 'DIFFERENT'} to the C++ tool")
+          built, config = elf.with_suffix(".uf2"), elf.parent / ".config"
+          if built.is_file() and config.is_file():
+              family = family_for_config(config.read_text())
+              expected = bytearray(theirs)
+              for off in range(0, len(expected), 512):
+                  struct.pack_into("<I", expected, off + 28, family)
+              same = built.read_bytes() == bytes(expected)
+              print(f"{built}: {'the C++ tool' if same else 'DIFFERENT from the C++ tool'} with family {family:#010x}")
+              ok = ok and same
+          sys.exit(0 if ok else 1)
           EOF
             webflash inspect "$elf" | head -4
           done

@@ -4,6 +4,12 @@ tool. It writes exactly the bytes the C++ tool writes: the LOAD segments of a
 32-bit little-endian ARM ELF cut into 256-byte pages, each page one 512-byte
 UF2 block with the RP2040 family id, which is what Klipper's copy of the tool
 writes for every RP2 chip.
+
+The one deliberate difference is the family of an RP2350 build: the RP2350's
+boot ROM takes only its own families from its drive, so a build whose
+``.config`` sets ``CONFIG_MACH_RP2350`` gets ``RP2350_ARM_S_FAMILY_ID``
+(:func:`family_for_config`), and its file then differs from the C++ tool's in
+that field of every block alone.
 """
 from __future__ import annotations
 
@@ -155,7 +161,17 @@ def elf_to_uf2(data: bytes, family_id: int = RP2040_FAMILY_ID) -> bytes:
     return bytes(out)
 
 
-def elf2uf2(elf_path: Union[str, Path], uf2_path: Union[str, Path]) -> None:
+def family_for_config(config: str) -> int:
+    """The UF2 family id for a build's ``.config`` text: the RP2350's (Arm,
+    secure) when it sets ``CONFIG_MACH_RP2350``, else the RP2040's, as
+    Klipper's tool writes it."""
+    for line in config.splitlines():
+        if line.strip() == "CONFIG_MACH_RP2350=y":
+            return RP2350_ARM_S_FAMILY_ID
+    return RP2040_FAMILY_ID
+
+
+def elf2uf2(elf_path: Union[str, Path], uf2_path: Union[str, Path], family_id: int = RP2040_FAMILY_ID) -> None:
     """``elf2uf2 in.elf out.uf2``: the recipe command, with the tool's own
     behavior of leaving no output behind on an error."""
     elf_path, uf2_path = Path(elf_path), Path(uf2_path)
@@ -164,7 +180,7 @@ def elf2uf2(elf_path: Union[str, Path], uf2_path: Union[str, Path]) -> None:
     except OSError as e:
         raise Uf2Error(f"Can't open input file '{elf_path}': {e}") from None
     try:
-        image = elf_to_uf2(data)
+        image = elf_to_uf2(data, family_id)
     except Uf2Error:
         if uf2_path.exists():
             uf2_path.unlink()
