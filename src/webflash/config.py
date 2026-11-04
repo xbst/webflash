@@ -173,6 +173,9 @@ _LOOSE_UNSET_RE = re.compile(r"#\s*CONFIG_[A-Za-z0-9_]+\s+is\s+not\s+set.*")
 # What a .config line may hold: a bool or tristate, a decimal or hex number,
 # or a quoted string with backslash escapes.
 _VALUE_RE = re.compile(r'[ymn]|-?[0-9]+|0[xX][0-9a-fA-F]+|"(?:[^"\\]|\\.)*"')
+# A decimal number with a leading zero: kconfiglib keeps it as written, so it
+# reaches autoconf.h as 0250000, which C reads as octal.
+_LEADING_ZERO_RE = re.compile(r"-?0[0-9]+")
 
 
 def parse_defconfig(text: str) -> list[tuple[str, str | None]]:
@@ -184,6 +187,7 @@ def parse_defconfig(text: str) -> list[tuple[str, str | None]]:
     comments are skipped. Raises ValueError naming the line for anything else:
     an indented setting, which kconfiglib skips (it reads only lines that start
     at column 0), an unset line not written exactly as kconfiglib writes it,
+    a decimal number with a leading zero, which C would read as octal,
     and a symbol set twice, which kconfiglib would take the last of without a
     word. Symbols are not checked against a Kconfig: there is none here.
     """
@@ -225,6 +229,11 @@ def parse_defconfig(text: str) -> list[tuple[str, str | None]]:
                 raise ValueError(
                     f"line {number}: CONFIG_{name}={value} is not y, n, m, a number, "
                     "a hex number or a quoted string"
+                )
+            if _LEADING_ZERO_RE.fullmatch(value):
+                raise ValueError(
+                    f"line {number}: CONFIG_{name}={value} has a leading zero, which C "
+                    f"reads as octal; write it as CONFIG_{name}={int(value, 10)}"
                 )
         if name in seen:
             raise ValueError(f"line {number}: CONFIG_{name} is already set on line {seen[name]}")

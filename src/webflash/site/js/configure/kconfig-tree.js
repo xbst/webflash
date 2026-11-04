@@ -133,7 +133,9 @@ export function checkNumber(node, raw) {
   } else {
     return { value: String(raw) };
   }
-  const value = node.type === "hex" && !/^0[xX]/.test(s) ? `0x${s}` : s.replace(/^\+/, "");
+  // An int is written back in decimal without a plus sign or leading zeros: the
+  // value reaches autoconf.h as typed, and C reads 0250000 as octal.
+  const value = node.type === "int" ? BigInt(s).toString() : /^0[xX]/.test(s) ? s : `0x${s}`;
   if (node.range) {
     const parse = (t) => (node.type === "hex" ? BigInt(/^0[xX]/.test(t) ? t : `0x${t}`) : BigInt(t));
     try {
