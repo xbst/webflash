@@ -24,7 +24,7 @@ else:  # pragma: no cover
     except ModuleNotFoundError:
         import tomli as tomllib  # type: ignore[no-redef]
 
-from .build import Build, BuildError
+from .build import Build, BuildError, check_tree_path
 from .driver import DriverError
 from .kconfig import Session, detect_project
 from .make import Evaluator, MakeError, run_sync
@@ -52,6 +52,17 @@ def _error(message: object) -> int:
     for line in str(message).splitlines() or [""]:
         print(f"Error: {line}", file=sys.stderr)
     return 1
+
+
+def _tree_problem(tree: Path) -> Optional[str]:
+    """Why ``tree`` cannot be made or built, or None."""
+    if not (tree / "Makefile").is_file():
+        return f"not a source tree (no Makefile): {tree}"
+    try:
+        check_tree_path(tree)
+    except BuildError as e:
+        return str(e)
+    return None
 
 
 # ── The matrix ───────────────────────────────────────────────────────
@@ -275,8 +286,9 @@ def make_check(tree: Path, config_text: str, *, make_exe: str, gcc_dir: Optional
 
 def cmd_make_check(args: argparse.Namespace) -> int:
     tree = Path(args.tree).resolve()
-    if not (tree / "Makefile").is_file():
-        return _error(f"not a source tree (no Makefile): {tree}")
+    problem = _tree_problem(tree)
+    if problem:
+        return _error(problem)
     project = args.project or detect_project(tree)
     goals = args.goal or ["all"]
     try:
@@ -371,8 +383,9 @@ def print_memory(memory: Optional[dict]) -> None:
 
 def cmd_build(args: argparse.Namespace) -> int:
     tree = Path(args.tree).resolve()
-    if not (tree / "Makefile").is_file():
-        return _error(f"not a source tree (no Makefile): {tree}")
+    problem = _tree_problem(tree)
+    if problem:
+        return _error(problem)
     try:
         config_text = Path(args.config).read_text(encoding="utf-8")
     except OSError as e:
@@ -669,8 +682,9 @@ def parity_table(rows: list[dict], builds: dict[tuple[str, str], dict], variants
 
 def cmd_parity(args: argparse.Namespace) -> int:
     tree = Path(args.tree).resolve()
-    if not (tree / "Makefile").is_file():
-        return _error(f"not a source tree (no Makefile): {tree}")
+    problem = _tree_problem(tree)
+    if problem:
+        return _error(problem)
     project = args.project or detect_project(tree)
     variants = [v.strip() for v in args.toolchains.split(",") if v.strip()]
     for v in variants:

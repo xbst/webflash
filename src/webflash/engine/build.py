@@ -34,6 +34,15 @@ class BuildError(Exception):
     """The build failed; the message carries the failing command's output."""
 
 
+def check_tree_path(tree: Path) -> None:
+    """Raise :class:`BuildError` for a tree whose path holds whitespace: the
+    Makefiles put ``$(CURDIR)`` in make targets, where a space splits the
+    path into two words and the ``.config`` rule never comes up to date."""
+    if any(c.isspace() for c in str(tree)):
+        raise BuildError("the source tree's path must not contain spaces (the Makefiles put it in make "
+                         f"targets); move or link the tree to a path without spaces: {tree}")
+
+
 @dataclass
 class BuildResult:
     outputs: dict[str, bytes]
@@ -65,6 +74,7 @@ class Build:
                  env: Optional[dict[str, str]] = None, trace: Optional[Callable[[list[str]], None]] = None,
                  cancelled: Optional[Callable[[], bool]] = None) -> None:
         self.tree = Path(tree).resolve()
+        check_tree_path(self.tree)
         self.config_text = config_text
         self.toolchain = toolchain
         self.version = version

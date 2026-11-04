@@ -33,6 +33,10 @@ class MakeError(Exception):
     would report (no rule for a target, a recipe that failed, a cycle)."""
 
 
+# How deep ``$(MAKE)`` may nest: the projects' Makefiles go one level down.
+_MAX_MAKE_LEVEL = 20
+
+
 # ── Text helpers ─────────────────────────────────────────────────────
 
 _WS = " \t\n\r"
@@ -1264,6 +1268,11 @@ class Evaluator:
                 command_line[k] = v
             else:
                 goals.append(a)
+        if self.level >= _MAX_MAKE_LEVEL:
+            # GNU make would go on starting sub-makes forever; Python would
+            # stop at its recursion limit, in whatever code ran last.
+            raise MakeError(f"recursive $(MAKE) nested more than {_MAX_MAKE_LEVEL} levels deep "
+                            "(a rule that never becomes up to date)")
         sub = Evaluator(self.tree, self.shell, command_line=command_line, env=self.env,
                         makefile=self.makefile, level=self.level + 1, log=self.log)
         await sub.load()
