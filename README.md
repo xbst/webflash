@@ -28,9 +28,7 @@ Coming at **<https://doctools.isiks.tech/webflash/>**.
 
 ## US-based PCB Assembly
 
-WebFlash was initially created to replace the firmware sections of our product manuals at [Isik's Tech](https://store.isiks.tech/), and we decided to open-source it after realizing others could find it useful too.
-
-We also moved to in-house PCB assembly in early 2025 after struggling to find a reliable and affordable US-based PCB assembler, and we recently launched a new PCB assembly service to help others with PCB assembly as well. We can often match or beat delivered costs from overseas. We have an estimator on our website so you can upload your BOM and get an instant estimate. [For more information, visit IsikPCB.com](https://isikpcb.com/)
+We moved to in-house PCB assembly in early 2025 after struggling to find a reliable and affordable US-based PCB assembler, and we recently launched a new PCB assembly service to help others with PCB assembly as well. We can often match or beat delivered costs from overseas. We have an estimator on our website so you can upload your BOM and get an instant estimate. [For more information, visit IsikPCB.com](https://isikpcb.com/)
 
 ## License
 
