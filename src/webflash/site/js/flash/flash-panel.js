@@ -84,7 +84,9 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return t.prebuilt && typeof t.prebuilt === "object" ? t.prebuilt : null;
   }
 
-  // Why the builds cannot be flashed together (pair.js's refusal), or "".
+  // Why there is nothing to flash, for the panel's firmware line: the builds
+  // cannot be flashed together (pair.js's refusal), or a [prebuilt] TOML's
+  // file is missing or unreadable (Build is skipped for it); else "".
   let refusal = "";
   // What went wrong reading the firmware this refresh: logged once, when the
   // panel's firmware changes, not on every session change that leaves it.
@@ -97,7 +99,6 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
    * With Katapult picked, both builds must match and go as one firmware.
    */
   function fromBuild() {
-    refusal = "";
     if (session.katapult && session.katapult.on) {
       if (!buildsMatch(session, session.builds)) return null;
       try {
@@ -146,12 +147,16 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const pre = prebuiltTable();
     if (!pre || typeof pre.file !== "string") return null;
     const bytes = session.fileFor ? session.fileFor(pre.file) : null;
-    if (!bytes) return null;
+    if (!bytes) {
+      refusal = `This board TOML flashes ${pre.file}, which was not opened with it: open the TOML again together with ${pre.file}, or use Upload firmware.`;
+      return null;
+    }
     let image;
     try {
       image = parseFirmware(pre.file, bytes, { address: typeof pre.address === "number" ? pre.address : null, source: "upload" });
     } catch (e) {
-      notes.push(aboutFile(pre.file, e.message));
+      refusal = aboutFile(pre.file, e.message);
+      notes.push(refusal);
       return null;
     }
     const { methods, warnings } = methodsForPrebuilt({ mcu: pre.mcu || null, image, tomlMethods: tomlFlash().methods });
@@ -258,6 +263,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   // While a flash runs, the panel holds a new firmware back until it ends
   // (flash-ui.js's setFirmware), so a refresh never interrupts one.
   function refresh() {
+    refusal = "";
     notes = [];
     // A [prebuilt] board TOML flashes its own file, never a build.
     const firmware = fromUpload() || (prebuiltTable() ? fromPrebuilt() : fromBuild());
