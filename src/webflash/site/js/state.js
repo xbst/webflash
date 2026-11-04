@@ -589,7 +589,9 @@ export class Session {
     this._setupIndex = index;
     const after = this.setup;
     const reload = !before || !after || before.defconfig !== after.defconfig || before.katapult !== after.katapult;
-    if (!this.katapult || reload) this._katapultEngine = freshKatapultEngine();
+    // Katapult gone from the edited setup starts over in the engine; one
+    // still there keeps its ref and sources (the reload refreshes the rest).
+    if (!this.katapult) this._katapultEngine = freshKatapultEngine();
     this._changed("setups", origin);
     if (optionsChanged) this._changed("options", origin);
     if (reload) this._changed("setup", origin);
