@@ -327,7 +327,23 @@ export class Session {
   get canRedo() { return this._redo.length > 0; }
 
   _snapshot() {
-    return { tables: clone(this._t), tomlName: this.tomlName, files: this.files };
+    return { tables: clone(this._t), tomlName: this.tomlName, files: this.files, setupId: this.setup ? this.setup.id : null };
+  }
+
+  // Which setup Configure edits once the tables are replaced (undo, redo).
+  // A step that added or removed setups puts Configure where it was when
+  // the snapshot was taken (an undone Add lands on the setup it copied, its
+  // redo on the copy); any other keeps the setup edited now (a Setup select
+  // pick is not an undo step, so undoing an edit made before it does not
+  // move it); one that is gone leaves the index as it is.
+  _setupIndexAfter(before, wasId, snapId) {
+    const ids = (t) => t.setups.map((s) => s.id).sort().join("\u0001");
+    const order = ids(before) === ids(this._t) ? [wasId, snapId] : [snapId, wasId];
+    for (const id of order) {
+      const i = id === null || id === undefined ? -1 : this._t.setups.findIndex((s) => s.id === id);
+      if (i >= 0) return i;
+    }
+    return this._setupIndex;
   }
 
   // After the tables were replaced (undo, redo, open): announce a Katapult
@@ -353,10 +369,14 @@ export class Session {
   _restore(snap, origin) {
     const before = this._t;
     const katapultBefore = this.katapult;
+    const wasId = this.setup ? this.setup.id : null;
+    const indexBefore = this.setupIndex;
     this._t = snap.tables;
     this.tomlName = snap.tomlName;
     this.files = snap.files;
+    this._setupIndex = this._setupIndexAfter(before, wasId, snap.setupId);
     for (const what of ["board", "firmware", "setups", "options", "flash", "prebuilt", "files"]) this._changed(what, origin);
+    if (this.setupIndex !== indexBefore) this._changed("setup", origin);
     this._katapultReplaced(katapultBefore, origin);
     this._changed("katapult-config", origin);
     if (!before.firmware || !this._t.firmware || before.firmware.project !== this._t.firmware.project) {
