@@ -90,14 +90,25 @@ def _canon(name: str) -> str:
     return "RPXXXX_" + name[len("RP2040_"):] if name.startswith("RP2040_") else name
 
 
-def _same(a: Optional[str], b: Optional[str]) -> bool:
-    """Whether two choice members stand for each other: the same name in
-    either spelling, or one the other falls back to (see _fallback)."""
-    if a is None or b is None:
-        return a is b
-    ca, cb = _canon(a), _canon(b)
-    fa, fb = _fallback(a), _fallback(b)
-    return ca == cb or (fa is not None and _canon(fa) == cb) or (fb is not None and _canon(fb) == ca)
+def _offers(choice, member: str) -> bool:
+    """Whether a choice offers a member (in either spelling) here."""
+    name = _canon(member)
+    return any(_canon(s.name) == name and s.visibility > 0 for s in choice.syms)
+
+
+def _stands_for(have: str, want: str, dst, src) -> bool:
+    """Whether the target choice's selection (have) already stands for the
+    source's (want): the same name in either spelling, or the fallback of a
+    member one tree does not offer (see _fallback: Katapult's plain USB
+    beside an STM32 firmware's USB to CAN bridge, whichever side is the
+    source). An RP2040 Katapult offers the bridge, so it takes it."""
+    if _canon(have) == _canon(want):
+        return True
+    alias = _fallback(want)
+    if alias is not None and _canon(alias) == _canon(have) and not _offers(dst, want):
+        return True
+    alias = _fallback(have)
+    return alias is not None and _canon(alias) == _canon(want) and not _offers(src, have)
 
 
 def _is_offset_choice(choice) -> bool:
@@ -291,9 +302,10 @@ class Pair:
         """Copy one slot's value of every shared option (the firmware's by
         default) into the other where the two differ and both use it. A few
         passes, since a choice made (the processor) shows or hides the
-        options after it. A member the other tree stands in for (a USB to
-        CAN bridge's Katapult runs as plain USB, see :func:`_fallback`) is
-        left as it is, whichever side it is on."""
+        options after it. A member one tree does not offer and the other's
+        fallback stands in for (an STM32 USB to CAN bridge's Katapult runs as
+        plain USB, see :func:`_stands_for`) is left as it is, whichever side
+        it is on."""
         target = self.other(source)
         lib_s, lib_t = self.session(source).kconfiglib, self.session(target).kconfiglib
         notes: list[str] = []
@@ -305,10 +317,10 @@ class Pair:
                     continue
                 if e.kind == "choice":
                     want = src.selection.name
-                    if _same(dst.selection.name, want):
+                    if _stands_for(dst.selection.name, want, dst, src):
                         continue
                     note = self._select(target, e, want, source)
-                    if dst.selection is not None and _same(dst.selection.name, want):
+                    if dst.selection is not None and _canon(dst.selection.name) == _canon(want):
                         changed = True
                 else:
                     want = src.str_value
