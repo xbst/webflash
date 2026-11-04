@@ -573,8 +573,14 @@ class Evaluator:
         else:
             for t in targets:
                 self.explicit.setdefault(t, []).append(rule)
-                if self.default_goal is None and not (t.startswith(".") and "/" not in t):
-                    self.default_goal = t
+                if not (t.startswith(".") and "/" not in t):
+                    # As GNU make does, the first ordinary target becomes
+                    # .DEFAULT_GOAL while the variable is unset or empty.
+                    goal_var = self.vars.get(".DEFAULT_GOAL")
+                    if goal_var is None or not goal_var.value:
+                        self.vars.set(".DEFAULT_GOAL", t, False, ORIGIN_FILE)
+                    if self.default_goal is None:
+                        self.default_goal = t
         return rule
 
     # ── Expansion ─────────────────────────────────────────────────────
@@ -1122,7 +1128,14 @@ class Evaluator:
         through the shell, or only printing them to the transcript."""
         await self.ensure_loaded()
         self._done = {}
-        goals = list(goals) if goals else [self.default_goal or ""]
+        if not goals:
+            goal_var = self.vars.get(".DEFAULT_GOAL")
+            words = split_words(self._lookup(".DEFAULT_GOAL", None, "")) if goal_var is not None else []
+            if len(words) > 1:
+                raise MakeError("*** .DEFAULT_GOAL contains more than one target.  Stop.")
+            goals = words
+        else:
+            goals = list(goals)
         if not goals or not goals[0]:
             raise MakeError("No targets.  Stop.")
         for goal in goals:
