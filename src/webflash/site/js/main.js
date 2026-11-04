@@ -24,7 +24,7 @@ import { OptionsPanel } from "./configure/options-panel.js";
 import { blobUrl, formatBytes } from "./configure/sources.js";
 import { isCached } from "./workers/blob-cache.js";
 import { BuildPanel, planErrorLine } from "./build/build-panel.js";
-import { buildMatches } from "./build/artifacts.js";
+import { buildsMatch } from "./build/artifacts.js";
 import { Wizard } from "./wizard/wizard.js";
 import { mountStatusChip } from "./wizard/status-chip.js";
 import { FirmwarePage } from "./wizard/firmware-page.js";
@@ -270,7 +270,7 @@ function tryAutoBuild() {
     autoBuild = false;
     return;
   }
-  if (buildPanel.last && !buildPanel.stale) {
+  if (buildPanel.current) {
     autoBuild = false;
     return;
   }
@@ -279,10 +279,11 @@ function tryAutoBuild() {
   buildPanel.onBuild();
 }
 
+// Next goes to Flash once every firmware the configuration builds (Katapult
+// and the firmware for a pair) has a build that still matches.
 function renderBuildStep() {
   if (!wizard) return;
-  const done = Boolean(session.build) && buildMatches(session, session.build);
-  wizard.setNext("build", { enabled: done, reason: "Next is enabled once the build is done." });
+  wizard.setNext("build", { enabled: buildsMatch(session), reason: "Next is enabled once the build is done." });
 }
 
 function setupBuildStep() {
@@ -293,7 +294,7 @@ function setupBuildStep() {
   wizard.onLeave("build", () => { autoBuild = false; });
   session.on("change", ({ what }) => {
     if (autoBuild) tryAutoBuild();
-    if (["build", "ref", "config", "project", "version", "open"].includes(what)) renderBuildStep();
+    if (["build", "ref", "config", "project", "version", "open", "katapult", "katapult-ref", "katapult-config", "setup"].includes(what)) renderBuildStep();
   });
   renderBuildStep();
 }
@@ -668,10 +669,10 @@ async function init() {
   }, session);
   renderPlanNote = setupPlan();
   buildPanel = new BuildPanel(session, configurator, {
-    button: $("build-btn"), cancel: $("build-cancel"), status: $("build-status"), start: $("build-start"),
-    bar: $("build-bar"), list: $("build-progress"), error: $("build-error"), memory: $("build-memory"),
-    artifacts: $("build-artifacts"), logBox: $("build-log-box"), log: $("build-log"), logCopy: $("build-log-copy"),
-    logCount: $("build-log-count"), pill: $("status-toolchain"),
+    title: $("build-title"), clock: $("build-clock"), pre: $("build-pre"), jobs: $("build-jobs"), error: $("build-error"),
+    start: $("build-start"), list: $("build-progress"), memoryBox: $("build-memory-box"), memory: $("build-memory"),
+    logBox: $("build-log-box"), log: $("build-log"), logCopy: $("build-log-copy"), logCount: $("build-log-count"),
+    button: $("build-btn"), cancel: $("build-cancel"), pill: $("status-toolchain"),
   }, { showError });
   setupBuildStep();
   setupFirmwarePage();

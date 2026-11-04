@@ -1,10 +1,12 @@
 // The site's Flash card: flash-ui.js wired to the session (SPEC 12).
 //
 // This is the one flash module that knows the site's state. The firmware
-// comes, in this order of preference, from a file the user uploaded with
-// the toolbar's Upload firmware, from session.build (the in-browser build's
-// outputs, while the project, ref and .config are still the build's), or,
-// for a [prebuilt] board TOML, from the file opened beside it.
+// comes, in this order of preference, from a file the user uploaded (Upload
+// firmware in the top bar, or page 1's "Flash a file you have"), from
+// session.builds (the in-browser builds' outputs, while the project, ref and
+// .config of each slot are still the build's: Katapult and the firmware
+// together, through pair.js, when Katapult is picked), or, for a [prebuilt]
+// board TOML, from the file opened beside it.
 // The methods come from the configuration (session.configText, the
 // configure code's full .config, else the TOML's defconfig) through
 // devices.js's inferMethods, narrowed by the TOML's [flash].methods; a file
@@ -17,7 +19,11 @@ import { createFlashPanel } from "./flash-ui.js";
 import { parseFirmware, describe as describeImage, extractKlipperDict, fromBin, sniffFormat, looksLikeText } from "./firmware-file.js";
 import { inferMethods, applyTomlMethods, methodsForPrebuilt, mcuOf, familyOf, interfaceOf, imageAddressFor, configValue, configFitsImage, imageFamily, configFromImage, interfaceFromDict, serialBaud } from "./devices.js";
 import { explainError, FlashError } from "./errors.js";
-import { buildMatches } from "../build/artifacts.js";
+import { firmwareFromPair } from "./pair.js";
+import { buildMatches, buildsMatch } from "../build/artifacts.js";
+
+// The embed's embed-model.js imports it from pair.js, which needs no DOM.
+export { firmwareFromPair };
 
 /**
  * A message about a file with the file's name in front, unless it already
@@ -30,7 +36,7 @@ function aboutFile(name, message) {
 
 /**
  * Mount the panel into root (the #flash-card element) for a Session. The
- * toolbar's Upload firmware button (uploadButton) is taken over. Returns
+ * top bar's Upload firmware button (uploadButton) is taken over. Returns
  * the panel API plus refresh().
  */
 export async function mountFlashPanel(session, root, { uploadButton = null, showError = null } = {}) {
@@ -64,7 +70,8 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   function tomlFlash() {
     const t = session.toml || {};
     const flash = t.flash && typeof t.flash === "object" ? t.flash : {};
-    const setup = firstSetup(t) || {};
+    // The setup Configure edits (U05's Setup select), else the TOML's first.
+    const setup = session.setup || firstSetup(t) || {};
     return {
       methods: Array.isArray(setup.methods) ? setup.methods : Array.isArray(flash.methods) ? flash.methods : null,
       instructions: flash.instructions && typeof flash.instructions === "object" ? flash.instructions : null,
@@ -76,14 +83,29 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     return t.prebuilt && typeof t.prebuilt === "object" ? t.prebuilt : null;
   }
 
+  // Why the builds cannot be flashed together (pair.js's refusal), or "".
+  let refusal = "";
+
   /**
-   * The build's firmware (session.build), as a panel firmware, or null. A
+   * The build's firmware (session.builds), as a panel firmware, or null. A
    * build of another project, version or .config is not offered: the Build
-   * card says Rebuild and keeps its files, as a card withdraws its build.
+   * step says Rebuild and keeps its files, as a card withdraws its build.
+   * With Katapult picked, both builds must match and go as one firmware.
    */
   function fromBuild() {
+    refusal = "";
+    if (session.katapult && session.katapult.on) {
+      if (!buildsMatch(session, session.builds)) return null;
+      try {
+        return firmwareFromPair(session.builds, tomlFlash());
+      } catch (e) {
+        refusal = e.message;
+        panel.log(e.message);
+        return null;
+      }
+    }
     const b = session.build;
-    if (!b || !b.outputs || !buildMatches(session, b)) return null;
+    if (!b || !b.outputs || !buildMatches(session, b, "fw")) return null;
     const outputs = b.outputs instanceof Map ? b.outputs : new Map(Object.entries(b.outputs));
     const project = b.project || session.project || "klipper";
     const cfg = b.config || configText();
@@ -220,8 +242,8 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
   let shown = null;
 
   function firmwareKey(firmware) {
-    if (!firmware) return { origin: null, text: "null" };
-    const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? session.build : (firmware.artifacts[0] || {}).bytes;
+    if (!firmware) return { origin: null, text: `null ${refusal}` };
+    const origin = firmware.source === "upload" ? state.uploaded : firmware.source === "build" ? (firmware.pair ? session.builds : session.build) : (firmware.artifacts[0] || {}).bytes;
     const skip = new Set(["image", "artifacts", "onClear"]);
     const text = JSON.stringify(firmware, (k, v) => (skip.has(k) ? undefined : v)) + describeImage(firmware.image).rangeText + (firmware.image.name || "");
     return { origin, text };
@@ -235,7 +257,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
     const key = firmwareKey(firmware);
     if (shown && shown.origin === key.origin && shown.text === key.text) return;
     shown = key;
-    panel.setFirmware(firmware);
+    panel.setFirmware(firmware, { empty: refusal });
   }
 
   // ── Upload firmware ─────────────────────────────────────────────
@@ -297,7 +319,7 @@ export async function mountFlashPanel(session, root, { uploadButton = null, show
 
   // ── Session changes ─────────────────────────────────────────────
   session.on("change", ({ what }) => {
-    if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files"].includes(what)) refresh();
+    if (["toml", "project", "version", "ref", "open", "build", "config", "configText", "files", "katapult", "katapult-ref", "katapult-config", "setup"].includes(what)) refresh();
   });
   refresh();
 

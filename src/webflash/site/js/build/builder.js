@@ -4,7 +4,9 @@
 // prepare() makes the compiler ready: the release named by
 // toolchain/current.json, its files through Cache Storage with their checks
 // (cache.js), and the toolchain workers started with them
-// (toolchain-pool.js). run() builds one configuration of one ref: it asks the
+// (toolchain-pool.js). runAll() builds one configuration per engine slot in
+// turn (Katapult, then the firmware), each as run() does, under one cancel.
+// run() builds one configuration of one ref: it asks the
 // engine what the Makefiles need (bridge.plan), gives the engine the lib
 // bundles its tree lacks (add_lib) and the workers the sources they lack
 // (the core and lib bundles, at the engine's tree path), hands the engine
@@ -15,8 +17,9 @@
 // The view only draws: step(text) gives it a row ({progress(done, total),
 // finish(note)}) for each thing the build does before the engine's own
 // steps, which arrive through the engine worker's progress (runtime.js).
-// The engine holds one tree, so the caller runs run() where nothing else
-// talks to the engine (the site: inside the configurator's queue).
+// No tree may change under a build, so the caller runs run() and runAll()
+// where nothing else talks to the engine (the site: inside the
+// configurator's exclusive()).
 
 import * as runtime from "../runtime.js";
 import { blobSize, formatBytes, projectTitle } from "../configure/sources.js";
@@ -296,7 +299,49 @@ export class Builder {
     }
   }
 
-  async _run({ project, ref, index, configText, defconfigText, version = "", step = NO_STEP, onProgress = null }) {
+  /**
+   * Build several configurations in a row, one per engine slot (SPEC 4.1):
+   * jobs are run()'s options plus {slot}, in the order given (the site
+   * passes Katapult first, so the engine ends on the firmware's tree). The
+   * workers stay up between jobs and take each job's tree in turn. One
+   * cancel() (or an abort of signal) ends the whole run with a
+   * BuildCancelled, between jobs too. step(text, job) and onProgress(phase,
+   * detail, info, job) are run()'s, told which job; onStart(job) runs before
+   * each job and onDone(job, out) after each one that worked, so a run that
+   * fails late keeps the builds before it. Resolves to {<slot>: out}.
+   */
+  async runAll(jobs, { step = null, onProgress = null, onStart = null, onDone = null, signal = null } = {}) {
+    if (!this._abort) this.begin();
+    const abort = this._abort;
+    const stop = () => this.cancel();
+    if (signal) {
+      if (signal.aborted) abort.abort();
+      else signal.addEventListener("abort", stop, { once: true });
+    }
+    const results = {};
+    try {
+      for (const job of jobs) {
+        this._check();
+        if (onStart) onStart(job);
+        const out = await this._run({
+          ...job,
+          step: step ? (text) => step(text, job) : job.step || NO_STEP,
+          onProgress: onProgress ? (phase, detail, info) => onProgress(phase, detail, info, job) : job.onProgress || null,
+        });
+        results[job.slot || "fw"] = out;
+        this._check();
+        if (onDone) onDone(job, out);
+      }
+      return results;
+    } catch (e) {
+      throw this._stopped(e);
+    } finally {
+      if (signal) signal.removeEventListener("abort", stop);
+      this._abort = null;
+    }
+  }
+
+  async _run({ slot = "fw", project, ref, index, configText, defconfigText, version = "", step = NO_STEP, onProgress = null }) {
     this._check();
     if (!this.ready) throw new Error("the compiler workers are not running (prepare first)");
     const tc = this.toolchain;
@@ -304,7 +349,7 @@ export class Builder {
     const tree = treePath(project, ref);
     // What the build needs, from the engine: every lib/ folder the Makefiles
     // name, and the ones its tree lacks.
-    const plan = await runtime.plan(defconfigText);
+    const plan = await runtime.plan(defconfigText, { slot });
     const inCore = new Set(ref.core_libs || []);
     const libs = (plan.libs || []).filter((dir) => !inCore.has(dir));
     const absent = libs.filter((dir) => !(ref.libs || {})[dir]);
@@ -325,7 +370,7 @@ export class Builder {
       }), signal);
       this._check();
       b.bytes = got.bytes;
-      if (engineLacks.has(b.key)) await runtime.addLib(b.key, got.bytes);
+      if (engineLacks.has(b.key)) await runtime.addLib(b.key, got.bytes, { slot });
       row.finish(got.cached ? "from this browser's cache" : formatBytes(got.size));
     }
     if (forPool.length) {
@@ -346,7 +391,7 @@ export class Builder {
     const off = onProgress ? runtime.onProgress(onProgress) : () => {};
     let result;
     try {
-      result = await runtime.build(configText, version, this.pool.size, { signal });
+      result = await runtime.build(configText, version, this.pool.size, { signal, slot });
     } catch (e) {
       if (this.crash) throw new Error(this.crash);
       if (signal.aborted) throw new BuildCancelled();
@@ -357,8 +402,8 @@ export class Builder {
     const stats = await this.pool.stats({ reset: true }).then(summarizeStats).catch(() => null);
     if (this.pool.reuse) await this.pool.dispose();
     const outputs = new Map();
-    for (const name of Object.keys(result.outputs || {})) outputs.set(name, await runtime.buildOutput(name));
-    return { result, outputs, stats };
+    for (const name of Object.keys(result.outputs || {})) outputs.set(name, await runtime.buildOutput(name, { slot }));
+    return { slot, result, outputs, stats };
   }
 
   /**

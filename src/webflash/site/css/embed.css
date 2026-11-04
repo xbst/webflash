@@ -177,6 +177,21 @@
 .wf-app .flash-help-body p { margin-top: .4em; color: var(--text-muted); line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes { margin: .4em 0 0 1.2em; padding: 0; line-height: 1.55; font-size: .9em; }
 .wf-app .flash-fixes li { margin-bottom: .4em; }
+/* The flash panel's write list, numbered steps and device line (U06; U07 restyles the card). */
+.wf-app .flash-writes { list-style: none; margin: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 6px; font-size: .9em; }
+.wf-app .flash-write { display: flex; align-items: center; gap: .6em; padding: .4em .7em; }
+.wf-app .flash-write + .flash-write { border-top: 1px solid var(--panel-border); }
+.wf-app .fw-icon { width: 1.2em; display: inline-flex; justify-content: center; color: var(--text-muted); flex: none; }
+.wf-app .flash-write.ok .fw-icon { color: var(--ok); }
+.wf-app .flash-write.bad .fw-icon { color: var(--error); }
+.wf-app .flash-write.skip { color: var(--text-muted); }
+.wf-app .fw-addr { margin-left: auto; font-family: var(--mono-font); font-size: .9em; color: var(--text-muted); white-space: nowrap; }
+.wf-app .flash-steps { margin: 0 0 .3em 1.3em; padding: 0; }
+.wf-app .flash-device { display: flex; align-items: center; gap: .45em; color: var(--ok); overflow-wrap: anywhere; }
+.wf-app .flash-dot { width: .5em; height: .5em; border-radius: 50%; background: var(--ok); flex: none; }
+.wf-app .flash-warn { color: var(--warn); }
+.wf-app .flash-write .spinner { width: .8em; height: .8em; border: 2px solid var(--panel-border); border-top-color: var(--accent); border-radius: 50%; animation: wf-spin .8s linear infinite; }
+@keyframes wf-spin { to { transform: rotate(360deg); } }
 .wf-app .flash-log { max-height: 14em; }
 
 /* --- Foot --- */

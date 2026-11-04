@@ -186,7 +186,9 @@ export class Session {
     this.plan = null;
     this.sources = { state: "idle", detail: "" };   // idle, loading, ready, error
     this.locked = "";           // why configuring is locked (a build running), "" when not
-    this.build = null;          // the last build (build/artifacts.js's buildRecord), until a TOML is opened
+    // The last build of each engine slot (build/artifacts.js's buildRecord),
+    // until a TOML is opened: {fw, katapult}. session.build is builds.fw.
+    this.builds = { fw: null, katapult: null };
     // The engine's side of Katapult beside the firmware (see the katapult getter).
     this._katapultEngine = freshKatapultEngine();
     this._setupIndex = 0;       // the setup Configure edits (setupIndex clamps it)
@@ -239,6 +241,10 @@ export class Session {
 
   /** The setup Configure edits, or null ([prebuilt]). */
   get setup() { return this._t.setups[this.setupIndex] || null; }
+
+  /** The firmware's last build (builds.fw). */
+  get build() { return this.builds.fw; }
+  set build(record) { this.builds = { ...this.builds, fw: record }; }
 
   /**
    * Katapult configured beside the firmware, or null when not picked: {on,
@@ -381,7 +387,7 @@ export class Session {
     const before = this._t;
     const katapultBefore = this.katapult;
     this._t = normalizeTables(tables);
-    this.build = null;
+    this.builds = { fw: null, katapult: null };
     this._setupIndex = 0;
     // An opened TOML's Katapult starts over in the engine.
     this._katapultEngine = freshKatapultEngine();

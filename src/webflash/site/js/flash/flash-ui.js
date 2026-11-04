@@ -8,10 +8,11 @@
 
 import { FlashError, explainError, isCancel, capabilities } from "./errors.js";
 import { describe as describeImage, hex8, formatSize, extractKlipperDict, fromBin, parseAddress } from "./firmware-file.js";
-import { METHODS, familyFromMcu } from "./devices.js";
+import { METHODS, familyFromMcu, defaultSteps } from "./devices.js";
 import { connectDevice, connectionFor, flashImage, transportOf, methodAvailable, probeConnection } from "./flash.js";
-import { enterFromKlipperUsb, enterFromKlipperSerial, manualInstructions, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
+import { enterFromKlipperUsb, enterFromKlipperSerial, expectedAfterTouch, REENUMERATION_TIMEOUT_MS } from "./bootloader-entry.js";
 import { uf2Download } from "./uf2.js";
+import { imageForMethod, writesFor, projectName } from "./pair.js";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -54,6 +55,23 @@ export function renderInline(text) {
   const clean = strip(String(text ?? "").replace(/\u0000/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
   if (!clean) return "";
   return clean.split(/\n[ \t]*\n+/).map(strip).filter(Boolean).map((p) => `<p>${renderSpans(escapeText(p))}</p>`).join("");
+}
+
+/** Short steps (devices.js's defaultSteps, with the same markup) as a numbered list. */
+export function renderSteps(steps) {
+  const items = (steps || []).map((s) => strip(String(s).replace(/\u0000/g, ""))).filter(Boolean);
+  return items.length ? `<ol class="flash-steps">${items.map((s) => `<li>${renderSpans(escapeText(s))}</li>`).join("")}</ol>` : "";
+}
+
+/**
+ * A method's name in the select. On a pair (pair.js), a ROM method
+ * writes both images and Katapult's methods the firmware alone.
+ */
+export function methodLabel(m, firmware = null) {
+  const base = METHODS[m.id] ? METHODS[m.id].label : m.id;
+  if (m.both) return `${base} · flashes both at once`;
+  if (m.appOnly) return `${base} · ${projectName(firmware && firmware.project)} only`;
+  return base;
 }
 
 /**
@@ -102,6 +120,8 @@ export function createFlashPanel(root, options = {}) {
     log: [],
     countdownTimer: null,
     pending: null,        // {firmware}: what setFirmware gave while a device was picked or written
+    empty: "",            // why there is no firmware, when setFirmware said
+    written: null,        // {phase, done, total} of the running flash, for the write list
   };
   root.innerHTML = "";
   root.classList.add("flash-panel");
@@ -117,6 +137,7 @@ export function createFlashPanel(root, options = {}) {
   const firmwareLine = el("div", { class: "flash-firmware", id: "flash-firmware" });
   const reasonLine = el("p", { class: "flash-reason", id: "flash-reason" });
   const notice = el("div", { class: "flash-notice", id: "flash-notice", hidden: true });
+  const writes = el("ul", { class: "flash-writes", id: "flash-writes", hidden: true, "aria-label": "What gets written" });
   const instructions = el("div", { class: "flash-instructions", id: "flash-instructions" });
   const actions = el("div", { class: "flash-actions", id: "flash-actions" });
   const prompt = el("div", { class: "flash-prompt", id: "flash-prompt", hidden: true });
@@ -130,10 +151,10 @@ export function createFlashPanel(root, options = {}) {
   const logCopy = el("button", { class: "mini", id: "flash-log-copy", title: "Copy the flash log", onclick: (e) => { e.preventDefault(); copyText(state.log.join("\n")); } }, ["Copy"]);
   const logBox = el("details", { class: "log-box", id: "flash-log-box" }, [el("summary", {}, ["Log ", logCopy]), logPre]);
   const help = el("details", { class: "help-box", id: "flash-help" }, [
-    el("summary", { text: "What went wrong?" }),
-    el("div", { class: "flash-help-body", id: "flash-help-body", html: "<p>When a step fails, the likely causes and their fixes appear here: drivers on Windows, permissions on Linux, a board that is not in its bootloader.</p>" }),
+    el("summary", { text: "Trouble connecting?" }),
+    el("div", { class: "flash-help-body", id: "flash-help-body" }),
   ]);
-  root.append(head, firmwareLine, reasonLine, notice, instructions, actions, prompt, confirmBox, progressWrap, result, logBox, help);
+  root.append(head, firmwareLine, reasonLine, notice, writes, instructions, actions, prompt, confirmBox, progressWrap, result, help, logBox);
 
   // ── Helpers ─────────────────────────────────────────────────────
   function log(text) {
@@ -146,8 +167,10 @@ export function createFlashPanel(root, options = {}) {
   function setProgress(phase, done, total, unit = "bytes") {
     progressWrap.hidden = false;
     const pct = total ? Math.round((done / total) * 100) : 0;
-    document.getElementById("flash-phase") && (progressWrap.querySelector("#flash-phase").textContent = progressText(phase, done, total, unit));
+    progressWrap.querySelector("#flash-phase").textContent = progressText(phase, done, total, unit);
     progressWrap.querySelector("#flash-progress").value = pct;
+    state.written = { phase, done, total };
+    renderWrites();
   }
 
   function setStatus(text) {
@@ -209,7 +232,7 @@ export function createFlashPanel(root, options = {}) {
     methodSelect.disabled = busy();
     for (const m of fw.methods) {
       const avail = methodAvailable(m.id, caps);
-      const label = METHODS[m.id] ? METHODS[m.id].label : m.id;
+      const label = methodLabel(m, fw);
       methodSelect.appendChild(el("option", { value: m.id, text: avail.ok ? label : `${label} (not here)` }));
     }
     if (!fw.methods.some((m) => m.id === state.method)) {
@@ -222,14 +245,16 @@ export function createFlashPanel(root, options = {}) {
   function renderFirmware() {
     const fw = state.firmware;
     if (!fw) {
-      firmwareLine.innerHTML = `<span class="flash-muted">Build the firmware, or use <strong>Upload firmware</strong> in the toolbar to flash a file you already have.</span>`;
+      firmwareLine.innerHTML = state.empty ? `<span class="flash-warn">${esc(state.empty)}</span>`
+        : `<span class="flash-muted">Build first, or use <strong>Upload firmware</strong> to flash a file you have.</span>`;
       reasonLine.textContent = "";
       return;
     }
     const d = describeImage(fw.image);
     const bits = [];
     bits.push(`<strong>${esc(fw.label || fw.image.name || "firmware")}</strong>`);
-    bits.push(esc(d.rangeText));
+    // A pair's write list gives the addresses.
+    if (!fw.parts) bits.push(esc(d.rangeText));
     if (fw.mcu) bits.push(`MCU ${esc(fw.mcu)}`);
     if (fw.version) bits.push(`version ${esc(fw.version)}`);
     if (d.familyLabel) bits.push(esc(d.familyLabel));
@@ -253,6 +278,8 @@ export function createFlashPanel(root, options = {}) {
     instructions.innerHTML = "";
     notice.hidden = true;
     prompt.hidden = true;
+    renderWrites();
+    renderHelp();
     if (!fw) {
       instructions.innerHTML = `<p class="flash-muted">Pick a method once a firmware is built or uploaded.</p>`;
       return;
@@ -263,18 +290,23 @@ export function createFlashPanel(root, options = {}) {
     if (!avail.ok) {
       notice.hidden = false;
       notice.innerHTML = `<p><strong>${esc(METHODS[method] ? METHODS[method].short : method)}</strong> ${esc(avail.reason)}. ` +
-        `${caps.browser === "firefox" || caps.browser === "safari" ? "Firefox and Safari cannot flash from a page: download the files below and flash them with Chrome or Edge, or with the usual tools." : "Download the files below instead."}</p>`;
+        `${caps.browser === "firefox" || caps.browser === "safari" ? "Download the files and flash them with Chrome or Edge, or your usual tools." : "Download the files instead."}</p>`;
       renderDownloads(actions, fw);
       return;
+    }
+    const m = currentMethod();
+    if (m && m.appOnly) {
+      // A pair over Katapult: only the firmware goes, onto the Katapult already there.
+      const rom = fw.methods.find((x) => x.both);
+      notice.hidden = false;
+      notice.innerHTML = `<p>Katapult has to be on the board already.${rom ? ` Flash it once with ${esc(METHODS[rom.id] ? METHODS[rom.id].short : rom.id)}.` : ""}</p>`;
     }
     if (method === "download") {
-      instructions.innerHTML = renderInline(manualInstructions("download", fam, fw.instructions));
+      instructions.innerHTML = stepsHtml("download", fam);
       renderDownloads(actions, fw);
       return;
     }
-    instructions.innerHTML = renderInline(manualInstructions(method, fam, fw.instructions, { fromKlipper: caps.serial, serial: overUart(), baud: baud() }));
-    const needs = METHODS[method] && METHODS[method].needs;
-    if (needs) instructions.appendChild(el("p", { class: "flash-needs", text: needs }));
+    instructions.innerHTML = stepsHtml(method, fam, { fromKlipper: caps.serial, serial: overUart(), baud: baud() });
 
     if (state.phase === "connecting" || state.phase === "flashing") {
       actions.appendChild(el("span", { class: "flash-muted", text: state.phase === "connecting" ? "Waiting for the device…" : "Flashing…" }));
@@ -301,15 +333,76 @@ export function createFlashPanel(root, options = {}) {
     }
   }
 
+  // The method's instructions: the board TOML's own text, else short numbered steps.
+  function stepsHtml(method, fam, options = {}) {
+    const own = state.firmware && state.firmware.instructions;
+    if (own && typeof own === "object" && typeof own[method] === "string" && own[method].trim()) return renderInline(own[method]);
+    return renderSteps(defaultSteps(method, fam, options));
+  }
+
+  // What the method writes, one row per image (Katapult and the firmware for
+  // a pair), each checked off as the running flash gets past it.
+  function renderWrites() {
+    const fw = state.firmware;
+    const method = state.method;
+    const rows = fw && method !== "download" && methodAvailable(method, caps).ok ? writesFor(fw, method) : [];
+    writes.hidden = !rows.length;
+    if (!rows.length) {
+      writes.replaceChildren();
+      return;
+    }
+    const total = rows.reduce((n, r) => n + r.size, 0) || 1;
+    const w = state.written;
+    // How far the flash is, as a fraction of the bytes: rows are written in
+    // address order and read back in the same order.
+    const at = state.phase === "done" ? 1 : state.phase === "flashing" && w && w.total ? w.done / w.total : 0;
+    let before = 0;
+    const items = [];
+    const m = currentMethod();
+    if (m && m.appOnly) {
+      items.push(`<li class="flash-write skip"><span class="fw-icon" aria-hidden="true">–</span><span class="fw-name">Katapult</span><span class="fw-addr">already on the board</span></li>`);
+    }
+    rows.forEach((r, i) => {
+      const start = before / total;
+      before += r.size;
+      const end = before / total;
+      let icon = String(i + 1);
+      let cls = "";
+      // A row is checked once its bytes are written (the read-back that
+      // follows covers them all); the row being erased or written spins.
+      const written = w && w.phase === "write" ? at : w && w.phase === "verify" ? 1 : 0;
+      if (state.phase === "done") { icon = "✓"; cls = "ok"; }
+      else if (state.phase === "flashing" && w) {
+        if (written >= end - 1e-9) { icon = "✓"; cls = "ok"; }
+        else if (w.phase === "erase" ? i === 0 : written >= start - 1e-9) cls = "run";
+      } else if (state.phase === "failed" && w && at >= start && at < end) { icon = "✗"; cls = "bad"; }
+      items.push(`<li class="flash-write ${cls}"><span class="fw-icon" aria-hidden="true">${cls === "run" ? `<span class="spinner"></span>` : esc(icon)}</span>` +
+        `<span class="fw-name">${esc(r.title)}</span><span class="fw-addr">${esc(hex8(r.address))} · ${esc(formatSize(r.size))}</span></li>`);
+    });
+    writes.innerHTML = items.join("");
+  }
+
+  // The folded help: the method's needs until a step fails, then the fixes.
+  function renderHelp() {
+    if (state.error) return;
+    const body = help.querySelector("#flash-help-body");
+    const method = state.method;
+    const needs = METHODS[method] && METHODS[method].needs;
+    const tips = [needs, method === "download" ? "" : "Board not listed? Put it in its bootloader again, plugged in directly (not through a hub)."].filter(Boolean);
+    body.innerHTML = tips.map((t) => `<p>${esc(t)}</p>`).join("") || "<p>The fixes for a failed step appear here.</p>";
+  }
+
   function renderDownloads(container, fw) {
     const listed = fw.artifacts && fw.artifacts.length ? fw.artifacts : [{ name: fw.image.name || "firmware.bin", bytes: null }];
-    // The file the panel would flash comes first, as the primary button: the
-    // build lists its outputs in the engine's order, the .elf before the .bin.
-    const files = [...listed.filter((f) => f.name === fw.image.name), ...listed.filter((f) => f.name !== fw.image.name)];
+    // The files the panel would flash come first, the first as the primary
+    // button: the build lists its outputs in the engine's order, the .elf
+    // before the .bin. A pair's are katapult.bin, then the firmware's.
+    const flashed = fw.parts ? fw.parts.map((p) => p.name) : [fw.image.name];
+    const files = [...flashed.map((n) => listed.find((f) => f.name === n)).filter(Boolean), ...listed.filter((f) => !flashed.includes(f.name))];
     for (const f of files) {
-      container.appendChild(button(`Download ${f.name} (${formatSize(f.bytes ? f.bytes.length : fw.image.size)})`, async () => {
+      container.appendChild(button(`Download ${f.label || f.name} (${formatSize(f.bytes ? f.bytes.length : fw.image.size)})`, async () => {
         const bytes = f.bytes || (await rawBytes(fw));
-        opts.saveFile(bytes, f.name, "application/octet-stream");
+        opts.saveFile(bytes, f.saveAs || f.name, "application/octet-stream");
       }, { primary: files[0] === f }));
     }
     const fam = family();
@@ -337,19 +430,15 @@ export function createFlashPanel(root, options = {}) {
     const c = state.phase === "connected" ? state.connection : null;
     confirmBox.hidden = !c;
     if (!c) return;
-    const d = describeImage(fw.image);
-    const rows = [
-      ["Device", c.describe()],
-      ["Method", METHODS[state.method] ? METHODS[state.method].label : state.method],
-      ["Writes", d.rangeText],
-      ["Size", formatSize(d.size)],
-    ];
-    if (fw.mcu) rows.push(["Firmware MCU", fw.mcu]);
-    if (c.uuid) rows.push(["CAN node", c.uuid]);
-    confirmBox.innerHTML = `<table class="flash-table">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>` +
-      `<p class="flash-muted">${esc(state.method === "uf2" ? "The .uf2 is written onto the drive; the board restarts by itself." : "Nothing is written until you click Flash. The flash is read back afterwards.")}</p>`;
+    const d = describeImage(imageForMethod(fw, state.method));
+    const bits = [c.describe()];
+    if (c.uuid) bits.push(`CAN node ${c.uuid}`);
+    if (fw.mcu) bits.push(`firmware for ${fw.mcu}`);
+    confirmBox.innerHTML = `<p class="flash-device" title="${esc(`Writes ${d.rangeText}, ${formatSize(d.size)}`)}"><span class="flash-dot" aria-hidden="true"></span>${esc(bits.join(" · "))}</p>` +
+      `<p class="flash-muted">${esc(state.method === "uf2" ? "The board restarts by itself once the file is on the drive." : "Nothing is written until you click Flash; it is read back afterwards.")}</p>`;
+    const names = writesFor(fw, state.method).map((r) => r.title);
     const row = el("div", { class: "flash-actions" });
-    row.appendChild(button("Flash", () => doFlash(), { primary: true, id: "flash-write", title: "Write and verify the firmware" }));
+    row.appendChild(button(`Flash ${names.join(" and ") || "the firmware"}`, () => doFlash(), { primary: true, id: "flash-write", title: "Write and verify" }));
     row.appendChild(button("Cancel", async () => { await dropConnection(); }, { id: "flash-cancel" }));
     confirmBox.appendChild(row);
   }
@@ -476,7 +565,7 @@ export function createFlashPanel(root, options = {}) {
     state.phase = "ready";
     if (!applyPending()) renderAll();
     const label = outcome.expect.label || "the device";
-    showPrompt(`The touch was sent. The board should now show up as ${label}; the browser needs you to pick it once.`, [
+    showPrompt(`The board is restarting as ${label}: pick it once.`, [
       button(`Pick ${label}`, () => connectAndConfirm(), { primary: true }),
     ]);
   }
@@ -516,21 +605,24 @@ export function createFlashPanel(root, options = {}) {
     if (!fw || !connection) return;
     state.phase = "flashing";
     state.error = null;
+    state.written = null;
     result.hidden = true;
     confirmBox.hidden = true;
     renderMethods();
     renderStep();
     setStatus("Starting");
     const method = state.method;
+    // Katapult's methods write a pair's firmware alone; the ROM methods both images.
+    const image = imageForMethod(fw, method);
     // A CAN node that turned out to be the bridge itself continues over USB
     // serial; its UUID from the bus goes into that flash's printer.cfg hint.
     const bridgeUuid = state.bridgeUuid;
     state.bridgeUuid = null;
     try {
-      const r = await flashImage(method, fw.image, {
+      const r = await flashImage(method, image, {
         connection, mcu: fw.mcu || null, project: fw.project || "klipper", uuid: fw.uuid || bridgeUuid || null, iface: fw.iface || null,
-        baud: fw.baud || 250000, bitrate: fw.bitrate || 1000000, family: fw.image.family || (family() === "rp2350" ? "rp2350-arm-s" : family() === "rp2040" ? "rp2040" : null),
-        fileName: fw.image.name ? fw.image.name.replace(/\.(bin|elf|hex|uf2)$/i, "") + ".uf2" : null,
+        baud: fw.baud || 250000, bitrate: fw.bitrate || 1000000, family: image.family || (family() === "rp2350" ? "rp2350-arm-s" : family() === "rp2040" ? "rp2040" : null),
+        fileName: image.name ? image.name.replace(/\.(bin|elf|hex|uf2)$/i, "") + ".uf2" : null,
       }, { log, progress: setProgress, status: setStatus, pickNode });
       state.result = r;
       state.phase = "done";
@@ -555,16 +647,16 @@ export function createFlashPanel(root, options = {}) {
     result.className = "flash-result ok";
     const parts = [];
     if (r.reenumerated) {
-      parts.push(`<p><strong>The bridge board is restarting into Katapult over USB.</strong> Switch the method to Katapult and pick the Katapult port to finish.</p>`);
+      parts.push(`<p><strong>The bridge is restarting into Katapult.</strong> Connect again to finish: the method is now Katapult.</p>`);
     } else if (r.method === "uf2") {
-      parts.push(`<p><strong>${r.disappeared ? "The board took the file and restarted." : "The .uf2 was written."}</strong> ${r.disappeared ? "" : "The board restarts once its bootloader has read the last block; if the drive is still there after a few seconds, eject it."} Check that it enumerates as Klipper (or Katapult) now.</p>`);
+      parts.push(`<p><strong>${r.disappeared ? "✓ The board took the file and restarted." : "✓ The .uf2 was written."}</strong> ${r.disappeared ? "" : "Eject the drive if it is still there in a few seconds."}</p>`);
     } else {
       const device = r.deviceText ? `${r.deviceText}${/[.!?]$/.test(r.deviceText) ? "" : "."}` : "";
-      parts.push(`<p><strong>Flashed and verified.</strong> ${esc(device)}${r.restarted ? " The board has restarted into the new firmware." : ""}</p>`);
+      parts.push(`<p><strong>✓ Flashed and verified.</strong> ${esc(device)}${r.restarted ? " The board has restarted." : ""}</p>`);
     }
     if (r.hint) {
       // What the hint does not know, it says in a # line of its own.
-      parts.push(`<p class="flash-muted">For printer.cfg:</p><pre class="flash-hint">${esc(r.hint)}</pre>`);
+      parts.push(`<p class="flash-muted">Add this to printer.cfg:</p><pre class="flash-hint">${esc(r.hint)}</pre>`);
     }
     result.innerHTML = parts.join("");
     if (r.hint) result.appendChild(el("button", { class: "mini", onclick: (e) => { e.preventDefault(); copyText(r.hint); } }, ["Copy"]));
@@ -584,10 +676,10 @@ export function createFlashPanel(root, options = {}) {
     result.hidden = false;
     result.className = "flash-result error";
     result.innerHTML = `<p><strong>${esc(ex.title)}</strong></p><p>${esc(ex.message)}</p>` +
-      (ex.fixes.length ? `<p class="flash-muted">See "What went wrong?" below for the fixes.</p>` : "");
+      (ex.fixes.length ? `<p class="flash-muted">The fixes are under "Trouble connecting?".</p>` : "");
     const body = help.querySelector("#flash-help-body");
     body.innerHTML = `<p><strong>${esc(ex.title)}</strong> (${esc(ex.code)})</p>` +
-      (ex.fixes.length ? `<ol class="flash-fixes">${ex.fixes.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : "<p>No specific fix is known for this one; the log above has the details.</p>");
+      (ex.fixes.length ? `<ol class="flash-fixes">${ex.fixes.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : "<p>No known fix: the log has the details.</p>");
     help.open = true;
     if (state.phase !== "flashing") state.phase = state.firmware ? "ready" : "idle";
     renderAll();
@@ -599,7 +691,11 @@ export function createFlashPanel(root, options = {}) {
     state.firmware = firmware || null;
     closeConnection();
     if (!keepResult || !firmware) state.phase = firmware ? "ready" : "idle";
-    if (!keepResult) result.hidden = true;
+    if (!keepResult) {
+      result.hidden = true;
+      state.error = null;
+      state.written = null;
+    }
     if (firmware && firmware.preferredMethod && firmware.methods.some((m) => m.id === firmware.preferredMethod)) state.method = firmware.preferredMethod;
     renderAll();
     if (dropped) log("The firmware changed, so the device was released: connect again to flash the new one.");
@@ -623,6 +719,7 @@ export function createFlashPanel(root, options = {}) {
     if (busy()) { methodSelect.value = state.method; return; }
     state.method = methodSelect.value;
     result.hidden = true;
+    state.error = null;
     await dropConnection();
     log(`Method: ${METHODS[state.method] ? METHODS[state.method].label : state.method}`);
   });
@@ -636,7 +733,8 @@ export function createFlashPanel(root, options = {}) {
      * While a device is being picked or written, the card keeps showing that
      * and the firmware is applied once it ends (the last one given wins).
      */
-    setFirmware(firmware) {
+    setFirmware(firmware, { empty = "" } = {}) {
+      state.empty = firmware ? "" : empty;
       if (busy()) { state.pending = { firmware: firmware || null }; return; }
       state.pending = null;
       applyFirmware(firmware);
@@ -659,7 +757,7 @@ export function createFlashPanel(root, options = {}) {
         prompt.hidden = false;
         prompt.innerHTML = "";
         const input = el("input", { type: "text", id: "flash-address", value: defaultAddress !== null && defaultAddress !== undefined ? hex8(defaultAddress) : "0x08000000", spellcheck: "false" });
-        prompt.appendChild(el("p", { text: `${name} is a raw .bin, which carries no address. Where does it go? For an STM32 that is 0x08000000 without a bootloader or 0x08002000 with an 8 KiB Katapult; for an RP2040 0x10000100 without and 0x10004000 with Katapult. The address is read as hex, with or without 0x.` }));
+        prompt.appendChild(el("p", { text: `${name} is a raw .bin with no address. Where does it go (hex)? STM32: 0x08000000, or 0x08002000 after an 8 KiB Katapult. RP2040: 0x10000100, or 0x10004000 after Katapult.` }));
         const row = el("div", { class: "flash-actions" }, [
           el("label", { class: "field" }, ["Address ", input]),
           el("button", { class: "primary", onclick: (e) => {

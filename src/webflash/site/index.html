@@ -45,7 +45,7 @@
           <span class="status-detail"></span>
         </div>
         <div class="status-row">
-          <span class="pill off" id="status-toolchain">Toolchain</span>
+          <span class="pill off" id="status-toolchain">Compiler</span>
           <span class="status-detail"></span>
         </div>
       </div>
@@ -142,21 +142,19 @@
       <section class="wiz-step" data-step="build" aria-labelledby="build-title" hidden>
         <div class="wiz-body">
           <h2 class="page" id="build-title" tabindex="-1" data-wiz-title>Build</h2>
-          <div class="card" id="build-card">
-            <div class="card-head">
-              <span class="build-status" id="build-status" aria-live="polite"></span>
-              <span class="card-spacer"></span>
-              <button type="button" id="build-cancel" hidden title="Stop the build">Cancel</button>
-              <button type="button" id="build-btn" class="primary" disabled title="Load the configuration first.">Build</button>
-            </div>
+          <p class="lead build-clock" id="build-clock" aria-live="polite"></p>
+          <div id="build-card">
+            <ul class="build-pre" id="build-pre" aria-label="What the build needs"></ul>
             <div class="build-start" id="build-start" hidden></div>
-            <progress class="build-bar" id="build-bar" hidden aria-label="Build progress"></progress>
-            <ol class="progress-list" id="build-progress" aria-label="Build steps"></ol>
+            <div class="build-jobs" id="build-jobs"></div>
             <div class="build-error" id="build-error" role="alert" hidden></div>
-            <table class="memory" id="build-memory" hidden aria-label="Memory use"></table>
-            <div class="artifacts" id="build-artifacts"></div>
-            <details class="log-box" id="build-log-box">
+            <details class="spoiler" id="build-memory-box" hidden>
+              <summary>Memory</summary>
+              <div class="build-memory" id="build-memory"></div>
+            </details>
+            <details class="spoiler log-box" id="build-log-box">
               <summary>Log <span class="log-count" id="build-log-count"></span><button type="button" id="build-log-copy" class="mini" disabled title="Copy the build log">Copy</button></summary>
+              <ol class="progress-list" id="build-progress" aria-label="Build steps"></ol>
               <pre class="log" id="build-log" tabindex="0" aria-label="Build log"></pre>
             </details>
             <p class="card-note build-plan" id="build-plan" hidden></p>
@@ -165,6 +163,8 @@
         <div class="wiz-foot">
           <button type="button" class="ghost" data-wiz-back>Back</button>
           <span class="hint" data-wiz-hint></span>
+          <button type="button" id="build-cancel" hidden title="Stop the build">Cancel</button>
+          <button type="button" id="build-btn" class="ghost" disabled title="Load the configuration first.">Build</button>
           <button type="button" class="primary" data-wiz-next disabled>Next</button>
         </div>
       </section>
