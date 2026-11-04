@@ -418,6 +418,11 @@ class Evaluator:
                     if not names and not optional:
                         raise MakeError(f"{where}: No rule to make target '{pattern}'")
                     for name in names:
+                        # GNU make drops a leading ./ from an included name
+                        # (read.c, parse_file_seq), so it names the same file
+                        # as a rule's target does.
+                        while name.startswith("./") and len(name) > 2:
+                            name = name[2:].lstrip("/")
                         self.included.append((name, optional))
                         self._read_makefile(name, optional)
                 continue
@@ -930,16 +935,20 @@ class Evaluator:
         """Expand a wildcard relative to the tree, sorted, keeping the
         pattern's own spelling of the directory part."""
         import glob as _glob
-        base = self._path(pattern)
-        matches = _glob.glob(str(base))
-        out = []
-        for m in sorted(matches):
-            if Path(pattern).is_absolute():
-                out.append(_posix(m))
-            else:
-                rel = os.path.relpath(m, self.tree)
-                out.append(_posix(rel))
-        return out
+        if Path(pattern).is_absolute():
+            return [_posix(m) for m in sorted(_glob.glob(pattern))]
+        # The directories before the first component with a wildcard are kept
+        # as the pattern spells them (./, ../ and // included, as GNU make
+        # keeps them); only what the wildcard matched is appended to them.
+        parts = pattern.split("/")
+        first = next((i for i, part in enumerate(parts) if any(ch in part for ch in "*?[")), len(parts))
+        prefix = "".join(part + "/" for part in parts[:first])
+        rest = "/".join(parts[first:])
+        base = os.path.join(str(self.tree), prefix)
+        if not rest:
+            return [pattern] if os.path.lexists(base) else []
+        matches = _glob.glob(os.path.join(_glob.escape(base), rest))
+        return sorted(prefix + _posix(os.path.relpath(m, base)) for m in matches)
 
     # ── Rules ─────────────────────────────────────────────────────────
 
