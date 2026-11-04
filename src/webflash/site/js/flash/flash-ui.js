@@ -173,6 +173,15 @@ export function createFlashPanel(root, options = {}) {
     return (state.firmware && state.firmware.baud) || 250000;
   }
 
+  // Whether the firmware may run Klipper on a USB serial port, which the ROM
+  // methods' restart (the 1200-baud touch) needs. A UART or CAN build has
+  // none, and neither has a USB to CAN bridge, which is a gs_usb device; an
+  // unknown interface keeps the restart.
+  function klipperOnUsbSerial() {
+    const iface = state.firmware && state.firmware.iface;
+    return iface !== "serial" && iface !== "can" && iface !== "usbcan";
+  }
+
   function button(label, handler, { primary = false, title = "", id = null } = {}) {
     return el("button", { class: primary ? "primary" : "", title, id, onclick: (e) => { e.preventDefault(); handler().catch(showFailure); } }, [label]);
   }
@@ -272,7 +281,7 @@ export function createFlashPanel(root, options = {}) {
       actions.appendChild(button("Restart Klipper into Katapult", () => enterFromKlipper(), { title: "Pick the Klipper port; WebFlash asks it to restart into its bootloader", id: "flash-from-klipper" }));
     } else if (transport === "usb") {
       actions.appendChild(button("Connect", () => connectAndConfirm(), { primary: true, title: `Pick ${expectedAfterTouch(method).label || "the device"} in the browser's device list`, id: "flash-connect" }));
-      if (caps.serial && (method === "dfu" || method === "picoboot")) {
+      if (caps.serial && (method === "dfu" || method === "picoboot") && klipperOnUsbSerial()) {
         actions.appendChild(button("Restart Klipper into the bootloader", () => enterFromKlipper(), { title: "Pick the Klipper port; WebFlash asks it to restart into its bootloader", id: "flash-from-klipper" }));
       }
     } else if (transport === "filesystem") {
