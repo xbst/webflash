@@ -241,6 +241,8 @@ export class BuildPanel {
       job.stale = Boolean(build) && (build !== (this.session.builds || {})[slot] || !buildMatches(this.session, build, slot));
       this.drawJob(job);
     }
+    // Memory lists the rows' builds: a slot unticked (or ticked again) goes with its row.
+    this.renderMemoryTables();
   }
 
   // The row of a slot, made on first use.
