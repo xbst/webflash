@@ -185,8 +185,17 @@ export class Wizard {
   }
 
   _popped(state) {
-    // A hash change (a new #toml=) makes an entry of its own with no state: not ours.
-    if (!state || typeof state !== "object" || typeof state.webflashStep !== "string") return;
+    // A hash change (a new #toml=) makes an entry of its own with no state:
+    // it keeps the step shown, and becomes that step's entry, so Back to it
+    // and the footer's Back still move between steps.
+    if (!state || typeof state !== "object" || typeof state.webflashStep !== "string") {
+      if (!this.history || !this.history.replaceState) return;
+      this.n += 1;
+      this.trail.length = this.n;
+      this.trail.push(this.current);
+      this.history.replaceState({ ...(state && typeof state === "object" ? state : {}), webflashStep: this.current, webflashN: this.n }, "");
+      return;
+    }
     const n = Number.isInteger(state.webflashN) ? state.webflashN : 0;
     this.n = n;
     this.trail[n] = state.webflashStep;
