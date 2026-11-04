@@ -141,6 +141,12 @@ export function createFlashPanel(root, options = {}) {
     progressWrap.querySelector("#flash-phase").textContent = text;
   }
 
+  // While a device is being picked or written, the method and the connection
+  // stay as they are: the running protocol holds the device.
+  function busy() {
+    return state.phase === "connecting" || state.phase === "flashing";
+  }
+
   function currentMethod() {
     return state.firmware && state.firmware.methods.find((m) => m.id === state.method) || null;
   }
@@ -164,7 +170,7 @@ export function createFlashPanel(root, options = {}) {
       methodSelect.disabled = true;
       return;
     }
-    methodSelect.disabled = false;
+    methodSelect.disabled = busy();
     for (const m of fw.methods) {
       const avail = methodAvailable(m.id, caps);
       const label = METHODS[m.id] ? METHODS[m.id].label : m.id;
@@ -287,7 +293,7 @@ export function createFlashPanel(root, options = {}) {
 
   function renderConfirm() {
     const fw = state.firmware;
-    const c = state.connection;
+    const c = state.phase === "connected" ? state.connection : null;
     confirmBox.hidden = !c;
     if (!c) return;
     const d = describeImage(fw.image);
@@ -327,6 +333,7 @@ export function createFlashPanel(root, options = {}) {
   }
 
   async function dropConnection() {
+    if (state.phase === "flashing") return;
     await closeConnection();
     state.phase = "ready";
     renderAll();
@@ -336,14 +343,13 @@ export function createFlashPanel(root, options = {}) {
     result.hidden = true;
     await closeConnection();
     state.phase = "connecting";
-    renderStep();
-    renderConfirm();
+    renderAll();
     let connection;
     try {
       connection = await connectDevice(state.method, { nav: opts.nav || undefined, win: opts.win || undefined, serialScope });
     } catch (e) {
       state.phase = "ready";
-      renderStep();
+      renderAll();
       if (isCancel(e)) { log("No device was picked."); return; }
       throw e;
     }
@@ -366,7 +372,7 @@ export function createFlashPanel(root, options = {}) {
         state.connection = null;
         state.phase = "ready";
         try { if (connection.device && typeof connection.device.close === "function") await connection.device.close(); } catch (e2) { /* fine */ }
-        renderStep();
+        renderAll();
         throw e;
       }
     }
@@ -383,8 +389,7 @@ export function createFlashPanel(root, options = {}) {
     result.hidden = true;
     await closeConnection();
     state.phase = "connecting";
-    renderStep();
-    renderConfirm();
+    renderAll();
     const method = state.method;
     let outcome;
     try {
@@ -394,7 +399,7 @@ export function createFlashPanel(root, options = {}) {
       });
     } catch (e) {
       state.phase = "ready";
-      renderStep();
+      renderAll();
       progressWrap.hidden = true;
       if (isCancel(e)) { log("No Klipper port was picked."); return; }
       throw e;
@@ -406,7 +411,7 @@ export function createFlashPanel(root, options = {}) {
       return;
     }
     state.phase = "ready";
-    renderStep();
+    renderAll();
     const label = outcome.expect.label || "the device";
     showPrompt(`The touch was sent. The board should now show up as ${label}; the browser needs you to pick it once.`, [
       button(`Pick ${label}`, () => connectAndConfirm(), { primary: true }),
@@ -450,6 +455,7 @@ export function createFlashPanel(root, options = {}) {
     state.error = null;
     result.hidden = true;
     confirmBox.hidden = true;
+    renderMethods();
     renderStep();
     setStatus("Starting");
     const method = state.method;
@@ -472,7 +478,7 @@ export function createFlashPanel(root, options = {}) {
       state.phase = "failed";
       state.connection = null;
       progressWrap.hidden = true;
-      showFailure(e);
+      showFailure(e, method);
     } finally {
       if (connection.kind === "usb" || connection.kind === "serial") { try { await connection.device.close(); } catch (e) { /* gone */ } }
       renderAll();
@@ -503,9 +509,10 @@ export function createFlashPanel(root, options = {}) {
     help.open = false;
   }
 
-  function showFailure(e) {
+  /** Explain an error; method is the one the failed step ran with (a flash's own, not the select's). */
+  function showFailure(e, method = state.method) {
     if (isCancel(e)) { log("Cancelled."); renderAll(); return; }
-    const ex = explainError(e, { method: state.method, os: caps.os, browser: caps.browser });
+    const ex = explainError(e, { method, os: caps.os, browser: caps.browser });
     state.error = ex;
     log(`Error: ${ex.message}`);
     result.hidden = false;
@@ -522,6 +529,7 @@ export function createFlashPanel(root, options = {}) {
 
   // ── Events ──────────────────────────────────────────────────────
   methodSelect.addEventListener("change", async () => {
+    if (busy()) { methodSelect.value = state.method; return; }
     state.method = methodSelect.value;
     result.hidden = true;
     await dropConnection();
@@ -546,7 +554,7 @@ export function createFlashPanel(root, options = {}) {
       }
     },
     get method() { return state.method; },
-    set method(id) { state.method = id; renderAll(); },
+    set method(id) { if (busy()) return; state.method = id; renderAll(); },
     get state() { return state; },
     capabilities: caps,
     /** Ask for a flash address for a .bin: an inline form; resolves with a number or null. */

@@ -72,6 +72,12 @@ export class MockUsbDevice {
     if (this.lost) throw domError("NotFoundError", "The device was disconnected.");
   }
 
+  // Transfers to a device that is not open fail, as WebUSB's do.
+  _checkOpen() {
+    this._check();
+    if (!this.opened) throw domError("InvalidStateError", "The device must be opened first.");
+  }
+
   async open() {
     this._check();
     if (this.openError) throw this.openError;
@@ -135,14 +141,14 @@ export class MockUsbDevice {
   }
 
   async controlTransferIn(setup, length) {
-    this._check();
+    this._checkOpen();
     this.log.push(["controlIn", setup.request, setup.value, setup.index, length]);
     const res = this.handlers.controlIn ? await this.handlers.controlIn(setup, length, this) : { status: "stall" };
     return asInResult(res, length);
   }
 
   async controlTransferOut(setup, data) {
-    this._check();
+    this._checkOpen();
     const bytes = data === undefined ? new Uint8Array(0) : toBytes(data);
     this.log.push(["controlOut", setup.request, setup.value, setup.index, bytes.length]);
     const res = this.handlers.controlOut ? await this.handlers.controlOut(setup, bytes, this) : undefined;
@@ -150,7 +156,7 @@ export class MockUsbDevice {
   }
 
   async transferIn(endpointNumber, length) {
-    this._check();
+    this._checkOpen();
     if (this.halted.has(`in:${endpointNumber}`)) return { status: "stall", data: new DataView(new ArrayBuffer(0)) };
     const res = this.handlers.bulkIn ? await this.handlers.bulkIn(endpointNumber, length, this) : { status: "stall" };
     this._check();
@@ -160,7 +166,7 @@ export class MockUsbDevice {
   }
 
   async transferOut(endpointNumber, data) {
-    this._check();
+    this._checkOpen();
     const bytes = toBytes(data);
     if (this.halted.has(`out:${endpointNumber}`)) return { status: "stall", bytesWritten: 0 };
     const res = this.handlers.bulkOut ? await this.handlers.bulkOut(endpointNumber, bytes, this) : undefined;
