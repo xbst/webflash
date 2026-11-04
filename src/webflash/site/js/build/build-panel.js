@@ -330,7 +330,10 @@ export class BuildPanel {
           title: `downloading, ${formatBytes(done)} of ${formatBytes(total)}`,
         }),
       });
-      remember(AUTO_KEY, "1");
+      // Later visits build without asking only when the release is in Cache
+      // Storage: one held in memory since Clear cache would download again.
+      this.builder.cached = (await cachedFlags(tc.files)).every(Boolean);
+      if (this.builder.cached) remember(AUTO_KEY, "1");
       this.renderPill();
       const out = await this.configurator.exclusive(() => {
         if (!s.ref || s.ref.id !== job.ref.id || s.project !== job.project) {
@@ -615,6 +618,7 @@ export class BuildPanel {
   async cacheCleared() {
     this.clearedAt = Date.now();
     remember(AUTO_KEY, null);
+    this.consented = false;
     const tc = this.builder.toolchain;
     if (tc) this.builder.cached = (await cachedFlags(tc.files)).every(Boolean);
     this.renderPill();
