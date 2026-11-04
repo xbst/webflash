@@ -486,6 +486,10 @@ export class Session {
     else if (!projects.includes(project)) projects.push(project);
     const next = { ...f, project, projects };
     if (version) next.version = version;
+    // A pinned version must be one of the versions the reader picks from.
+    if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
+      next.versions = [...next.versions, next.version];
+    }
     this._t.firmware = next;
     // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
     const dropKatapult = project === "katapult" && Boolean(this._t.katapult);
