@@ -363,10 +363,12 @@ function setupThemes() {
 // Page 1's switch, its version selects and Embed options' "Version the card
 // starts with" all edit [firmware]: a change loads the new version once
 // configuring has started. version: the one to switch to (Katapult alone
-// takes page 1's Katapult version); by default the latest/release alias stays.
+// takes page 1's Katapult version); by default the latest/release alias stays
+// (leaving Katapult alone, setProject brings back the firmware's own version).
 function switchProject(project, version = null) {
   // An exact ref belongs to one project; the aliases work for any.
-  const v = version || (["latest", "release"].includes(session.version) ? session.version : "latest");
+  const v = version || (session.project === "katapult" ? null
+    : ["latest", "release"].includes(session.version) ? session.version : "latest");
   session.setProject(project, { version: v });
   if (configureStarted()) configurator.load({ reason: "switch" });
 }

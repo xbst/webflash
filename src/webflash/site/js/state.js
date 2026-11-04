@@ -193,6 +193,8 @@ export class Session {
     // The engine's side of Katapult beside the firmware (see the katapult getter).
     this._katapultEngine = freshKatapultEngine();
     this._setupIndex = 0;       // the setup Configure edits (setupIndex clamps it)
+    // The firmware's tables while Katapult is picked alone (setProject).
+    this._firmwareAside = null;
 
     this._listeners = new Map();
     this._undo = [];
@@ -420,6 +422,7 @@ export class Session {
     this._t = normalizeTables(tables);
     this.builds = { fw: null, katapult: null };
     this._setupIndex = 0;
+    this._firmwareAside = null;
     // An opened TOML's Katapult starts over in the engine.
     this._katapultEngine = freshKatapultEngine();
     if (name !== null) this.tomlName = name;
@@ -476,32 +479,69 @@ export class Session {
    * undo step). projects follows: a single project is replaced, a list keeps
    * it (or gains it), and Katapult never mixes with the firmware projects
    * (the loader refuses that).
+   *
+   * Katapult alone (page 1's None) takes each setup's Katapult defconfig as
+   * its defconfig and [katapult]'s versions, as a card's None does; the
+   * firmware's side is kept aside, so going back to a firmware brings back
+   * its projects, versions and defconfigs, and the Katapult it had, as
+   * configured alone. Without a version, leaving Katapult alone keeps an
+   * alias and takes "latest" for a Katapult ref.
    */
   setProject(project, { version = null, origin = "visual", undoable = true } = {}) {
     if (!PROJECTS.includes(project) || !this._t.firmware || project === this._t.firmware.project) return;
     if (undoable) this.checkpoint();
     const f = this._t.firmware;
-    let projects = f.projects && f.projects.length ? [...f.projects] : [f.project];
-    if (project === "katapult" || projects.includes("katapult") || projects.length === 1) projects = [project];
+    const k = this._t.katapult;
+    const setups = this._t.setups;
+    const aside = this._firmwareAside;
+    this._firmwareAside = null;
+    const alone = project === "katapult";
+    // Back from Katapult alone to the firmware it was picked from.
+    const back = !alone && f.project === "katapult" && Boolean(aside) &&
+      aside.setups.length === setups.length && aside.setups.every((s, i) => s.id === setups[i].id);
+    const base = back ? aside.firmware : f;
+    let projects = base.projects && base.projects.length ? [...base.projects] : [base.project];
+    if (alone || projects.includes("katapult") || projects.length === 1) projects = [project];
     else if (!projects.includes(project)) projects.push(project);
-    const next = { ...f, project, projects };
+    const next = { ...base, project, projects };
+    if (alone) next.versions = k ? k.versions : "all";
     if (version) next.version = version;
+    else if (back) next.version = aside.firmware.version;
+    else if (f.project === "katapult" && !PINLESS.includes(f.version)) next.version = "latest";
     // A pinned version must be one of the versions the reader picks from.
     if (Array.isArray(next.versions) && !PINLESS.includes(next.version) && !next.versions.includes(next.version)) {
       next.versions = [...next.versions, next.version];
     }
     this._t.firmware = next;
-    // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
-    const dropKatapult = project === "katapult" && Boolean(this._t.katapult);
-    if (dropKatapult) {
-      this._t.katapult = null;
-      this._t.setups = this._t.setups.map((s) => ({ ...s, katapult: null }));
-      this._katapultEngine = freshKatapultEngine();
+    const katapultChanged = (alone && Boolean(k)) || (back && Boolean(aside.katapult));
+    if (alone) {
+      // Katapult alone has no Katapult beside it (the loader refuses [katapult] then).
+      this._firmwareAside = { firmware: clone(f), katapult: k ? clone(k) : null, setups: clone(setups) };
+      if (k) {
+        this._t.katapult = null;
+        this._t.setups = setups.map((s) => ({ ...s, defconfig: typeof s.katapult === "string" ? s.katapult : "", katapult: null }));
+      }
+    } else if (back) {
+      // The firmware's defconfigs come back, and the Katapult it had, as
+      // configured alone, beside it in the setups that had one.
+      const kat = aside.katapult;
+      this._t.setups = setups.map((s, i) => {
+        const was = aside.setups[i];
+        return { ...s, defconfig: was.defconfig, katapult: kat && typeof was.katapult === "string" ? s.defconfig : null };
+      });
+      if (kat) {
+        const table = { ...kat, version: f.version, versions: f.versions };
+        if (Array.isArray(table.versions) && !PINLESS.includes(table.version) && !table.versions.includes(table.version)) {
+          table.versions = [...table.versions, table.version];
+        }
+        this._t.katapult = table;
+      }
     }
+    if (katapultChanged) this._katapultEngine = freshKatapultEngine();
     this._changed("project", origin);
     this._changed("firmware", origin);
-    if (dropKatapult) this._changed("katapult", origin);
-    if (version && version !== f.version) this._changed("version", origin);
+    if (katapultChanged) this._changed("katapult", origin);
+    if (next.version !== f.version) this._changed("version", origin);
     this._sync(origin);
   }
 

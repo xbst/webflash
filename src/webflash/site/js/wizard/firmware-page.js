@@ -129,15 +129,20 @@ export class FirmwarePage {
   pickFirmware(fw) {
     const s = this.session;
     const katapult = this.katapult;
+    const alone = s.project === "katapult";
     this.fw = fw;
     const project = this.project;
     if (project && project !== s.project) {
       this.actions.switchProject(project, project === "katapult" ? this.katapultVersion : null);
     }
     // From Katapult alone to a firmware: Katapult stays ticked, beside it
-    // (the switch made the page follow the session, which had none).
+    // (the switch made the page follow the session). The session brings back
+    // the Katapult the firmware had, as configured alone: load it, or let it
+    // go when it was unticked.
     this.katapult = katapult;
     if (fw !== "none" && katapult && !s.katapult) this._tickKatapult(true);
+    else if (fw !== "none" && alone && katapult) this.actions.loadKatapult("start");
+    else if (fw !== "none" && alone && s.katapult) s.setKatapult({ on: false });
     this.render();
   }
 
