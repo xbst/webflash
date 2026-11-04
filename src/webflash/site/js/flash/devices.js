@@ -622,9 +622,19 @@ export function configFitsImage(cfg, image) {
 /**
  * The connect step for a method when the board TOML gives none, as short
  * numbered steps (SPEC 7). fromKlipper: the restart from Klipper is offered;
- * serial: the firmware talks over a UART (a USB-UART adapter), at baud.
+ * serial: the firmware talks over a UART (a USB-UART adapter), at baud;
+ * pair: {title, deployer} for Katapult and a firmware that no ROM method
+ * writes together (an LPC176x), whose download puts Katapult on first.
  */
-export function defaultSteps(method, family = null, { fromKlipper = true, serial = false, baud = 250000 } = {}) {
+export function defaultSteps(method, family = null, { fromKlipper = true, serial = false, baud = 250000, pair = null } = {}) {
+  if (method === "download" && pair) {
+    return [
+      ...(pair.deployer
+        ? ["Download deployer.bin.", "Copy it to the SD card as firmware.bin.", "Power up once with the card in."]
+        : ["Download katapult.bin.", "Write it with an SWD or ISP tool."]),
+      `Then flash ${pair.title || "the firmware"} through Katapult.`,
+    ];
+  }
   switch (method) {
     case "katapult":
       return [

@@ -300,14 +300,18 @@ export function createFlashPanel(root, options = {}) {
       return;
     }
     const m = currentMethod();
+    // A pair no ROM method writes in one go (an LPC176x): Katapult goes on
+    // through its deployer.bin and the SD card, else with an SWD or ISP tool.
+    const rom = fw.parts ? fw.methods.find((x) => x.both) : null;
+    const pair = fw.parts && !rom ? { title: fw.parts[fw.parts.length - 1].title, deployer: (fw.artifacts || []).some((a) => /^deployer\.bin$/i.test(a.name)) } : null;
     if (m && m.appOnly) {
       // A pair over Katapult: only the firmware goes, onto the Katapult already there.
-      const rom = fw.methods.find((x) => x.both);
       notice.hidden = false;
-      notice.innerHTML = `<p>Katapult has to be on the board already${rom ? `: flash it once with ${esc(METHODS[rom.id] ? METHODS[rom.id].short : rom.id)}` : ""}.</p>`;
+      notice.innerHTML = `<p>Katapult has to be on the board already: ${rom ? `flash it once with ${esc(METHODS[rom.id] ? METHODS[rom.id].short : rom.id)}`
+        : pair && pair.deployer ? "copy deployer.bin to the SD card as firmware.bin and power the board up once" : "write katapult.bin with an SWD or ISP tool"}.</p>`;
     }
     if (method === "download") {
-      instructions.innerHTML = stepsHtml("download", fam);
+      instructions.innerHTML = stepsHtml("download", fam, { pair });
       renderDownloads(actions, fw);
       return;
     }
