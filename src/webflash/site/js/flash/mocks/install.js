@@ -9,6 +9,7 @@
 //   ?mock=can        a candleLight adapter with one Katapult and one Klipper node
 //   ?mock=uf2        a BOOTSEL drive
 //   &fail=claim|hang|verify|mcu|rdp|timeout|cancel|busy   one failure to show its explanation (hang: open() never settles, as Chrome on Windows without a WinUSB driver)
+//   &fail=vanish|unplug   for ?mock=uf2: the drive goes away with the last block (a successful flash) or after 64 KiB (a cable pulled)
 //   &os=windows|linux|mac|android  &browser=firefox|safari|brave   pretend to be elsewhere
 //
 // The firmware is a small generated image at the method's usual address,
@@ -68,8 +69,12 @@ export async function installMocks(params) {
     for (let i = 0; i < 20; i++) usb.willPick(() => (fail === "cancel" ? null : new GsUsbMockAdapter({ nodes, claimError, busDelayMs: 2 })));
     firmware = { name: "klipper.bin", bytes: sampleBin(2000), address: 0x08002000 };
   } else if (kind === "uf2") {
-    drive = bootselDrive({ chip: params.get("chip") === "rp2350" ? "rp2350" : "rp2040", vanishAfterBytes: fail === "vanish" ? 4096 : null });
-    firmware = { name: "klipper.uf2", bytes: toUf2(fromBin(sampleBin(9000), 0x10000000), "rp2040") };
+    // vanish: the drive goes away inside the last block, as when the ROM
+    // restarts the chip; unplug: it goes away after the first 64 KiB of a
+    // larger file, before the board has the whole file.
+    firmware = { name: "klipper.uf2", bytes: toUf2(fromBin(sampleBin(fail === "unplug" ? 100000 : 9000), 0x10000000), "rp2040") };
+    const vanishAfterBytes = fail === "vanish" ? firmware.bytes.length - 256 : fail === "unplug" ? 65536 + 4096 : null;
+    drive = bootselDrive({ chip: params.get("chip") === "rp2350" ? "rp2350" : "rp2040", vanishAfterBytes });
   }
 
   const win = {

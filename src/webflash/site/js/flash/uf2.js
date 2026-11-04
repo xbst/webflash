@@ -5,9 +5,10 @@
 // Raspberry Pi RP2", "Board-ID: RPI-RP2"; the RP2350 says "RP2350"), which
 // is how the picked folder is checked before anything is written. The ROM
 // restarts the chip as soon as the last block arrives, so the drive
-// disappears under the write: an error after the first bytes went out is
-// the expected end, not a failure, and the device's re-enumeration (or the
-// user) confirms the result.
+// disappears under the write: an error while the last chunk is written or
+// the file closed is the expected end, not a failure, and the device's
+// re-enumeration (or the user) confirms the result. An error before that
+// means the board did not get the whole file.
 
 import { FlashError, fail } from "./errors.js";
 import { toUf2, chipOfFamily, isForeignFamily, UF2_FAMILIES, formatSize } from "./firmware-file.js";
@@ -130,8 +131,12 @@ export function uf2Bytes(image, { family = null, chip = null } = {}) {
 
 /**
  * Write the .uf2 into the drive. Returns {written, disappeared}: disappeared
- * is true when the drive went away mid-write, which is what a successful
- * flash looks like from the host.
+ * is true when the drive went away while the last chunk was being written or
+ * the file closed, which is what a successful flash looks like from the host.
+ * The ROM restarts only once it has every block, so a drive lost before the
+ * last chunk was handed over means the board did not get the file: that
+ * throws, "disconnected" for an error that says the drive is gone. So does a
+ * refusal (NotAllowedError, QuotaExceededError, ...) at any point.
  */
 export async function writeUf2ToDrive(handle, bytes, { name = "firmware.uf2", log = null, progress = null } = {}) {
   let written = 0;
@@ -142,21 +147,37 @@ export async function writeUf2ToDrive(handle, bytes, { name = "firmware.uf2", lo
   } catch (e) {
     throw new FlashError(`The file could not be created on the drive: ${e && e.message ? e.message : e}`, { code: "drive", cause: e });
   }
+  // Whether the failing step is the last chunk's write or the close: only
+  // then can the board have every block. A refusal (permission, quota, a bad
+  // argument) is never the drive going away, wherever it comes.
+  let last = false;
   try {
     for (let off = 0; off < bytes.length; off += WRITE_CHUNK) {
       const chunk = bytes.subarray(off, Math.min(off + WRITE_CHUNK, bytes.length));
+      last = off + chunk.length >= bytes.length;
       await writable.write(chunk);
       written += chunk.length;
       if (progress) progress("write", written, bytes.length);
     }
+    last = true;
     await writable.close();
     if (log) log(`Wrote ${formatSize(written)} to ${name}; the board restarts when its bootloader has taken the last block`);
     return { written, disappeared: false };
   } catch (e) {
-    if (written > 0) {
-      if (log) log(`The drive went away after ${formatSize(written)} of ${formatSize(bytes.length)}: the board took the file and restarted (${e && e.message ? e.message : e})`);
+    const why = `${e && e.name ? `${e.name}: ` : ""}${e && e.message ? e.message : e}`;
+    const refused = !!(e && ["NotAllowedError", "SecurityError", "QuotaExceededError", "TypeError"].includes(e.name));
+    if (last && !refused) {
+      if (log) log(`The drive went away as the last part of ${formatSize(bytes.length)} went out: the board took the file and restarted (${why})`);
       try { await writable.abort(); } catch (e2) { /* gone */ }
       return { written, disappeared: true };
+    }
+    try { await writable.abort(); } catch (e2) { /* gone */ }
+    if (written > 0) {
+      const fix = "Hold BOOTSEL while plugging the board back in, pick its drive again and flash again; if it keeps dropping out, try another USB cable or port.";
+      if (e && (e.name === "NotFoundError" || e.name === "NetworkError" || e.name === "InvalidStateError")) {
+        throw new FlashError(`The drive went away after ${formatSize(written)} of ${formatSize(bytes.length)}, before the board had the whole file (${why}).`, { code: "disconnected", fix, cause: e });
+      }
+      throw new FlashError(`Writing to the drive stopped after ${formatSize(written)} of ${formatSize(bytes.length)}${last ? "" : ", before the board had the whole file"}: ${why}`, { code: "flash", fix, cause: e });
     }
     throw new FlashError(`Writing to the drive failed before any data went out: ${e && e.message ? e.message : e}`, { code: "drive", cause: e });
   }
