@@ -131,7 +131,9 @@ const SECURE_PAGE = "Open the page over HTTPS or from localhost.";
 
 const EMBED_ALLOW = "Embedded in another site? Its iframe needs allow=\"usb; serial\".";
 
-const PICKER_NOTE = "Put the board in the right mode and plug it straight into this computer (not a hub).";
+const UART_BAUD = "Over UART, Katapult must use the same baud rate as the firmware.";
+
+const PICKER_NOTE ="Put the board in the right mode and plug it straight into this computer (not a hub).";
 
 const DISCONNECTED_FIXES = [
   "Just flashed? Then the restart is expected: check that the board shows up as Klipper (or Katapult).",
@@ -163,7 +165,8 @@ function vidPid(method) {
 /**
  * Turn any error into {code, title, message, fixes}. context names the
  * method ("dfu", "picoboot", "uf2", "katapult", "katapult-can"), the
- * transport ("usb", "serial", "filesystem") and, optionally, os and browser
+ * transport ("usb", "serial", "filesystem"), optionally the firmware's
+ * interface (iface: "usb", "serial", "can", "usbcan") and os and browser
  * (detected when absent).
  */
 export function explainError(err, context = {}) {
@@ -191,6 +194,8 @@ export function explainError(err, context = {}) {
           "Reset the board into its bootloader and click Connect again.",
           "Still timing out? Try another USB cable or port (a charge-only cable has no data lines).",
         );
+        // One baud serves Klipper's request and Katapult, as flashtool's -b does.
+        if (method === "katapult" && context.iface === "serial") fixes.push(UART_BAUD);
         break;
       case "verify-failed":
         if (!fixes.length) fixes.push(

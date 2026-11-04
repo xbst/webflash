@@ -761,7 +761,7 @@ export function createFlashPanel(root, options = {}) {
   /** Explain an error; method is the one the failed step ran with (a flash's own, not the select's). */
   function showFailure(e, method = state.method) {
     if (isCancel(e)) { log("Cancelled."); renderAll(); return; }
-    const ex = explainError(e, { method, os: caps.os, browser: caps.browser });
+    const ex = explainError(e, { method, iface: state.firmware ? state.firmware.iface : null, os: caps.os, browser: caps.browser });
     state.error = ex;
     log(`Error: ${ex.message}`);
     result.hidden = false;
