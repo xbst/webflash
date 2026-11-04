@@ -1,0 +1,18 @@
+# A firmware file flashed as it is, with nothing to configure or build: here
+# a Katapult build for the STM32G0B1, installed with the chip's DFU bootloader.
+# README.md says how katapult.bin was built.
+
+[board]
+title = "Katapult for STM32G0B1 (prebuilt)"
+description = "A ready-made Katapult bootloader for STM32G0B1 boards on USB with an 8 MHz crystal. It takes the first 8 KiB of flash."
+
+[prebuilt]
+file = "katapult.bin"
+address = 0x08000000
+mcu = "stm32g0b1xx"
+
+[flash]
+methods = ["dfu", "download"]
+
+[flash.instructions]
+dfu = "Hold BOOT, tap RESET, release BOOT, then click Connect."

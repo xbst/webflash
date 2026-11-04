@@ -1,0 +1,169 @@
+# The parity matrix: one row per MCU family and flashing path (WebFlash SPEC
+# Appendix B). Every row is a minimal configuration, exactly what
+# `make savedefconfig` writes for it, per project the row applies to.
+#
+# `webflash make-check` compares the make interpreter with GNU make on each
+# row; `webflash parity` builds each row with GCC and clang and compares the
+# results; `.github/workflows/ci.yml` runs both. See README.md beside this file.
+#
+# A row's keys: `name`, `projects`, `why`, `defconfig`, and optionally
+# `unless`, a list of Kconfig symbols (without CONFIG_): the row does not
+# apply to a tree whose Kconfig defines any of them, so a row for an older
+# layout is skipped on the trees that have the newer one.
+
+[[row]]
+name = "stm32g0b1-usb"
+projects = ["klipper", "kalico"]
+why = "the Isik's Tech boards; Katapult + DFU"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+"""
+
+[[row]]
+name = "stm32g0b1-can"
+projects = ["klipper", "kalico"]
+why = "CAN toolheads"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+CONFIG_STM32_MMENU_CANBUS_PB0_PB1=y
+"""
+
+[[row]]
+name = "stm32f072-usbcan"
+projects = ["klipper"]
+why = "ToqueCAN-style bridges; F0 has HAVE_LIMITED_CODE_SIZE"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32F072=y
+CONFIG_STM32_FLASH_START_0000=y
+CONFIG_STM32_USBCANBUS_PA11_PA12=y
+"""
+
+[[row]]
+name = "stm32f103-usb"
+projects = ["klipper"]
+why = "the most common cheap board; tight flash"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_STM32_FLASH_START_7000=y
+"""
+
+[[row]]
+name = "stm32f407-usb"
+projects = ["klipper"]
+why = "SKR Pro class"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32F407=y
+"""
+
+[[row]]
+name = "stm32h723-usb"
+projects = ["klipper", "kalico"]
+why = "AFC-Lite, Ouroboros; biggest headers"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32H723=y
+"""
+
+[[row]]
+name = "rp2040-usb"
+projects = ["klipper"]
+why = "stage2 assembly, UF2"
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+"""
+
+[[row]]
+name = "rp2040-katapult"
+projects = ["klipper"]
+why = "Katapult on RP2040"
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+CONFIG_RPXXXX_FLASH_START_4000=y
+"""
+
+[[row]]
+name = "rp2350-usb"
+projects = ["klipper"]
+why = "Cortex-M33 multilib"
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+CONFIG_MACH_RP2350=y
+"""
+
+[[row]]
+name = "rp2040-usb-legacy"
+projects = ["klipper"]
+why = "MACH_RP2040 before v0.13.0's MACH_RPXXXX; lib/rp2040/elf2uf2"
+unless = ["MACH_RPXXXX"]
+defconfig = """
+CONFIG_MACH_RP2040=y
+"""
+
+[[row]]
+name = "lpc1769-usb"
+projects = ["klipper"]
+why = "download-only path"
+defconfig = """
+CONFIG_MACH_LPC176X=y
+CONFIG_MACH_LPC1769=y
+"""
+
+[[row]]
+name = "samd51-usb"
+projects = ["klipper"]
+why = "SAMD path"
+defconfig = """
+CONFIG_MACH_ATSAMD=y
+CONFIG_MACH_SAMD51G19=y
+"""
+
+[[row]]
+name = "same70-usb"
+projects = ["klipper"]
+why = "Cortex-M7 (atsam)"
+defconfig = """
+CONFIG_MACH_ATSAM=y
+CONFIG_MACH_SAME70Q20B=y
+"""
+
+[[row]]
+name = "hc32f460-serial"
+projects = ["klipper"]
+why = "the odd one out"
+defconfig = """
+CONFIG_MACH_HC32F460=y
+"""
+
+[[row]]
+name = "same51-indx"
+projects = ["kalico"]
+why = "Kalico's INDX heater: the .c++ rules, libc++ headers and -lm"
+defconfig = """
+CONFIG_LOW_LEVEL_OPTIONS=y
+CONFIG_MACH_ATSAMD=y
+CONFIG_MACH_SAME51J19=y
+CONFIG_CLOCK_REF_X25M_XOSC0=y
+CONFIG_WANT_INDX_HEATER=y
+"""
+
+[[row]]
+name = "katapult-stm32g0b1-usb"
+projects = ["katapult"]
+why = "the bootloader itself + deployer"
+defconfig = """
+CONFIG_MACH_STM32=y
+CONFIG_MACH_STM32G0B1=y
+CONFIG_STM32_FLASH_START_2000=y
+"""
+
+[[row]]
+name = "katapult-rp2040-usb"
+projects = ["katapult"]
+why = "bootloader on RP2040"
+defconfig = """
+CONFIG_MACH_RPXXXX=y
+"""

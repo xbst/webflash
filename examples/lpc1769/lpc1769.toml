@@ -1,0 +1,24 @@
+# An LPC1769 board with the usual 16 KiB SD card bootloader: WebFlash builds
+# the firmware and the reader copies it to the SD card. No flashing from the
+# browser.
+
+[board]
+title = "LPC1769 over USB"
+description = "Klipper firmware for an LPC1769 board with the 16 KiB SD card bootloader, connected over USB. The board loads new firmware from its SD card at power-up."
+
+[firmware]
+project = "klipper"
+
+# What `make savedefconfig` writes: the LPC1769; the 16 KiB bootloader and
+# USB are defaults.
+[config]
+defconfig = """
+CONFIG_MACH_LPC176X=y
+CONFIG_MACH_LPC1769=y
+"""
+
+[flash]
+methods = ["download"]
+
+[flash.instructions]
+download = "Copy `klipper.bin` to the SD card as `firmware.bin`, put the card in the board and power it up. The bootloader renames the file to `FIRMWARE.CUR` once it has flashed it."

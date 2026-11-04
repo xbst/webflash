@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebFlash</title>
+<meta name="description" content="Configure, build and flash Klipper, Kalico and Katapult firmware from the browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M9.5 1L3 9.2h4.2L6.3 15 13 6.6H8.7z' fill='%23ffbf00'/%3E%3C/svg%3E">
+<!--webflash-assets-->
+<script>
+/* The color scheme before anything paints: ?theme=dark|light forces one,
+   otherwise dark unless the system asks for light. main.js keeps it in step
+   with the system afterwards. A same-origin page embedded here (the Generate
+   preview) follows data-theme through its own theme-sync script. */
+(function(){
+  var t=null;
+  try{t=new URLSearchParams(location.search).get('theme')}catch(e){}
+  if(t!=='dark'&&t!=='light')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';
+  document.documentElement.setAttribute('data-theme',t);
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- Top toolbar -->
+  <header class="toolbar" role="toolbar" aria-label="WebFlash">
+    <span class="toolbar-title"><span class="brand-mark" aria-hidden="true"></span>WebFlash</span>
+    <label class="field">
+      Project
+      <select id="project-select" title="The firmware to build">
+        <option value="klipper">Klipper</option>
+        <option value="kalico">Kalico</option>
+        <option value="katapult">Katapult</option>
+      </select>
+    </label>
+    <label class="field">
+      Version
+      <select id="version-select" disabled title="The version to configure, from the source snapshots">
+        <option value="latest">Loading versions…</option>
+      </select>
+      <span class="ref-badge" id="version-badge" hidden>unchecked</span>
+    </label>
+    <span class="separator"></span>
+    <label class="file-btn" id="open-toml-label" title="Open a board TOML, with its image and firmware file if it names them">
+      Open TOML
+      <input type="file" id="open-toml" accept=".toml,image/*,.bin,.hex,.uf2,.elf" multiple>
+    </label>
+    <button id="save-toml" title="Save the board TOML (Ctrl+S)">Save TOML</button>
+    <button id="upload-firmware" disabled title="Flash a firmware file you upload">Upload firmware</button>
+    <span class="separator"></span>
+    <label class="field">
+      Theme
+      <select id="theme-select" title="The theme of the generated page"></select>
+    </label>
+    <button id="generate-btn" class="primary" title="Generate the embeddable page from the board TOML">Generate</button>
+    <span class="toolbar-spacer"></span>
+    <span class="runtime" id="runtime" aria-live="polite">
+      <span class="pill" id="status-python" title="The Python runtime (Pyodide), loaded when it is first needed">Python</span>
+      <span class="pill off" id="status-toolchain" title="The compiler (clang and lld for Arm, in WebAssembly), downloaded with the first build">Toolchain</span>
+      <span class="pill" id="status-sources" title="The source snapshots, loaded when a version is configured">Sources</span>
+    </span>
+    <button id="about-btn" class="icon-btn" title="About WebFlash" aria-label="About WebFlash">?</button>
+  </header>
+
+  <!-- Panels -->
+  <main class="panels">
+
+    <!-- Left: configuration -->
+    <section class="panel panel-left" aria-label="Configuration">
+      <div class="panel-tabs" role="tablist" aria-label="Configuration views">
+        <button id="tab-configure" class="panel-tab" role="tab" aria-selected="true" aria-controls="configure-panel">Configure</button>
+        <button id="tab-config" class="panel-tab" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1">.config</button>
+        <button id="tab-embed" class="panel-tab" role="tab" aria-selected="false" aria-controls="embed-panel" tabindex="-1">Embed options</button>
+        <button id="tab-toml" class="panel-tab" role="tab" aria-selected="false" aria-controls="toml-panel" tabindex="-1">TOML</button>
+      </div>
+
+      <div id="configure-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-configure">
+        <div class="panel-bar">
+          <input type="search" id="kconfig-search" placeholder="Search options (/)" aria-label="Search the options" disabled>
+          <span class="kc-count" id="kconfig-count"></span>
+          <button id="kconfig-reset" disabled title="Set every option back to its Kconfig default (Ctrl+Z undoes it)">Reset to defaults</button>
+          <button id="kconfig-load" disabled title="Paste or open a .config or defconfig and apply it">Load .config</button>
+        </div>
+        <div class="kc-status" id="kconfig-status" hidden></div>
+        <div class="kc-notice" id="kconfig-notice" role="status" hidden></div>
+        <div class="kc-scroll" id="kconfig-scroll">
+          <div class="kc-start" id="kconfig-start"></div>
+          <div id="kconfig-tree"></div>
+        </div>
+      </div>
+
+      <div id="config-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-config" hidden>
+        <div class="panel-bar">
+          <label class="check" title="The defconfig: only what differs from the defaults, as a board TOML's [config] holds it"><input type="checkbox" id="config-minimal" disabled> Minimal (defconfig)</label>
+          <span class="bar-note" id="config-note"></span>
+          <span class="bar-spacer"></span>
+          <button id="config-copy" disabled>Copy</button>
+          <button id="config-download" disabled>Download</button>
+        </div>
+        <textarea id="config-text" class="code" readonly spellcheck="false" aria-label="The configuration"></textarea>
+      </div>
+
+      <div id="embed-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-embed" hidden>
+        <div class="opt-panel" id="embed-options"></div>
+      </div>
+
+      <div id="toml-panel" class="panel-tab-content" role="tabpanel" aria-labelledby="tab-toml" hidden>
+        <div class="panel-bar">
+          <span class="file-name" id="toml-name">board.toml</span>
+          <span class="toml-files" id="toml-files"></span>
+          <span class="bar-spacer"></span>
+          <button id="toml-copy" title="Copy the board TOML">Copy</button>
+        </div>
+        <textarea id="toml-text" class="code" readonly spellcheck="false" aria-label="Board TOML: what Save TOML writes"></textarea>
+        <div class="toml-status" id="toml-status" role="status"></div>
+      </div>
+    </section>
+
+    <!-- Right: build and flash -->
+    <section class="panel panel-right" aria-label="Build and flash">
+      <div class="card" id="build-card">
+        <div class="card-head">
+          <h2>Build</h2>
+          <span class="build-status" id="build-status" aria-live="polite"></span>
+          <span class="card-spacer"></span>
+          <button id="build-cancel" hidden title="Stop the build">Cancel</button>
+          <button id="build-btn" class="primary" disabled title="Load the configuration first (the Configure tab).">Build</button>
+        </div>
+        <div class="build-start" id="build-start" hidden></div>
+        <progress class="build-bar" id="build-bar" hidden aria-label="Build progress"></progress>
+        <ol class="progress-list" id="build-progress" aria-label="Build steps"></ol>
+        <div class="build-error" id="build-error" role="alert" hidden></div>
+        <table class="memory" id="build-memory" hidden aria-label="Memory use"></table>
+        <div class="artifacts" id="build-artifacts"></div>
+        <details class="log-box" id="build-log-box">
+          <summary>Log <span class="log-count" id="build-log-count"></span><button id="build-log-copy" class="mini" disabled title="Copy the build log">Copy</button></summary>
+          <pre class="log" id="build-log" tabindex="0" aria-label="Build log"></pre>
+        </details>
+        <p class="card-note build-plan" id="build-plan" hidden></p>
+        <p class="card-note">Builds run in this browser: clang and lld compiled to WebAssembly, driven by the project's own Makefiles.</p>
+      </div>
+
+      <div class="card" id="flash-card">
+        <div class="card-head">
+          <h2>Flash</h2>
+          <span class="card-spacer"></span>
+          <label class="field">Method
+            <select id="flash-method" disabled title="How to write the firmware to the board">
+              <option>Download</option>
+            </select>
+          </label>
+        </div>
+        <div class="flash-step" id="flash-step">
+          <p class="flash-instructions" id="flash-instructions">Pick a method once a firmware is built or uploaded.</p>
+          <div class="flash-actions">
+            <button id="flash-connect" class="primary" disabled title="Pick the board in the browser's device list">Connect</button>
+            <button id="flash-write" disabled title="Write and verify the firmware">Flash</button>
+          </div>
+          <progress id="flash-progress" max="100" value="0" hidden></progress>
+          <div class="flash-result" id="flash-result" hidden></div>
+        </div>
+        <details class="help-box" id="flash-help">
+          <summary>What went wrong?</summary>
+          <p>Common problems and their fixes appear here: drivers on Windows, permissions on Linux, a board that is not in its bootloader.</p>
+        </details>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

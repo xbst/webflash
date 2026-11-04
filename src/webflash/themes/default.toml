@@ -1,0 +1,98 @@
+# ─────────────────────────────────────────────────────────────────────
+# WebFlash theme: "default"
+#
+# This is the built-in default.  It sets only a name: every color falls
+# back to WebFlash's built-in palette (defined in webflash/config.py), so a
+# board with no `theme` renders exactly like this.
+#
+# To make your own theme, copy this file to `<name>.toml` (in the bundled
+# themes folder, or a board-local `theme_dir`) and uncomment/override what
+# you want to change.  A theme only needs to state what differs.
+# ─────────────────────────────────────────────────────────────────────
+
+[theme]
+name = "Default"
+
+# Fonts.  `source` is "google" (loaded from Google Fonts), "bundled" (a font
+# file embedded in the output as base64, so it stays self-contained), or
+# "system" (family is used verbatim as a CSS stack).  Omit [font] to use
+# Roboto, and [font.mono] (the log, the .config text, inline code) to use
+# Roboto Mono.
+#
+# [font]
+# family  = "Roboto"
+# source  = "google"
+# weights = "400;500;600"        # google only
+# file    = "inter.woff2"        # bundled only, path relative to this file
+#
+# [font.mono]
+# family  = "Roboto Mono"
+# source  = "google"
+# weights = "400;500"
+
+# Behavior of the card.  Omit [behavior] to keep these defaults.
+#
+# [behavior]
+# show_log      = false          # start with the build/flash log expanded
+# show_image    = true           # show the board photo, when the TOML names one
+# compact       = false          # hide the description and the memory table
+# show_versions = true           # the project/version selects, when the TOML allows them
+# confirm_flash = true           # confirm device, address range and method before writing
+# font_scale    = 1.0            # scales the card's text (0.5 to 3)
+# max_width     = 720            # px, the card's widest (at least 280)
+
+# Colors are CSS values (hex, rgb(), rgba(), …).  `light` applies in light
+# mode, `dark` in dark mode; the embedding site's toggle, ?theme=, and the OS
+# scheme switch between them.  Token names are the generated CSS variables
+# without the leading `--`.
+#
+# [colors.light]
+# bg             = "#ffffff"           # page background ("transparent" blends into a docs site)
+# text           = "#1a1a1a"           # primary text
+# text-muted     = "#666666"           # secondary text: hints, sizes, the notice
+# panel-bg       = "#f6f6f6"           # the card and its sections
+# panel-border   = "#dddddd"
+# panel-shadow   = "rgba(0,0,0,.08)"
+# accent         = "#2563eb"           # primary buttons (Build, Flash, Connect), progress, links
+# accent-text    = "#ffffff"           # text on accent
+# control-bg     = "#ffffff"           # selects, inputs, secondary buttons
+# control-border = "#cccccc"
+# control-text   = "#1a1a1a"
+# log-bg         = "#111111"           # the build/flash log
+# log-text       = "#e0e0e0"
+# ok             = "#15803d"           # status lines and the result box
+# warn           = "#b45309"
+# error          = "#b91c1c"
+# divider        = "#e5e5e5"           # separators
+# scroll-thumb   = "rgba(0,0,0,.22)"   # the log's scrollbar thumb
+# scroll-track   = "transparent"       # and its track
+#
+# [colors.dark]
+# bg             = "#131313"
+# text           = "#e0e0e0"
+# text-muted     = "#a3a3a3"
+# panel-bg       = "#1c1c1c"
+# panel-border   = "#333333"
+# panel-shadow   = "rgba(0,0,0,.4)"
+# accent         = "#60a5fa"
+# accent-text    = "#0b1220"
+# control-bg     = "#262626"
+# control-border = "#444444"
+# control-text   = "#e0e0e0"
+# log-bg         = "#0b0b0b"
+# log-text       = "#d4d4d4"
+# ok             = "#4ade80"
+# warn           = "#fbbf24"
+# error          = "#f87171"
+# divider        = "#333333"
+# scroll-thumb   = "rgba(255,255,255,.20)"
+# scroll-track   = "transparent"
+
+# Raw CSS escape hatch, appended after the generated variable blocks, for
+# anything the tokens above can't express.  It is emitted verbatim and is a
+# trusted, author-controlled surface — keep board data out of it.
+#
+# [extra_css]
+# css = """
+# .wf-card { border-radius: 12px; }
+# """

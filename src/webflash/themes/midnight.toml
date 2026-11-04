@@ -1,0 +1,61 @@
+# "Midnight" — an indigo-tinted card with a violet accent.
+#
+# The palette of PinConnect's Midnight theme: Inter for the text and
+# JetBrains Mono for the log and the configuration, with the log expanded
+# from the start.  Copy and tweak to taste.
+
+[theme]
+name = "Midnight"
+
+[font]
+family = "Inter"
+source = "google"
+weights = "400;500;600"
+
+[font.mono]
+family = "JetBrains Mono"
+source = "google"
+weights = "400;500"
+
+[behavior]
+show_log = true
+
+[colors.light]
+bg             = "#f6f6fb"
+text           = "#1a1a2e"
+text-muted     = "#55556e"
+panel-bg       = "#ffffff"
+panel-border   = "#d9d9e8"
+panel-shadow   = "rgba(40,40,90,.14)"
+accent         = "#6d4aff"
+accent-text    = "#ffffff"
+control-bg     = "#ffffff"
+control-border = "#c9c9de"
+control-text   = "#1a1a2e"
+log-bg         = "#1a1a2e"
+log-text       = "#e6e6f2"
+ok             = "#15803d"
+warn           = "#b45309"
+error          = "#b91c1c"
+divider        = "#e7e7f1"
+scroll-thumb   = "rgba(40,40,90,.25)"
+
+[colors.dark]
+bg             = "#0e0e1a"
+text           = "#e6e6f2"
+text-muted     = "#aaaac8"
+panel-bg       = "#17172a"
+panel-border   = "#2c2c47"
+panel-shadow   = "rgba(0,0,0,.5)"
+accent         = "#8b6eff"
+accent-text    = "#0e0e1a"
+control-bg     = "#1b1b2e"
+control-border = "#3a3a5c"
+control-text   = "#e6e6f2"
+log-bg         = "#09091a"
+log-text       = "#dcdcf0"
+ok             = "#4ade80"
+warn           = "#fbbf24"
+error          = "#f87171"
+divider        = "#2a2a45"
+scroll-thumb   = "rgba(220,220,240,.22)"

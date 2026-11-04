@@ -1,0 +1,92 @@
+# Source snapshot policy: which refs of which projects the site offers, and
+# what goes into their bundles. `webflash sources build` reads it, daily in the
+# Pages workflow (.github/workflows/pages.yml). Unknown keys are errors.
+#
+# Each snapshot is one ref of one project at one commit: a core bundle (what
+# configuring needs, and everything outside lib/ that a build needs) plus one
+# bundle per lib/<dir>, fetched only when a configuration uses it. Bundles are
+# tar.gz files named by the SHA-256 of their bytes, so identical trees share
+# one file across refs and projects.
+
+# How many days a ref that leaves the policy (an old tag past the newest
+# `tags`, a branch removed from `branches` or deleted upstream) stays in the
+# index, so a board TOML pinned to it keeps working for a while. Pin a ref to
+# keep it for good.
+age_days = 30
+
+# How many days the bundles of a ref's previous snapshot stay published after
+# the ref moves to a new commit, so a page that loaded the previous index can
+# still fetch them.
+superseded_days = 2
+
+# One table per project, in the order the site lists them.
+#   title           the name the site shows
+#   repo            the git repository (https URL)
+#   default_branch  the "latest" choice, always listed first
+#   branches        other branches to publish
+#   tags            how many of the newest tags to publish, by version order
+#   tag_pattern     optional regular expression a tag must match in full
+#   pin             refs (tags or branches) kept whatever the rules above say
+[klipper]
+title = "Klipper"
+repo = "https://github.com/Klipper3d/klipper"
+default_branch = "master"
+tags = 3
+tag_pattern = 'v\d+\.\d+\.\d+'
+
+[kalico]
+title = "Kalico"
+repo = "https://github.com/KalicoCrew/kalico"
+default_branch = "main"
+branches = ["bleeding-edge-v2"]
+tags = 6
+# Monthly releases only: the repository also carries Klipper's old tags
+# (v0.1.0 to v0.12.0), which are Klipper versions, not Kalico releases.
+tag_pattern = 'v\d{4}\.\d{2}\.\d{2}'
+
+[katapult]
+title = "Katapult"
+repo = "https://github.com/Arksine/katapult"
+default_branch = "master"
+tags = 3
+tag_pattern = 'v\d+\.\d+\.\d+'
+
+# The core bundle: paths relative to the repository root. `*` matches within a
+# folder, `**` any number of folders. A lib/<dir>/** line puts that folder in
+# the core, so it gets no bundle of its own; every other folder under lib/ is
+# a bundle of its own, pruned by [prune].
+[core]
+include = [
+    "Makefile",
+    "src/**",
+    "scripts/**/*.py",
+    "scripts/**/*.sh",
+    "lib/README",
+    "lib/kconfiglib/**",
+    "lib/cmsis-core/**",
+    "lib/fast-hash/**",
+    "lib/can2040/**",
+    "lib/elf2uf2/**",
+    # Where Klipper kept elf2uf2 before v0.13.0. Its main.cpp builds the host
+    # tool that makes klipper.uf2, and lib/rp2040's pruning keeps no *.cpp.
+    "lib/rp2040/elf2uf2/**",
+    "klippy/msgproto.py",
+    "klippy/__init__.py",
+    "COPYING",
+    "LICENSE",
+    "README.md",
+]
+
+# Pruning of each lib/<dir> bundle, matched against paths inside that folder
+# as in .gitignore: a pattern ending in "/" matches a folder at any depth (and
+# everything in it), any other pattern a file name. A file is kept when it
+# matches `always`, or matches `keep` and not `drop`. Anything else is left
+# out. A file a Makefile needs that these rules drop is a bug, and the
+# snapshot gate, which builds from the bundles only, catches it.
+[prune]
+keep = [
+    "include/", "cmsis_include/", "device/", "boot_stage2/", "gcc/", "driver/", "mcu/",
+    "*.c", "*.h", "*.S", "*.ld", "*.lds", "*.patch", "pad_checksum",
+]
+drop = ["*.pdf", "*.md", "doc*/", "example*/", "template*/", "svd/", "*.svd", "*.xml"]
+always = ["LICENSE*", "COPYING*", "license*"]
