@@ -40,10 +40,16 @@ export function optionFor(options, node) {
 }
 
 export class OptionsPanel {
-  constructor(container, session, { themes = () => [] } = {}) {
+  /**
+   * onVersion(version) switches the version the card starts with, as the
+   * toolbar's Version select does (and loads it once configuring started);
+   * without it the select only changes the session.
+   */
+  constructor(container, session, { themes = () => [], onVersion = null } = {}) {
     this.container = container;
     this.session = session;
     this.themes = themes;
+    this.onVersion = onVersion || ((version) => session.setVersion(version));
     this._adding = new Set();   // methods whose instructions box was opened but is still empty
     this._build();
     this._bind();
@@ -159,7 +165,7 @@ export class OptionsPanel {
       else projects = projects.filter((p) => p !== "katapult");
       s.setFirmware({ projects: PROJECTS.filter((p) => projects.includes(p)) });
     });
-    e.version.addEventListener("change", () => s.setVersion(e.version.value));
+    e.version.addEventListener("change", () => this.onVersion(e.version.value));
     e.versionsMode.addEventListener("change", () => {
       const mode = e.versionsMode.querySelector("input:checked").value;
       if (mode === "list") {

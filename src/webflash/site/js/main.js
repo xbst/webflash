@@ -450,6 +450,13 @@ async function refreshThemes() {
 let picker = null;
 let optionsPanel = null;
 
+// The toolbar's Version select and Embed options' "Version the card starts
+// with" both edit [firmware] version: either one loads the new version.
+function switchVersion(version) {
+  session.setVersion(version);
+  if (configureStarted()) configurator.load({ reason: "switch" });
+}
+
 function setupToolbar() {
   picker = new VersionPicker({
     projectSelect: $("project-select"), versionSelect: $("version-select"), badge: $("version-badge"),
@@ -460,10 +467,7 @@ function setupToolbar() {
       session.setProject(project, { version });
       if (configureStarted()) configurator.load({ reason: "switch" });
     },
-    onVersion: (version) => {
-      session.setVersion(version);
-      if (configureStarted()) configurator.load({ reason: "switch" });
-    },
+    onVersion: switchVersion,
   });
 
   const theme = $("theme-select");
@@ -709,7 +713,7 @@ async function init() {
   tabs = setupPanelTabs();
   setupTomlView();
   setupConfigure();
-  optionsPanel = new OptionsPanel($("embed-options"), session, { themes: () => themeList });
+  optionsPanel = new OptionsPanel($("embed-options"), session, { themes: () => themeList, onVersion: switchVersion });
   new ConfigTab({
     textarea: $("config-text"), minimal: $("config-minimal"), copy: $("config-copy"),
     download: $("config-download"), note: $("config-note"),
