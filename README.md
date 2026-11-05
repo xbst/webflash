@@ -1,5 +1,16 @@
 # WebFlash
 
+> [!NOTE]
+> This project currently is in beta, with limited testing done.
+>
+> Tested:
+> - STM32G0B1, Klipper and Kalico, CAN and USB, with and without Katapult. Klipper connects on all, but not tested on a real printer.
+> - STM32F072, Klipper in CAN bridge mode, without Katapult. Klipper connects on all, but not tested on a real printer.
+> - RP2040, Klipper, USB, with and without Katapult. Klipper connects on all, but not tested on a real printer.
+> - Every available ARM config (AVR isn't supported), all compile, but not tested on hardware.
+>
+> If you test anything we haven't tested yet (including using above chips on an actual printer), let me know how it went. Feedback like that helps a lot with making sure everything is good.
+
 Configure, build and flash Klipper, Kalico and Katapult firmware for 3D printer boards from a web browser, with nothing to install. WebFlash shows the project's own `make menuconfig` options, compiles the firmware in the browser with clang and lld built to WebAssembly, and flashes it over USB: the STM32 DFU bootloader, RP2040 and RP2350 PICOBOOT and UF2, and Katapult over USB, UART and CAN. It also turns a board's firmware settings into a themed card for that board's documentation, so readers build and flash the right firmware in one place.
 
 ![A WebFlash card for an STM32G0B1 board: Katapult ticked beside Klipper, both built in the browser, then flashed together over DFU, ending with the line for printer.cfg](assets/webflash-demo.gif)
@@ -8,7 +19,7 @@ Configure, build and flash Klipper, Kalico and Katapult firmware for 3D printer 
 
 ## Quick start
 
-Open **<https://webflash.isiks.tech>** in Chrome or Edge on a computer and follow its five steps. **Firmware**: pick Klipper, Kalico or Katapult alone, a version (a release, a branch, or the version Mainsail shows for your MCU), and whether to flash Katapult with it. **Configure**: set the options as you would in `make menuconfig`; the ones Klipper and Katapult share are set once. **Build**: the firmware is compiled in your browser, so your configuration never leaves it. **Flash**: plug the board in, pick it in the browser's device list, and WebFlash writes the firmware and reads it back to verify it. Firefox builds the firmware and downloads it, since only Chromium browsers can talk to USB devices.
+Open **<https://webflash.isiks.tech>** in Chrome on a computer and follow its five steps. Firefox builds the firmware and downloads it, since only Chromium browsers can talk to USB devices.
 
 **Embed** keeps the configuration as a board TOML (**Save TOML**) and turns it into a page with a flashing card for that one board (**Generate**). To regenerate those pages as a board changes, or publish them from CI, install the command line tool (Python 3.9 or later). It renders the same file from a saved board TOML:
 
@@ -32,9 +43,7 @@ To embed the cards in an MkDocs or Zensical site, use [md-iframe](https://github
 
 ## US-based PCB Assembly
 
-WebFlash was initially created to replace the firmware flashing sections of our product manuals at [Isik's Tech](https://store.isiks.tech/), and we decided to open-source it after realizing others could find it useful too.
-
-We also moved to in-house PCB assembly in early 2025 after struggling to find a reliable and affordable US-based PCB assembler, and we recently launched a new PCB assembly service to help others with PCB assembly as well. We can often match or beat delivered costs from overseas. We have an estimator on our website so you can upload your BOM and get an instant estimate. [For more information, visit IsikPCB.com](https://isikpcb.com/)
+We moved to in-house PCB assembly in early 2025 after struggling to find a reliable and affordable US-based PCB assembler, and we recently launched a new PCB assembly service to help others with PCB assembly as well. We can often match or beat delivered costs from overseas. We have an estimator on our website so you can upload your BOM and get an instant estimate. [For more information, visit IsikPCB.com](https://isikpcb.com/)
 
 ## License
 
