@@ -434,9 +434,11 @@ class Driver:
         # GCC idioms the projects rely on and GCC accepts silently: a struct
         # with a flexible array inside another (chipid.c), a descriptor only
         # sizeof uses once CONFIG_USB_SERIAL_NUMBER_CHIPID drops it from the
-        # table (usb_cdc.c), and __visible's externally_visible, which clang
+        # table (usb_cdc.c), a file-scope variable only ever written (Katapult's
+        # line_control_state), and __visible's externally_visible, which clang
         # does not know (the link keeps those symbols, see _translate_link).
-        out.extend(["-Wno-gnu-variable-sized-type-not-at-end", "-Wno-unneeded-internal-declaration", "-Wno-unknown-attributes"])
+        out.extend(["-Wno-gnu-variable-sized-type-not-at-end", "-Wno-unneeded-internal-declaration",
+                    "-Wno-unused-but-set-global", "-Wno-unknown-attributes"])
         if cxx:
             # libstdc++'s <cmath> drags <algorithm> in and Kalico's INDX code
             # relies on it for std::min and std::max; libc++'s does not.
