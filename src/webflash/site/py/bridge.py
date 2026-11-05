@@ -190,6 +190,8 @@ SLOTS = ("fw", "katapult")
 _slots: dict = {}
 _pair_cache: dict = {}
 _toolchain_manifest: dict | None = None
+# The lib/<dir> bundles add_lib extracted, per tree path (both slots may share one).
+_added_libs: dict = {}
 
 
 def _slot(slot: str) -> dict:
@@ -286,6 +288,7 @@ def load_sources(slot: str, project: str, ref_json: str, core_bytes: bytes) -> s
     shared = any(other is not state and other["sources"].get("tree") == str(tree) for other in _slots.values())
     if tree.exists() and not shared:
         shutil.rmtree(tree)
+        _added_libs.pop(str(tree), None)
     tree.mkdir(parents=True, exist_ok=True)
     count = _extract(bytes(core_bytes), tree)
     state["sources"] = {"project": project, "sha": sha, "describe": str(ref.get("describe") or sha),
@@ -484,7 +487,7 @@ def _lib_dirs(ev) -> list[str]:
 async def plan(slot: str, config_text: str) -> str:
     """Evaluate the slot's Makefiles for a configuration and name the ``lib/``
     directories the build needs: ``{"dirs": [dirs-y], "libs": [lib/<dir>],
-    "missing": [the ones not in the tree yet], "targets": [target-y]}``.
+    "missing": [the bundled ones add_lib has not extracted yet], "targets": [target-y]}``.
     A coroutine (the make interpreter is asynchronous and Pyodide's loop is
     always running): the worker awaits it, as it does ``build``. An
     architecture WebFlash cannot build (AVR, PRU, AR100, Linux, the
@@ -503,7 +506,16 @@ async def plan(slot: str, config_text: str) -> str:
     ev = Evaluator(tree, Shell(tree))
     await ev.load()
     libs = _lib_dirs(ev)
-    missing = [name for name in libs if not (tree / name).is_dir()]
+    # A folder on disk is not proof of its bundle: the core may hold part of
+    # one (Klipper before v0.13.0 kept elf2uf2 under lib/rp2040, beside the
+    # stage2 sources its lib/rp2040 bundle holds). A lib the ref bundles is
+    # missing until add_lib extracted it into this tree.
+    bundled = (_slot(slot)["sources"].get("ref") or {}).get("libs")
+    added = _added_libs.get(str(tree), set())
+    if isinstance(bundled, dict):
+        missing = [name for name in libs if name in bundled and name not in added]
+    else:
+        missing = [name for name in libs if not (tree / name).is_dir()]
     return json.dumps({"dirs": ev.expand("$(dirs-y)").split(), "libs": libs, "missing": missing,
                        "targets": ev.expand("$(target-y)").split()})
 
@@ -518,6 +530,7 @@ def add_lib(slot: str, name: str, data: bytes) -> str:
     count = _extract(bytes(data), tree)
     if not (tree / name).is_dir():
         raise ValueError(f"the bundle did not create {name}")
+    _added_libs.setdefault(str(tree), set()).add(str(rel))
     return json.dumps({"name": name, "files": count})
 
 
