@@ -9,7 +9,7 @@
 > - RP2040, Klipper, USB, with and without Katapult. Klipper connects on all, but not tested on a real printer.
 > - Every available ARM config (AVR isn't supported), all compile, but not tested on hardware.
 >
-> If you test anything we haven't tested yet (including using above chips on an actual printer), let me know how it went. Feedback like that helps a lot with making sure everything is good.
+> If you test anything I haven't tested yet (including using above chips on an actual printer), let me know how it went. Feedback like that helps a lot with making sure everything is good.
 
 Configure, build and flash Klipper, Kalico and Katapult firmware for 3D printer boards from a web browser, with nothing to install. WebFlash shows the project's own `make menuconfig` options, compiles the firmware in the browser with clang and lld built to WebAssembly, and flashes it over USB: the STM32 DFU bootloader, RP2040 and RP2350 PICOBOOT and UF2, and Katapult over USB, UART and CAN. It also turns a board's firmware settings into a themed card for that board's documentation, so readers build and flash the right firmware in one place.
 
@@ -39,7 +39,7 @@ To embed the cards in an MkDocs or Zensical site, use [md-iframe](https://github
 
 ## Documentation
 
-**<https://doctools.isiks.tech/webflash/>**: getting started, the site's steps, flashing methods and drivers, troubleshooting, embedding a card and publishing it from CI, how the build works and how to reproduce it, and the board TOML, theme and generated page references.
+Coming soon ~~**<https://doctools.isiks.tech/webflash/>**~~
 
 ## US-based PCB Assembly
 
