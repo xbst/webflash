@@ -307,12 +307,40 @@ class Driver:
                 raise DriverError(f"no LLVM tool for {argv[0]}")
             return Command(tool, [tool, *argv[1:]], kind, list(argv))
         if kind == "ld":
-            return Command("ld.lld", ["ld.lld", *argv[1:]], kind, list(argv))
+            return Command("ld.lld", ["ld.lld", *argv[1:], *self._ld_entry(argv[1:], tree)], kind, list(argv))
         if kind == "cpp":
             return self._translate_cpp(argv)
         if kind in ("compile", "assemble"):
             return self._translate_compile(argv, kind, tree)
         return self._translate_link(argv, tree)
+
+    @staticmethod
+    def _ld_entry(args: list[str], tree: Optional[Path]) -> list[str]:
+        """``--entry=0`` for a plain ``$(LD)`` link whose script names no entry
+        and defines no ``_start``: pico-sdk's boot_stage2.ld before Klipper
+        added ``_start`` to it for LLVM (v0.13.0 and older). GNU ld then sets
+        no entry without a word, while lld warns; 0 is what lld falls back to,
+        so only the warning goes."""
+        script = ""
+        for i, a in enumerate(args):
+            if a in ("-e", "--entry") or a.startswith("--entry=") or (a.startswith("-e") and len(a) > 2):
+                return []
+            if a in ("-T", "--script") and i + 1 < len(args):
+                script = args[i + 1]
+            elif a.startswith("--script="):
+                script = a[len("--script="):]
+            elif a.startswith("-T") and len(a) > 2 and not a.startswith("-Tt") and not a.startswith("-Td") and not a.startswith("-Tb"):
+                script = a[2:]
+        if not script:
+            return []
+        path = Path(script) if Path(script).is_absolute() or tree is None else Path(tree) / script
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        if re.search(r"\bENTRY\s*\(|\b_start\b", text):
+            return []
+        return ["--entry=0"]
 
     @staticmethod
     def compat_source(rel: str, tree: Path) -> Optional[str]:
@@ -435,10 +463,12 @@ class Driver:
         # with a flexible array inside another (chipid.c), a descriptor only
         # sizeof uses once CONFIG_USB_SERIAL_NUMBER_CHIPID drops it from the
         # table (usb_cdc.c), a file-scope variable only ever written (Katapult's
-        # line_control_state), and __visible's externally_visible, which clang
-        # does not know (the link keeps those symbols, see _translate_link).
+        # line_control_state), an unused static inline function in a .c file
+        # (Kalico's round_fixedQ48; GCC never warns on inline ones), and
+        # __visible's externally_visible, which clang does not know (the link
+        # keeps those symbols, see _translate_link).
         out.extend(["-Wno-gnu-variable-sized-type-not-at-end", "-Wno-unneeded-internal-declaration",
-                    "-Wno-unused-but-set-global", "-Wno-unknown-attributes"])
+                    "-Wno-unused-but-set-global", "-Wno-unused-function", "-Wno-unknown-attributes"])
         if cxx:
             # libstdc++'s <cmath> drags <algorithm> in and Kalico's INDX code
             # relies on it for std::min and std::max; libc++'s does not.
